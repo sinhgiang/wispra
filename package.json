@@ -1,0 +1,34 @@
+{
+  "name": "wispra",
+  "version": "0.1.0",
+  "description": "System-wide voice dictation: speak anywhere, get text typed into any app.",
+  "main": "out/main/index.js",
+  "author": "SinhGiang",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "postinstall": "node scripts/generate-icons.js",
+    "build:win": "electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "build:mac": "electron-vite build && electron-builder --mac"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "cross-env": "^10.1.0",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

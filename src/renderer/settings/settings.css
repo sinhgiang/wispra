@@ -1,0 +1,198 @@
+:root {
+  color-scheme: light dark;
+  --accent: #4f6ef7;
+  --danger: #e5484d;
+  --ok: #2f9e44;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 16px 24px 40px;
+}
+
+.app.loading {
+  padding-top: 80px;
+  text-align: center;
+  opacity: 0.6;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+header h1 {
+  font-size: 20px;
+  margin: 8px 0;
+}
+
+nav {
+  display: flex;
+  gap: 6px;
+}
+
+nav button {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+nav button.active {
+  background: var(--accent);
+  color: white;
+}
+
+section {
+  padding: 16px 0;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+
+.hint {
+  margin: 0 0 10px;
+  opacity: 0.7;
+  line-height: 1.45;
+}
+
+.hint a {
+  color: var(--accent);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+input,
+select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  font-size: 14px;
+  flex: 1;
+  max-width: 380px;
+}
+
+input.capturing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(79, 110, 247, 0.3);
+}
+
+button {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.status {
+  margin: 8px 0 0;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.err {
+  color: var(--danger);
+}
+
+.status.busy {
+  opacity: 0.7;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.check select {
+  flex: none;
+  width: auto;
+}
+
+.provider-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.provider-tabs .tab {
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.provider-tabs .tab.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+ul.history {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+ul.history li {
+  padding: 10px 0;
+  border-bottom: 1px dashed rgba(128, 128, 128, 0.25);
+}
+
+ul.history p {
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  opacity: 0.75;
+}

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run lint:*)",
+      "Bash(node scripts/*)",
+      "Bash(npx electron-builder:*)",
+      "Bash(npx tsc:*)",
+      "PowerShell(npm install:*)",
+      "PowerShell(npm run dev:*)",
+      "PowerShell(npm run build:*)",
+      "PowerShell(npm run typecheck:*)",
+      "PowerShell(node scripts/*)"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+appId: com.sinhgiang.wispra
+productName: Wispra
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - out/**
+  - resources/**
+  - package.json
+asar: true
+win:
+  target:
+    - nsis
+  icon: resources/icon.png
+  signAndEditExecutable: false
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+mac:
+  target:
+    - dmg
+  icon: resources/icon.png
+  category: public.app-category.productivity
+  extendInfo:
+    NSMicrophoneUsageDescription: Wispra needs microphone access to transcribe your speech.
+publish:
+  provider: github
+  owner: sinhgiang
+  repo: wispra
+  private: false
