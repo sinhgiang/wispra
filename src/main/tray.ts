@@ -33,3 +33,7 @@ export function createTray(handlers: {
 export function updateTray(state: AppState): void {
   tray?.setImage(trayIcon(state))
 }
+
+export function setTrayTooltip(text: string): void {
+  tray?.setToolTip(text)
+}

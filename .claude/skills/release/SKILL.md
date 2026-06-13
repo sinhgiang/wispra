@@ -10,5 +10,9 @@ description: Release process for Wispra — bump version, build installers, smok
 3. **Build**:
    - Windows: `npm run build:win` → installer in `dist/`.
    - macOS: `npm run build:mac` (requires a Mac; signing/notarization needs the Apple Developer account — skip locally if unavailable and note it).
-4. **Smoke-test the installed build** (not the dev build): install from `dist/`, launch, dictate once into Notepad, check tray menu Quit works and no second instance can start.
-5. **Notes**: unsigned Windows builds trigger SmartScreen warnings — expected until the Azure Trusted Signing setup (commercialization phase).
+4. **GitHub Release**: upload ALL four files — missing any breaks auto-update:
+   ```
+   gh release create vX.Y.Z "dist\Wispra Setup X.Y.Z.exe" "dist\Wispra Setup X.Y.Z.exe.blockmap" "dist\latest.yml" --title "Wispra vX.Y.Z" --notes "..."
+   ```
+5. **Smoke-test the installed build** (not the dev build): install from `dist/`, launch, dictate once into Notepad, check tray menu Quit works and no second instance can start.
+6. **Notes**: unsigned Windows builds trigger SmartScreen warnings — expected until the Azure Trusted Signing setup (commercialization phase).
