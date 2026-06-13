@@ -1,4 +1,6 @@
 import { app, clipboard, ipcMain, Notification, screen, session } from 'electron'
+import { existsSync, readFileSync, unlinkSync } from 'fs'
+import { join } from 'path'
 import { IPC } from '@shared/ipc'
 import type { ApiKeyTestResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
 import { controller } from './state'
@@ -47,6 +49,8 @@ async function main(): Promise<void> {
   store.onChange(syncLaunchAtLogin)
   initUpdater(store.get().autoUpdate)
   store.onChange((s) => setAutoUpdate(s.autoUpdate))
+
+  checkJustUpdated()
 
   if (!store.get().groqApiKey) {
     openSettingsWindow()
@@ -157,6 +161,19 @@ function applyHotkeyFromSettings(): void {
 function syncLaunchAtLogin(settings: Settings): void {
   if (process.platform === 'linux') return
   app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin })
+}
+
+function checkJustUpdated(): void {
+  const flagPath = join(app.getPath('userData'), 'just-updated.json')
+  if (!existsSync(flagPath)) return
+  try {
+    const { version } = JSON.parse(readFileSync(flagPath, 'utf8')) as { version: string }
+    unlinkSync(flagPath)
+    openSettingsWindow()
+    notify(`Wispra updated to v${version}!`, 'Your app is now up to date. Enjoy the new features!')
+  } catch {
+    try { unlinkSync(flagPath) } catch { /* ignore */ }
+  }
 }
 
 function notify(title: string, body: string): void {

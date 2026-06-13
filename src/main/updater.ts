@@ -1,5 +1,7 @@
 import { autoUpdater } from 'electron-updater'
 import { app, dialog, Notification } from 'electron'
+import { writeFileSync } from 'fs'
+import { join } from 'path'
 import { broadcast } from './windows'
 import { setTrayTooltip } from './tray'
 import { IPC } from '@shared/ipc'
@@ -89,7 +91,10 @@ async function promptInstall(version: string): Promise<void> {
       body: `v${version} downloaded. Click to restart and apply.`,
       silent: false
     })
-    n.on('click', () => autoUpdater.quitAndInstall())
+    n.on('click', () => {
+      markJustUpdated(version)
+      autoUpdater.quitAndInstall()
+    })
     n.show()
   }
 
@@ -97,15 +102,26 @@ async function promptInstall(version: string): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: 'info',
     title: 'Update ready — Wispra',
-    message: `✅ Wispra v${version} downloaded successfully!`,
+    message: `Wispra v${version} downloaded successfully!`,
     detail: 'Restart Wispra now to apply the update. It only takes a few seconds.',
     buttons: ['Restart & Install', 'Later'],
     defaultId: 0,
     cancelId: 1
   })
   if (response === 0) {
+    markJustUpdated(version)
     autoUpdater.quitAndInstall()
   }
+}
+
+function markJustUpdated(version: string): void {
+  try {
+    writeFileSync(
+      join(app.getPath('userData'), 'just-updated.json'),
+      JSON.stringify({ version }),
+      'utf8'
+    )
+  } catch { /* ignore */ }
 }
 
 export function setAutoUpdate(enabled: boolean): void {
