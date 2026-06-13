@@ -8,7 +8,8 @@ export const DEFAULT_SETTINGS: Settings = {
   language: 'auto',
   launchAtLogin: false,
   autoStopMinutes: 5,
-  autoUpdate: true
+  autoUpdate: true,
+  aiPostProcess: false
 }
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'

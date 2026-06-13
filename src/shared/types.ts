@@ -20,6 +20,7 @@ export interface Settings {
   /** Auto-stop recording after this many minutes. */
   autoStopMinutes: number
   autoUpdate: boolean
+  aiPostProcess: boolean
 }
 
 export interface TranscriptEntry {

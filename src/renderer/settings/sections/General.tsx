@@ -13,6 +13,14 @@ export function GeneralSection({ settings }: { settings: Settings }): React.JSX.
         Launch Wispra when I sign in
       </label>
       <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.aiPostProcess}
+          onChange={(e) => void window.api.setSettings({ aiPostProcess: e.target.checked })}
+        />
+        AI cleanup — fix spelling &amp; add punctuation after transcription
+      </label>
+      <label className="check">
         Auto-stop recording after
         <select
           value={settings.autoStopMinutes}

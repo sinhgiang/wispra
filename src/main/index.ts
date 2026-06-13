@@ -7,6 +7,7 @@ import { controller } from './state'
 import { store } from './store'
 import { history } from './history'
 import { transcribe, testApiKey } from './transcribe'
+import { postProcess } from './postprocess'
 import { injectText, captureTargetWindow } from './inject'
 import { registerHotkey, unregisterAll } from './hotkey'
 import { createTray, updateTray } from './tray'
@@ -99,10 +100,13 @@ function wireIpc(): void {
   ipcMain.on(IPC.OPEN_SETTINGS, () => openSettingsWindow())
 
   ipcMain.on(IPC.AUDIO_CAPTURED, (_event, audio: ArrayBuffer, durationSeconds: number, mimeType: string) => {
-    const { provider, groqApiKey, openaiApiKey, language } = store.get()
+    const { provider, groqApiKey, openaiApiKey, language, aiPostProcess } = store.get()
     void controller.handleAudio(async () => {
-      const text = await transcribe(new Uint8Array(audio), provider, groqApiKey, openaiApiKey, language, mimeType || 'audio/webm')
+      let text = await transcribe(new Uint8Array(audio), provider, groqApiKey, openaiApiKey, language, mimeType || 'audio/webm')
       if (!text) throw new Error('No speech detected')
+      if (aiPostProcess) {
+        text = await postProcess(text, provider, groqApiKey, openaiApiKey)
+      }
       await injectText(text, targetWindow)
       history.add(text, language === 'auto' ? undefined : language, durationSeconds)
     })
