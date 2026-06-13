@@ -1,6 +1,6 @@
 import { autoUpdater } from 'electron-updater'
 import { app, dialog, Notification } from 'electron'
-import { broadcast, openSettingsWindow } from './windows'
+import { broadcast } from './windows'
 import { setTrayTooltip } from './tray'
 import { IPC } from '@shared/ipc'
 import type { UpdateStatus } from '@shared/types'
@@ -20,15 +20,18 @@ export function initUpdater(autoUpdate: boolean): void {
 
     autoUpdater.on('checking-for-update', () => {
       broadcast(IPC.UPDATE_STATUS, { status: 'checking' } satisfies UpdateStatus)
+      setTrayTooltip('Wispra — checking for updates…')
     })
 
     autoUpdater.on('update-available', (info) => {
       broadcast(IPC.UPDATE_STATUS, { status: 'available', version: info.version } satisfies UpdateStatus)
+      setTrayTooltip('Wispra — press the hotkey to dictate')
       void promptDownload(info.version)
     })
 
     autoUpdater.on('update-not-available', () => {
       broadcast(IPC.UPDATE_STATUS, { status: 'idle' } satisfies UpdateStatus)
+      setTrayTooltip('Wispra — press the hotkey to dictate')
     })
 
     autoUpdater.on('download-progress', (p) => {
@@ -39,8 +42,8 @@ export function initUpdater(autoUpdate: boolean): void {
 
     autoUpdater.on('update-downloaded', (info) => {
       broadcast(IPC.UPDATE_STATUS, { status: 'downloaded', version: info.version } satisfies UpdateStatus)
-      setTrayTooltip('Wispra — press the hotkey to dictate')
-      notifyAndPromptInstall(info.version)
+      setTrayTooltip('Wispra — update ready, restart to apply')
+      void promptInstall(info.version)
     })
 
     autoUpdater.on('error', (err) => {
@@ -53,8 +56,18 @@ export function initUpdater(autoUpdate: boolean): void {
 }
 
 async function promptDownload(version: string): Promise<void> {
-  const win = openSettingsWindow()
-  const { response } = await dialog.showMessageBox(win, {
+  // Show Windows notification first (always visible)
+  if (Notification.isSupported()) {
+    const n = new Notification({
+      title: 'Wispra update available',
+      body: `v${version} is ready to download. Open Settings to update.`,
+      silent: false
+    })
+    n.show()
+  }
+
+  // Standalone dialog — no parent window, always appears on top
+  const { response } = await dialog.showMessageBox({
     type: 'info',
     title: 'Update available — Wispra',
     message: `Wispra v${version} is available`,
@@ -68,21 +81,20 @@ async function promptDownload(version: string): Promise<void> {
   }
 }
 
-function notifyAndPromptInstall(version: string): void {
-  // Windows notification — visible even if Settings is closed
+async function promptInstall(version: string): Promise<void> {
+  // Windows notification
   if (Notification.isSupported()) {
     const n = new Notification({
-      title: 'Wispra update ready!',
-      body: `v${version} has downloaded. Click to restart and apply.`,
+      title: '✅ Wispra update ready!',
+      body: `v${version} downloaded. Click to restart and apply.`,
       silent: false
     })
     n.on('click', () => autoUpdater.quitAndInstall())
     n.show()
   }
 
-  // Also show dialog — open Settings first so it appears on top
-  const win = openSettingsWindow()
-  void dialog.showMessageBox(win, {
+  // Standalone dialog — no parent, always on top
+  const { response } = await dialog.showMessageBox({
     type: 'info',
     title: 'Update ready — Wispra',
     message: `✅ Wispra v${version} downloaded successfully!`,
@@ -90,16 +102,19 @@ function notifyAndPromptInstall(version: string): void {
     buttons: ['Restart & Install', 'Later'],
     defaultId: 0,
     cancelId: 1
-  }).then(({ response }) => {
-    if (response === 0) autoUpdater.quitAndInstall()
   })
+  if (response === 0) {
+    autoUpdater.quitAndInstall()
+  }
 }
 
 export function setAutoUpdate(enabled: boolean): void {
   if (!app.isPackaged) return
   if (enabled) {
     if (autoCheckTimer) return
-    setTimeout(() => void silentCheck(), 8_000)
+    // First check after 3 seconds
+    setTimeout(() => void silentCheck(), 3_000)
+    // Then every 4 hours
     autoCheckTimer = setInterval(() => void silentCheck(), 4 * 60 * 60 * 1000)
   } else {
     if (autoCheckTimer) { clearInterval(autoCheckTimer); autoCheckTimer = null }
@@ -111,7 +126,12 @@ export async function checkForUpdatesNow(): Promise<void> {
     broadcast(IPC.UPDATE_STATUS, { status: 'error', message: 'Auto-update is only available in the installed app.' } satisfies UpdateStatus)
     return
   }
-  await autoUpdater.checkForUpdates()
+  try {
+    await autoUpdater.checkForUpdates()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    broadcast(IPC.UPDATE_STATUS, { status: 'error', message: msg } satisfies UpdateStatus)
+  }
 }
 
 export function installUpdate(): void {
@@ -119,5 +139,9 @@ export function installUpdate(): void {
 }
 
 async function silentCheck(): Promise<void> {
-  try { await autoUpdater.checkForUpdates() } catch { /* network or config error */ }
+  try {
+    await autoUpdater.checkForUpdates()
+  } catch {
+    // network or config error — silent
+  }
 }
