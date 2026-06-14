@@ -26,17 +26,23 @@ export function HistorySection(): React.JSX.Element {
           </button>
         )}
       </div>
+
       {entries.length === 0 ? (
-        <p className="hint">Nothing yet — press the hotkey and start speaking.</p>
+        <div className="history-empty">
+          <p>Nothing yet — press the hotkey and start speaking.</p>
+        </div>
       ) : (
         <ul className="history">
           {entries.map((entry) => (
             <li key={entry.id}>
               <p>{entry.text}</p>
               <div className="meta">
-                <span>{new Date(entry.createdAt).toLocaleString()}</span>
-                <button onClick={() => copy(entry)}>
-                  {copiedId === entry.id ? 'Copied!' : 'Copy'}
+                <span className="meta-time">{new Date(entry.createdAt).toLocaleString()}</span>
+                <button
+                  className={`copy-btn ${copiedId === entry.id ? 'copied' : ''}`}
+                  onClick={() => copy(entry)}
+                >
+                  {copiedId === entry.id ? 'Copied' : 'Copy'}
                 </button>
               </div>
             </li>

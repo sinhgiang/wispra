@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   ApiKeyTestResult,
+  FileTranscribeResult,
   HotkeyResult,
   Settings,
   StatePayload,
@@ -33,8 +34,8 @@ const api = {
     ipcRenderer.invoke(IPC.SET_SETTINGS, partial),
   applyHotkey: (accelerator: string): Promise<HotkeyResult> =>
     ipcRenderer.invoke(IPC.APPLY_HOTKEY, accelerator),
-  testApiKey: (provider: string, apiKey: string): Promise<ApiKeyTestResult> =>
-    ipcRenderer.invoke(IPC.TEST_API_KEY, provider, apiKey),
+  testApiKey: (provider: string, apiKey: string, localBaseUrl?: string): Promise<ApiKeyTestResult> =>
+    ipcRenderer.invoke(IPC.TEST_API_KEY, provider, apiKey, localBaseUrl),
   onSettingsChanged: (cb: (settings: Settings) => void): void => {
     ipcRenderer.on(IPC.SETTINGS_CHANGED, (_e, settings: Settings) => cb(settings))
   },
@@ -52,7 +53,12 @@ const api = {
   installUpdate: (): void => ipcRenderer.send(IPC.INSTALL_UPDATE),
   onUpdateStatus: (cb: (status: UpdateStatus) => void): void => {
     ipcRenderer.on(IPC.UPDATE_STATUS, (_e, status: UpdateStatus) => cb(status))
-  }
+  },
+
+  // --- file transcription ---
+  pickFile: (): Promise<string | null> => ipcRenderer.invoke(IPC.PICK_FILE),
+  transcribeFile: (filePath: string, language: string): Promise<FileTranscribeResult> =>
+    ipcRenderer.invoke(IPC.TRANSCRIBE_FILE, filePath, language)
 }
 
 export type RendererApi = typeof api

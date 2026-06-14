@@ -1,8 +1,8 @@
-import { app, clipboard, ipcMain, Notification, screen, session } from 'electron'
+import { app, clipboard, dialog, ipcMain, Notification, screen, session } from 'electron'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
-import type { ApiKeyTestResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
+import type { ApiKeyTestResult, FileTranscribeResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
 import { controller } from './state'
 import { store } from './store'
 import { history } from './history'
@@ -10,7 +10,7 @@ import { transcribe, testApiKey } from './transcribe'
 import { postProcess } from './postprocess'
 import { injectText, captureTargetWindow } from './inject'
 import { registerHotkey, unregisterAll } from './hotkey'
-import { createTray, updateTray } from './tray'
+import { createTray, updateTray, updateTrayMenu } from './tray'
 import { initUpdater, setAutoUpdate, checkForUpdatesNow, installUpdate } from './updater'
 import {
   broadcast,
@@ -42,12 +42,19 @@ async function main(): Promise<void> {
 
   createTray({
     onToggle: toggleDictation,
-    onOpenSettings: openSettingsWindow
+    onOpenSettings: openSettingsWindow,
+    onSetActiveMode: (id) => {
+      store.set({ activeMode: id })
+      broadcast(IPC.SETTINGS_CHANGED, store.get())
+    }
   })
+  const initial = store.get()
+  updateTrayMenu(initial.modes, initial.activeMode)
   createOverlayWindow()
   applyHotkeyFromSettings()
   syncLaunchAtLogin(store.get())
   store.onChange(syncLaunchAtLogin)
+  store.onChange((s) => updateTrayMenu(s.modes, s.activeMode))
   initUpdater(store.get().autoUpdate)
   store.onChange((s) => setAutoUpdate(s.autoUpdate))
 
@@ -100,12 +107,14 @@ function wireIpc(): void {
   ipcMain.on(IPC.OPEN_SETTINGS, () => openSettingsWindow())
 
   ipcMain.on(IPC.AUDIO_CAPTURED, (_event, audio: ArrayBuffer, durationSeconds: number, mimeType: string) => {
-    const { provider, groqApiKey, openaiApiKey, language, aiPostProcess } = store.get()
+    const { provider, groqApiKey, openaiApiKey, language, aiPostProcess, modes, activeMode, vocabulary, localBaseUrl, localSttModel, localLlmModel } = store.get()
     void controller.handleAudio(async () => {
-      let text = await transcribe(new Uint8Array(audio), provider, groqApiKey, openaiApiKey, language, mimeType || 'audio/webm')
+      const mode = modes.find((m) => m.id === activeMode)
+      const effectiveLang = mode?.language && mode.language !== 'auto' ? mode.language : language
+      let text = await transcribe(new Uint8Array(audio), provider, groqApiKey, openaiApiKey, effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel)
       if (!text) throw new Error('No speech detected')
       if (aiPostProcess) {
-        text = await postProcess(text, provider, groqApiKey, openaiApiKey)
+        text = await postProcess(text, provider, groqApiKey, openaiApiKey, mode, vocabulary, localBaseUrl, localLlmModel)
       }
       await injectText(text, targetWindow)
       history.add(text, language === 'auto' ? undefined : language, durationSeconds)
@@ -136,8 +145,10 @@ function wireIpc(): void {
 
   ipcMain.handle(
     IPC.TEST_API_KEY,
-    (_event, provider: string, apiKey: string): Promise<ApiKeyTestResult> =>
-      testApiKey(provider === 'openai' ? 'openai' : 'groq', apiKey)
+    (_event, provider: string, apiKey: string, localBaseUrl?: string): Promise<ApiKeyTestResult> => {
+      const p = provider === 'openai' ? 'openai' : provider === 'local' ? 'local' : 'groq'
+      return testApiKey(p, apiKey, localBaseUrl)
+    }
   )
 
   ipcMain.handle(IPC.GET_HISTORY, () => history.list())
@@ -149,6 +160,32 @@ function wireIpc(): void {
 
   ipcMain.handle(IPC.CHECK_UPDATE, () => checkForUpdatesNow())
   ipcMain.on(IPC.INSTALL_UPDATE, () => installUpdate())
+
+  ipcMain.handle(IPC.PICK_FILE, async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select audio or video file',
+      filters: [
+        { name: 'Audio / Video', extensions: ['mp3', 'mp4', 'wav', 'm4a', 'ogg', 'flac', 'webm', 'mov', 'mkv'] }
+      ],
+      properties: ['openFile']
+    })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
+
+  ipcMain.handle(
+    IPC.TRANSCRIBE_FILE,
+    async (_event, filePath: string, language: string): Promise<FileTranscribeResult> => {
+      try {
+        const { provider, groqApiKey, openaiApiKey } = store.get()
+        const buf = readFileSync(filePath)
+        const text = await transcribe(new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath))
+        if (!text) return { ok: false, error: 'No speech detected in the file.' }
+        return { ok: true, text }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Transcription failed.' }
+      }
+    }
+  )
 
   history.onChange((entries) => broadcast(IPC.HISTORY_CHANGED, entries))
 }
@@ -184,4 +221,14 @@ function notify(title: string, body: string): void {
   if (Notification.isSupported()) {
     new Notification({ title, body, silent: true }).show()
   }
+}
+
+function detectMime(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const map: Record<string, string> = {
+    mp3: 'audio/mpeg', mp4: 'video/mp4', wav: 'audio/wav',
+    m4a: 'audio/mp4', ogg: 'audio/ogg', flac: 'audio/flac',
+    webm: 'audio/webm', mov: 'video/quicktime', mkv: 'video/x-matroska'
+  }
+  return map[ext] ?? 'audio/mpeg'
 }

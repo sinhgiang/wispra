@@ -14,10 +14,15 @@ interface ProviderConfig {
   apiKey: string
 }
 
-function getConfig(provider: SttProvider, groqKey: string, openaiKey: string): ProviderConfig {
-  if (provider === 'openai') {
-    return { base: OPENAI_API_BASE, model: OPENAI_STT_MODEL, apiKey: openaiKey }
-  }
+function getConfig(
+  provider: SttProvider,
+  groqKey: string,
+  openaiKey: string,
+  localBaseUrl: string,
+  localSttModel: string
+): ProviderConfig {
+  if (provider === 'openai') return { base: OPENAI_API_BASE, model: OPENAI_STT_MODEL, apiKey: openaiKey }
+  if (provider === 'local') return { base: localBaseUrl, model: localSttModel, apiKey: 'local' }
   return { base: GROQ_API_BASE, model: GROQ_STT_MODEL, apiKey: groqKey }
 }
 
@@ -27,10 +32,12 @@ export async function transcribe(
   groqKey: string,
   openaiKey: string,
   language: string,
-  mimeType = 'audio/webm'
+  mimeType = 'audio/webm',
+  localBaseUrl = 'http://localhost:11434/v1',
+  localSttModel = 'whisper'
 ): Promise<string> {
-  const config = getConfig(provider, groqKey, openaiKey)
-  if (!config.apiKey) {
+  const config = getConfig(provider, groqKey, openaiKey, localBaseUrl, localSttModel)
+  if (provider !== 'local' && !config.apiKey) {
     const name = provider === 'openai' ? 'OpenAI' : 'Groq'
     throw new Error(`No ${name} API key set — open Settings and add your key`)
   }
@@ -97,8 +104,23 @@ async function requestTranscription(
 
 export async function testApiKey(
   provider: SttProvider,
-  apiKey: string
+  apiKey: string,
+  localBaseUrl?: string
 ): Promise<ApiKeyTestResult> {
+  if (provider === 'local') {
+    const base = localBaseUrl ?? 'http://localhost:11434/v1'
+    try {
+      const response = await fetch(`${base}/models`, {
+        headers: { Authorization: 'Bearer local' },
+        signal: AbortSignal.timeout(5_000)
+      })
+      if (response.ok) return { ok: true }
+      return { ok: false, error: `Server responded with HTTP ${response.status}` }
+    } catch {
+      return { ok: false, error: 'Cannot connect — make sure your local server is running' }
+    }
+  }
+
   if (!apiKey) return { ok: false, error: 'API key is empty' }
   const base = provider === 'openai' ? OPENAI_API_BASE : GROQ_API_BASE
   try {

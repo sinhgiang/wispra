@@ -6,7 +6,19 @@ export interface StatePayload {
   message?: string
 }
 
-export type SttProvider = 'groq' | 'openai'
+export type SttProvider = 'groq' | 'openai' | 'local'
+
+export interface Mode {
+  id: string
+  name: string
+  /** Custom LLM system prompt. Empty string = use the built-in default prompt. */
+  prompt: string
+  /** ISO-639-1 code or "auto". Overrides the global language setting when active. */
+  language: string
+  removeFiller: boolean
+  /** Built-in modes cannot be deleted, only edited. */
+  builtIn?: boolean
+}
 
 export interface Settings {
   provider: SttProvider
@@ -21,6 +33,18 @@ export interface Settings {
   autoStopMinutes: number
   autoUpdate: boolean
   aiPostProcess: boolean
+  /** List of dictation modes. */
+  modes: Mode[]
+  /** ID of the currently active mode. */
+  activeMode: string
+  /** Custom words/phrases that must be spelled exactly as given. */
+  vocabulary: string[]
+  /** Base URL for the local STT/LLM server (e.g. Ollama, LocalAI, LM Studio). */
+  localBaseUrl: string
+  /** Model name for local speech-to-text (passed to /audio/transcriptions). */
+  localSttModel: string
+  /** Model name for local AI cleanup (passed to /chat/completions). */
+  localLlmModel: string
 }
 
 export interface TranscriptEntry {
@@ -43,6 +67,10 @@ export interface ApiKeyTestResult {
   ok: boolean
   error?: string
 }
+
+export type FileTranscribeResult =
+  | { ok: true; text: string }
+  | { ok: false; error: string }
 
 export type UpdateStatus =
   | { status: 'idle' }

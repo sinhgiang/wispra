@@ -28,7 +28,11 @@ export const IPC = {
   // auto-update
   UPDATE_STATUS: 'update:status',
   CHECK_UPDATE: 'update:check',
-  INSTALL_UPDATE: 'update:install'
+  INSTALL_UPDATE: 'update:install',
+
+  // file transcription
+  TRANSCRIBE_FILE: 'transcribe:file',
+  PICK_FILE: 'transcribe:pick-file'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

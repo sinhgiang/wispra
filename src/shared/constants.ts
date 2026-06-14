@@ -1,4 +1,39 @@
-import type { Settings } from './types'
+import type { Mode, Settings } from './types'
+
+export const DEFAULT_MODES: Mode[] = [
+  {
+    id: 'general',
+    name: 'General',
+    prompt: '',
+    language: 'auto',
+    removeFiller: true,
+    builtIn: true
+  },
+  {
+    id: 'professional',
+    name: 'Professional',
+    prompt: 'Rewrite as polished, professional prose. Fix all punctuation and grammar. Remove filler words. Use formal vocabulary. Keep the original language and all content.',
+    language: 'auto',
+    removeFiller: true,
+    builtIn: true
+  },
+  {
+    id: 'vietnamese',
+    name: 'Vietnamese',
+    prompt: 'Correct all Vietnamese diacritics and tones carefully. Fix punctuation. Remove Vietnamese filler words (ừm, à, ý là, kiểu, thì là). Do not translate or change the content.',
+    language: 'vi',
+    removeFiller: true,
+    builtIn: true
+  },
+  {
+    id: 'casual',
+    name: 'Casual',
+    prompt: 'Fix only obvious spelling errors and missing end punctuation. Keep the natural, conversational tone and phrasing.',
+    language: 'auto',
+    removeFiller: false,
+    builtIn: true
+  }
+]
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: 'openai',
@@ -9,7 +44,13 @@ export const DEFAULT_SETTINGS: Settings = {
   launchAtLogin: false,
   autoStopMinutes: 5,
   autoUpdate: true,
-  aiPostProcess: false
+  aiPostProcess: false,
+  modes: DEFAULT_MODES,
+  activeMode: 'general',
+  vocabulary: [],
+  localBaseUrl: 'http://localhost:11434/v1',
+  localSttModel: 'whisper',
+  localLlmModel: 'llama3.2'
 }
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'

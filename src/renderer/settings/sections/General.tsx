@@ -4,35 +4,45 @@ export function GeneralSection({ settings }: { settings: Settings }): React.JSX.
   return (
     <section>
       <h2>General</h2>
-      <label className="check">
+
+      <label className="toggle-row">
         <input
           type="checkbox"
           checked={settings.launchAtLogin}
           onChange={(e) => void window.api.setSettings({ launchAtLogin: e.target.checked })}
         />
-        Launch Wispra when I sign in
+        <div className="toggle-info">
+          <span className="toggle-label">Launch at login</span>
+          <span className="toggle-desc">Start Wispra automatically when you sign in</span>
+        </div>
+        <div className="toggle-switch" />
       </label>
-      <label className="check">
+
+      <label className="toggle-row">
         <input
           type="checkbox"
           checked={settings.aiPostProcess}
           onChange={(e) => void window.api.setSettings({ aiPostProcess: e.target.checked })}
         />
-        AI cleanup — fix spelling &amp; add punctuation after transcription
+        <div className="toggle-info">
+          <span className="toggle-label">AI cleanup</span>
+          <span className="toggle-desc">Fix spelling &amp; add punctuation after transcription</span>
+        </div>
+        <div className="toggle-switch" />
       </label>
-      <label className="check">
-        Auto-stop recording after
+
+      <div className="autostop-row">
+        <span className="autostop-label">Auto-stop recording after</span>
         <select
+          className="autostop-select"
           value={settings.autoStopMinutes}
           onChange={(e) => void window.api.setSettings({ autoStopMinutes: Number(e.target.value) })}
         >
           {[1, 2, 5, 10].map((m) => (
-            <option key={m} value={m}>
-              {m} min
-            </option>
+            <option key={m} value={m}>{m} min</option>
           ))}
         </select>
-      </label>
+      </div>
     </section>
   )
 }

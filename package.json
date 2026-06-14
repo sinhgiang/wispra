@@ -1,6 +1,6 @@
 {
   "name": "wispra",
-  "version": "0.1.6",
+  "version": "0.1.9",
   "description": "System-wide voice dictation: speak anywhere, get text typed into any app.",
   "main": "out/main/index.js",
   "author": "SinhGiang",

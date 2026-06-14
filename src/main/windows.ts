@@ -19,7 +19,7 @@ function pageUrl(win: BrowserWindow, page: 'overlay' | 'settings'): void {
 export function createOverlayWindow(): BrowserWindow {
   overlayWindow = new BrowserWindow({
     width: OVERLAY_SIZE,
-    height: OVERLAY_SIZE,
+    height: OVERLAY_SIZE + 22,
     frame: false,
     transparent: true,
     resizable: false,

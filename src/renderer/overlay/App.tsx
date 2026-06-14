@@ -6,6 +6,7 @@ import './overlay.css'
 export function App(): React.JSX.Element {
   const [payload, setPayload] = useState<StatePayload>({ state: 'idle' })
   const [level, setLevel] = useState(0)
+  const [modeLabel, setModeLabel] = useState<string | null>(null)
   const recorderRef = useRef<Recorder>(new Recorder())
   const initializedRef = useRef(false)
 
@@ -33,11 +34,22 @@ export function App(): React.JSX.Element {
     window.api.onStateChanged(setPayload)
     window.api.onRecordingStart(handleStart)
     window.api.onRecordingStop(handleStop)
+
+    function syncMode(s: { aiPostProcess: boolean; modes: { id: string; name: string }[]; activeMode: string }): void {
+      if (s.aiPostProcess && s.activeMode !== 'general') {
+        const m = s.modes.find((m) => m.id === s.activeMode)
+        setModeLabel(m?.name ?? null)
+      } else {
+        setModeLabel(null)
+      }
+    }
+
+    void window.api.getSettings().then(syncMode)
+    window.api.onSettingsChanged(syncMode)
   }, [handleStart, handleStop])
 
   const { state } = payload
 
-  // Click on the bubble while recording = cancel/stop early.
   function handleClick(): void {
     if (state === 'recording') window.api.toggleDictation()
   }
@@ -59,6 +71,9 @@ export function App(): React.JSX.Element {
           <MicIcon />
         )}
       </button>
+      {modeLabel && (state === 'recording' || state === 'processing') && (
+        <span className="mode-badge">{modeLabel}</span>
+      )}
     </div>
   )
 }
