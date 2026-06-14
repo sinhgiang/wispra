@@ -38,6 +38,8 @@ export function createOverlayWindow(): BrowserWindow {
       nodeIntegration: false
     }
   })
+  // Track destruction so showOverlayAt() can recreate when needed.
+  overlayWindow.on('closed', () => { overlayWindow = null })
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   // Do NOT auto-show — overlay is shown only when recording starts via showOverlayAt()
@@ -50,7 +52,12 @@ export function getOverlayWindow(): BrowserWindow | null {
 }
 
 export function showOverlayAt(x: number, y: number): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  if (!overlayWindow || overlayWindow.isDestroyed()) {
+    // Overlay window was destroyed (renderer crash, GPU error, etc.) — recreate it.
+    const win = createOverlayWindow()
+    win.once('ready-to-show', () => showOverlayAt(x, y))
+    return
+  }
   const offset = 16
   const winW = OVERLAY_SIZE
   const winH = OVERLAY_SIZE + 44

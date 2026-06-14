@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 — 2026-06-15
+
+### Bug fixes
+- **Hotkey not working after Windows restart** — some startup apps (Vietnamese IME, system tools) briefly grab hotkeys during login. Wispra now retries registration silently after 3 seconds so the hotkey works reliably when launched at login.
+- **Overlay icon not appearing** — if the overlay window renderer crashed (GPU error, system event), pressing the hotkey would do nothing. Wispra now detects this and recreates the overlay window automatically before showing it.
+
 ## v0.2.0 — 2026-06-14
 
 ### New features

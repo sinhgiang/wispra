@@ -13,7 +13,7 @@ import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
 import { computeStats, formatHistoryAsTxt, formatHistoryAsMd, formatHistoryAsCsv } from './stats'
-import { registerHotkey, unregisterAll } from './hotkey'
+import { registerHotkey, unregisterAll, isHotkeyRegistered } from './hotkey'
 import { createTray, updateTray, updateTrayMenu } from './tray'
 import { initUpdater, setAutoUpdate, checkForUpdatesNow, installUpdate } from './updater'
 import {
@@ -57,6 +57,8 @@ async function main(): Promise<void> {
   updateTrayMenu(initial.modes, initial.activeMode)
   createOverlayWindow()
   applyHotkeyFromSettings()
+  // Some startup apps (IME, system tools) briefly hold hotkeys during login — retry silently after 3s.
+  setTimeout(() => { if (!isHotkeyRegistered()) applyHotkeyFromSettings(true) }, 3_000)
   syncLaunchAtLogin(store.get())
   store.onChange(syncLaunchAtLogin)
   store.onChange((s) => updateTrayMenu(s.modes, s.activeMode))
@@ -395,10 +397,10 @@ function wireIpc(): void {
   })
 }
 
-function applyHotkeyFromSettings(): void {
+function applyHotkeyFromSettings(silent = false): void {
   const { hotkey } = store.get()
   const result = registerHotkey(hotkey, toggleDictation)
-  if (!result.ok) {
+  if (!result.ok && !silent) {
     notify('Wispra hotkey problem', result.error ?? 'Could not register the hotkey.')
     openSettingsWindow()
   }

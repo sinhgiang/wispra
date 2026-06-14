@@ -32,3 +32,7 @@ export function unregisterAll(): void {
   globalShortcut.unregisterAll()
   current = null
 }
+
+export function isHotkeyRegistered(): boolean {
+  return current !== null && globalShortcut.isRegistered(current)
+}
