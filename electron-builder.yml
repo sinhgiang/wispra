@@ -21,9 +21,13 @@ nsis:
   runAfterFinish: true
 mac:
   target:
-    - dmg
+    - target: dmg
+      arch: universal
+    - target: zip
+      arch: universal
   icon: resources/icon.png
   category: public.app-category.productivity
+  artifactName: ${productName}-${version}-mac.${ext}
   extendInfo:
     NSMicrophoneUsageDescription: Wispra needs microphone access to transcribe your speech.
 publish:
