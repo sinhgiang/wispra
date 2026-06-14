@@ -13,6 +13,10 @@ import { CLIPBOARD_RESTORE_DELAY_MS } from '@shared/constants'
  */
 let queue: Promise<void> = Promise.resolve()
 
+/** Stores the last successfully injected text and its target window, used by undoLastInjection. */
+let lastInjectedText: string | null = null
+let lastInjectedHwnd: string | null = null
+
 /** Call at recording START to remember which window to paste into later. */
 export async function captureTargetWindow(): Promise<string | null> {
   if (process.platform !== 'win32') return null
@@ -30,6 +34,69 @@ public class HwndCapture {
   return runPs1(script)
 }
 
+/** Call at recording START to capture both HWND and process name for context-aware AI. */
+export async function captureTargetContext(): Promise<{ hwnd: string; processName: string } | null> {
+  if (process.platform !== 'win32') return null
+  const script = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class WinCtx {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+"@
+$hwnd = [WinCtx]::GetForegroundWindow()
+[uint]$pid = 0
+[WinCtx]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+"$hwnd|$($proc.ProcessName)"
+`
+  try {
+    const result = await runPs1(script)
+    const parts = result.split('|')
+    return { hwnd: parts[0].trim(), processName: (parts[1] ?? '').trim().toLowerCase() }
+  } catch {
+    return null
+  }
+}
+
+/** Simulates Ctrl+Z in the target window to undo the last paste. */
+export function undoLastInjection(targetHwnd: string | null): Promise<void> {
+  const hwnd = targetHwnd ?? lastInjectedHwnd
+  if (!hwnd || process.platform !== 'win32') return Promise.resolve()
+  const script = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class WinUndo {
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+    public static void Undo(long hwndLong) {
+        IntPtr hwnd = new IntPtr(hwndLong);
+        uint pid;
+        uint targetTid = GetWindowThreadProcessId(hwnd, out pid);
+        uint myTid = GetCurrentThreadId();
+        AttachThreadInput(myTid, targetTid, true);
+        SetForegroundWindow(hwnd);
+        AttachThreadInput(myTid, targetTid, false);
+        System.Threading.Thread.Sleep(80);
+        SendKeys.SendWait("^z");
+    }
+}
+"@ -ReferencedAssemblies "System.Windows.Forms"
+[WinUndo]::Undo(${hwnd})
+`
+  return runPs1(script).then(() => undefined).catch(() => undefined)
+}
+
+export function getLastInjectedText(): string | null {
+  return lastInjectedText
+}
+
 export function injectText(text: string, targetWindow: string | null = null): Promise<void> {
   const task = queue.then(() => doInject(text, targetWindow))
   queue = task.catch(() => undefined)
@@ -37,6 +104,8 @@ export function injectText(text: string, targetWindow: string | null = null): Pr
 }
 
 async function doInject(text: string, targetWindow: string | null): Promise<void> {
+  lastInjectedText = text
+  lastInjectedHwnd = targetWindow
   const prevText = clipboard.readText()
   const prevImage = clipboard.readImage()
   clipboard.writeText(text)

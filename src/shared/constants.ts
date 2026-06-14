@@ -32,6 +32,22 @@ export const DEFAULT_MODES: Mode[] = [
     language: 'auto',
     removeFiller: false,
     builtIn: true
+  },
+  {
+    id: 'zalo',
+    name: 'Zalo',
+    prompt: 'Fix Vietnamese diacritics and spelling for a casual Zalo chat message. Keep the informal, friendly tone. Short sentences preferred. Do not add formal greetings or closings.',
+    language: 'vi',
+    removeFiller: true,
+    builtIn: true
+  },
+  {
+    id: 'email',
+    name: 'Email',
+    prompt: 'Format as a professional email. Fix grammar, spelling, and punctuation. Start with an appropriate greeting, end with an appropriate closing. Keep the same language as the input.',
+    language: 'auto',
+    removeFiller: true,
+    builtIn: true
   }
 ]
 
@@ -44,13 +60,22 @@ export const DEFAULT_SETTINGS: Settings = {
   launchAtLogin: false,
   autoStopMinutes: 5,
   autoUpdate: true,
-  aiPostProcess: false,
+  aiPostProcess: true,
   modes: DEFAULT_MODES,
   activeMode: 'general',
   vocabulary: [],
   localBaseUrl: 'http://localhost:11434/v1',
   localSttModel: 'whisper',
-  localLlmModel: 'llama3.2'
+  localLlmModel: 'llama3.2',
+  inputMode: 'toggle',
+  soundFeedback: true,
+  previewBeforePaste: false,
+  voiceCommandsEnabled: true,
+  contextAwareEnabled: false,
+  appContextRules: [],
+  templates: [],
+  continuousMode: false,
+  settingsVersion: 2
 }
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'
@@ -68,6 +93,16 @@ export const CLIPBOARD_RESTORE_DELAY_MS = 400
 export const MAX_HISTORY_ENTRIES = 100
 
 export const OVERLAY_SIZE = 64
+/** Extra height for the preview text area below the bubble. */
+export const OVERLAY_PREVIEW_HEIGHT = 180
+/** Milliseconds to delay before auto-pasting when previewBeforePaste is on. */
+export const PREVIEW_DELAY_MS = 2500
+/** RMS level below which audio is considered silence for auto-stop mode. */
+export const SILENCE_THRESHOLD = 0.018
+/** Milliseconds of continuous silence before auto-stopping in auto-stop mode. */
+export const SILENCE_DURATION_MS = 1500
+/** Milliseconds to keep the overlay visible after injection (for done animation). */
+export const DONE_DISPLAY_MS = 1400
 
 /** Languages offered in Settings (Whisper supports many more via "auto"). */
 export const LANGUAGES: Array<{ code: string; label: string }> = [

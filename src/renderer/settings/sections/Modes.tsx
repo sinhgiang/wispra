@@ -131,6 +131,10 @@ function ModeModal({ mode, isNew, onSave, onClose }: ModeModalProps): React.JSX.
   )
 }
 
+// These modes activate automatically based on language detection or focused app.
+// They are kept in settings.modes for the routing engine but hidden from manual selection.
+const AUTO_ROUTING_IDS = ['vietnamese', 'zalo', 'email']
+
 export function ModesSection({ settings }: { settings: Settings }): React.JSX.Element {
   const [modal, setModal] = useState<{ open: boolean; mode: Mode | null }>({
     open: false,
@@ -185,7 +189,7 @@ export function ModesSection({ settings }: { settings: Settings }): React.JSX.El
         </p>
 
         <div className="mode-list">
-          {settings.modes.map((mode) => {
+          {settings.modes.filter((m) => !AUTO_ROUTING_IDS.includes(m.id)).map((mode) => {
             const active = settings.activeMode === mode.id
             return (
               <div

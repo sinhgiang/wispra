@@ -18,6 +18,7 @@ nsis:
   oneClick: true
   perMachine: false
   deleteAppDataOnUninstall: false
+  runAfterFinish: true
 mac:
   target:
     - dmg

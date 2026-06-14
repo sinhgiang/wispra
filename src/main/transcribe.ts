@@ -26,6 +26,12 @@ function getConfig(
   return { base: GROQ_API_BASE, model: GROQ_STT_MODEL, apiKey: groqKey }
 }
 
+export interface TranscribeResult {
+  text: string
+  /** ISO 639-1 code detected by Whisper, e.g. "vi", "en". Undefined for local provider. */
+  detectedLanguage?: string
+}
+
 export async function transcribe(
   audio: Uint8Array,
   provider: SttProvider,
@@ -35,7 +41,7 @@ export async function transcribe(
   mimeType = 'audio/webm',
   localBaseUrl = 'http://localhost:11434/v1',
   localSttModel = 'whisper'
-): Promise<string> {
+): Promise<TranscribeResult> {
   const config = getConfig(provider, groqKey, openaiKey, localBaseUrl, localSttModel)
   if (provider !== 'local' && !config.apiKey) {
     const name = provider === 'openai' ? 'OpenAI' : 'Groq'
@@ -67,7 +73,7 @@ async function requestTranscription(
   config: ProviderConfig,
   language: string,
   mimeType: string
-): Promise<string> {
+): Promise<TranscribeResult> {
   const ext = mimeToExt(mimeType)
   const form = new FormData()
   form.append('file', new Blob([audio as BlobPart], { type: mimeType }), `audio.${ext}`)
@@ -98,8 +104,12 @@ async function requestTranscription(
     throw new Error(detail || `Transcription failed (HTTP ${response.status})`)
   }
 
-  const data = (await response.json()) as { text?: string }
-  return (data.text ?? '').trim()
+  const data = (await response.json()) as { text?: string; language?: string }
+  const text = (data.text ?? '').trim()
+  // Normalise language code: Whisper may return "vietnamese" or "vi" depending on model.
+  const raw = data.language?.toLowerCase()
+  const detectedLanguage = raw === 'vietnamese' ? 'vi' : raw === 'english' ? 'en' : raw
+  return { text, detectedLanguage }
 }
 
 export async function testApiKey(

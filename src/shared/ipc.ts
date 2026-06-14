@@ -32,7 +32,28 @@ export const IPC = {
 
   // file transcription
   TRANSCRIBE_FILE: 'transcribe:file',
-  PICK_FILE: 'transcribe:pick-file'
+  PICK_FILE: 'transcribe:pick-file',
+
+  // post-injection feedback
+  INJECTION_DONE: 'injection:done',
+  PREVIEW_TEXT: 'preview:text',
+
+  // undo
+  UNDO_INJECTION: 'injection:undo',
+
+  // statistics & export
+  GET_STATS: 'stats:get',
+  EXPORT_HISTORY: 'history:export',
+  SUMMARIZE_TOPIC: 'history:summarize-topic',
+
+  // overlay sound
+  PLAY_SOUND: 'overlay:play-sound',
+
+  // continuous mode
+  CONTINUOUS_NEXT: 'dictation:continuous-next',
+
+  // silence auto-stop (separate from manual toggle so continuous mode is not cancelled)
+  SILENCE_STOP: 'dictation:silence-stop'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { DEFAULT_SETTINGS } from '@shared/constants'
+import { DEFAULT_MODES, DEFAULT_SETTINGS } from '@shared/constants'
 import type { Settings } from '@shared/types'
 
 // Strip any persisted field that no longer exists in the schema.
@@ -26,7 +26,27 @@ class SettingsStore {
   load(): void {
     try {
       const raw = JSON.parse(readFileSync(this.filePath, 'utf8'))
-      this.settings = { ...DEFAULT_SETTINGS, ...sanitize(raw) }
+      const merged = { ...DEFAULT_SETTINGS, ...sanitize(raw) }
+
+      // Ensure every built-in mode from DEFAULT_MODES is present.
+      const existingIds = new Set(merged.modes.map((m) => m.id))
+      for (const def of DEFAULT_MODES) {
+        if (def.builtIn && !existingIds.has(def.id)) {
+          merged.modes = [...merged.modes, def]
+        }
+      }
+
+      // ── Migrations (run once, gated by settingsVersion) ──────────────
+      const savedVersion = (raw as { settingsVersion?: number }).settingsVersion ?? 0
+
+      if (savedVersion < 2) {
+        // v0.2.x: aiPostProcess default changed to true — enable for existing users.
+        merged.aiPostProcess = true
+        merged.settingsVersion = 2
+      }
+      // ─────────────────────────────────────────────────────────────────
+
+      this.settings = merged
     } catch {
       // First run or corrupted file — fall back to defaults.
       this.settings = { ...DEFAULT_SETTINGS }

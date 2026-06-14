@@ -28,7 +28,7 @@ export function OnboardingBanner({ settings }: { settings: Settings }): React.JS
       <div className="onboarding-title">
         Welcome to Wispra
         <span className="onboarding-sub">
-          Voice dictation in any app — supports Vietnamese, English &amp; 95+ languages
+          Voice dictation in any app — supports English, Spanish, French &amp; 95+ languages
         </span>
       </div>
 
@@ -58,7 +58,7 @@ export function OnboardingBanner({ settings }: { settings: Settings }): React.JS
             <span className="step-label">Paste the key and click Save &amp; Test</span>
             <span className="step-desc">
               Then press <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> anywhere to dictate.
-              {' '}Enable <strong>AI cleanup</strong> + <strong>Vietnamese mode</strong> for best results.
+              {' '}Enable <strong>AI cleanup</strong> for best results.
             </span>
           </div>
         </li>

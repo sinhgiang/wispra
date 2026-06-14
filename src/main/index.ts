@@ -1,20 +1,25 @@
 import { app, clipboard, dialog, ipcMain, Notification, screen, session } from 'electron'
-import { existsSync, readFileSync, unlinkSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
 import type { ApiKeyTestResult, FileTranscribeResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
+import { DONE_DISPLAY_MS, OVERLAY_SIZE, PREVIEW_DELAY_MS } from '@shared/constants'
 import { controller } from './state'
 import { store } from './store'
 import { history } from './history'
 import { transcribe, testApiKey } from './transcribe'
-import { postProcess } from './postprocess'
-import { injectText, captureTargetWindow } from './inject'
+import { postProcess, summarizeTexts } from './postprocess'
+import { detectTopic } from './topics'
+import { injectText, captureTargetContext, undoLastInjection } from './inject'
+import { matchVoiceCommand } from './commands'
+import { computeStats, formatHistoryAsTxt, formatHistoryAsMd, formatHistoryAsCsv } from './stats'
 import { registerHotkey, unregisterAll } from './hotkey'
 import { createTray, updateTray, updateTrayMenu } from './tray'
 import { initUpdater, setAutoUpdate, checkForUpdatesNow, installUpdate } from './updater'
 import {
   broadcast,
   createOverlayWindow,
+  getOverlayWindow,
   hideOverlay,
   openSettingsWindow,
   showOverlayAt
@@ -60,9 +65,16 @@ async function main(): Promise<void> {
 
   checkJustUpdated()
 
-  if (!store.get().groqApiKey) {
+  const { groqApiKey, openaiApiKey, provider } = store.get()
+  const wasOpenedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin
+
+  if (!groqApiKey && !openaiApiKey && provider !== 'local') {
+    // No API key: always show Settings with welcome message.
     openSettingsWindow()
     notify('Welcome to Wispra', 'Add your free Groq API key in Settings to start dictating.')
+  } else if (!wasOpenedAtLogin) {
+    // Launched manually (install, double-click, etc.): open Settings so user knows app is running.
+    openSettingsWindow()
   }
 
   app.on('window-all-closed', () => {
@@ -72,30 +84,51 @@ async function main(): Promise<void> {
 }
 
 function toggleDictation(): void {
+  // Manual toggle (hotkey or overlay click): always cancel any pending continuous restart.
+  if (controller.getState() === 'recording') manualStopRequested = true
   controller.toggle(store.get().autoStopMinutes * 60_000)
 }
 
 let targetWindow: string | null = null
+let targetProcessName: string | null = null
+let pendingContinuousRestart = false
+let pendingDoneAnimation = false
+// Set to true when user manually clicks/hotkeys to stop — prevents continuous-mode restart.
+let manualStopRequested = false
 
 function wireController(): void {
   controller.on('state-changed', (payload: StatePayload) => {
     updateTray(payload.state)
     broadcast(IPC.STATE_CHANGED, payload)
 
+    const { soundFeedback } = store.get()
+
     if (payload.state === 'recording') {
-      // Capture the focused window BEFORE showing the overlay, so we know where to paste later.
-      void captureTargetWindow().then((hwnd) => { targetWindow = hwnd })
-      // Show the status bubble right next to the cursor.
+      // Capture the focused window and process name before showing the overlay.
+      void captureTargetContext().then((ctx) => {
+        targetWindow = ctx?.hwnd ?? null
+        targetProcessName = ctx?.processName ?? null
+      })
       const { x, y } = screen.getCursorScreenPoint()
       showOverlayAt(x, y)
+      if (soundFeedback) broadcast(IPC.PLAY_SOUND, 'start')
     } else if (payload.state === 'idle') {
-      hideOverlay()
+      if (pendingContinuousRestart) {
+        pendingContinuousRestart = false
+        // Don't hide overlay — restart recording immediately.
+        setTimeout(() => toggleDictation(), 200)
+      } else if (pendingDoneAnimation) {
+        pendingDoneAnimation = false
+        // Keep overlay visible briefly so the done animation plays, then hide.
+        setTimeout(hideOverlay, DONE_DISPLAY_MS)
+      } else {
+        hideOverlay()
+      }
     }
-    // Keep showing during 'processing' (spinner) and 'error'.
-    // Error auto-returns to idle via state machine, which will hide it.
 
-    if (payload.state === 'error' && payload.message) {
-      notify('Wispra', payload.message)
+    if (payload.state === 'error') {
+      if (soundFeedback) broadcast(IPC.PLAY_SOUND, 'error')
+      if (payload.message) notify('Wispra', payload.message)
     }
   })
   controller.on('start-recording', () => broadcast(IPC.RECORDING_START))
@@ -104,20 +137,141 @@ function wireController(): void {
 
 function wireIpc(): void {
   ipcMain.on(IPC.TOGGLE_DICTATION, () => toggleDictation())
+  // Silence auto-stop: does NOT set manualStopRequested so continuous mode can restart.
+  ipcMain.on(IPC.SILENCE_STOP, () => controller.toggle(store.get().autoStopMinutes * 60_000))
   ipcMain.on(IPC.OPEN_SETTINGS, () => openSettingsWindow())
 
   ipcMain.on(IPC.AUDIO_CAPTURED, (_event, audio: ArrayBuffer, durationSeconds: number, mimeType: string) => {
-    const { provider, groqApiKey, openaiApiKey, language, aiPostProcess, modes, activeMode, vocabulary, localBaseUrl, localSttModel, localLlmModel } = store.get()
+    const {
+      provider, groqApiKey, openaiApiKey, language, aiPostProcess,
+      modes, activeMode, vocabulary, localBaseUrl, localSttModel, localLlmModel,
+      voiceCommandsEnabled, templates, previewBeforePaste, continuousMode,
+      contextAwareEnabled, appContextRules
+    } = store.get()
+
     void controller.handleAudio(async () => {
       const mode = modes.find((m) => m.id === activeMode)
       const effectiveLang = mode?.language && mode.language !== 'auto' ? mode.language : language
-      let text = await transcribe(new Uint8Array(audio), provider, groqApiKey, openaiApiKey, effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel)
-      if (!text) throw new Error('No speech detected')
-      if (aiPostProcess) {
-        text = await postProcess(text, provider, groqApiKey, openaiApiKey, mode, vocabulary, localBaseUrl, localLlmModel)
+
+      const { text: rawText, detectedLanguage } = await transcribe(
+        new Uint8Array(audio), provider, groqApiKey, openaiApiKey,
+        effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel
+      )
+      if (!rawText) throw new Error('No speech detected')
+      let text = rawText
+
+      // 1. Template matching — replaces raw transcription with user-defined expansion.
+      if (templates.length > 0) {
+        const normalized = text.trim().toLowerCase().replace(/[.!?,;:]+$/, '').trim()
+        const tpl = templates.find((t) => t.keyword.toLowerCase() === normalized)
+        if (tpl) {
+          const now = new Date()
+          const expansion = tpl.expansion
+            .replace(/\[date\]/gi, now.toLocaleDateString())
+            .replace(/\[time\]/gi, now.toLocaleTimeString())
+          await injectText(expansion, targetWindow)
+          history.add(expansion, language === 'auto' ? undefined : language, durationSeconds)
+          broadcast(IPC.INJECTION_DONE)
+          pendingDoneAnimation = true
+          if (continuousMode && !manualStopRequested) pendingContinuousRestart = true
+          manualStopRequested = false
+          return
+        }
       }
+
+      // 2. Voice command matching — intercepts spoken commands before injection.
+      const cmd = matchVoiceCommand(text, voiceCommandsEnabled)
+      if (cmd) {
+        if (cmd.type === 'inject' && cmd.value !== undefined) {
+          await injectText(cmd.value, targetWindow)
+          broadcast(IPC.INJECTION_DONE)
+          pendingDoneAnimation = true
+        } else if (cmd.type === 'undo') {
+          await undoLastInjection(targetWindow)
+        }
+        // 'cancel' type: return to idle silently without injecting.
+        if (continuousMode && !manualStopRequested && cmd.type !== 'cancel') pendingContinuousRestart = true
+        manualStopRequested = false
+        return
+      }
+
+      // 3. AI cleanup with smart mode routing (language → app → user rules).
+      if (aiPostProcess) {
+        let effectiveMode = mode
+        let appContextHint: string | undefined
+
+        // Layer 1 — Language routing: Vietnamese detected → Vietnamese mode.
+        // Only when language setting is 'auto' (user hasn't pinned a language).
+        if (language === 'auto' && detectedLanguage === 'vi') {
+          const viMode = modes.find((m) => m.id === 'vietnamese')
+          if (viMode) effectiveMode = viMode
+        }
+
+        // Layer 2 — App routing: Zalo or email client in focus → matching mode.
+        // Always active, overrides language routing.
+        const APP_MODE_ROUTES: [string, string][] = [
+          ['zalo', 'zalo'],
+          ['outlook', 'email'],
+          ['thunderbird', 'email'],
+        ]
+        if (targetProcessName) {
+          for (const [appKey, modeId] of APP_MODE_ROUTES) {
+            if (targetProcessName.toLowerCase().includes(appKey)) {
+              const routedMode = modes.find((m) => m.id === modeId)
+              if (routedMode) { effectiveMode = routedMode; break }
+            }
+          }
+        }
+
+        // Layer 3 — User context-aware rules (highest priority).
+        if (contextAwareEnabled && targetProcessName) {
+          const rule = appContextRules.find((r) =>
+            r.appPattern && targetProcessName!.includes(r.appPattern.toLowerCase())
+          )
+          if (rule) {
+            appContextHint = rule.contextHint || undefined
+            const ruleMode = modes.find((m) => m.id === rule.modeId)
+            if (ruleMode) effectiveMode = ruleMode
+          } else {
+            // Built-in context hints for remaining apps (no mode switch, just prompt hint).
+            const APP_HINTS: [string, string][] = [
+              ['slack', 'Instant messaging. Keep it concise. Emoji OK.'],
+              ['discord', 'Chat message. Casual tone OK.'],
+              ['code', 'Code editor (VS Code). Preserve technical terms, variable names, and code exactly.'],
+              ['word', 'Word processor. Use full punctuation and paragraph structure.'],
+              ['excel', 'Spreadsheet. Short, data-oriented phrasing.'],
+              ['chrome', 'Web browser. General writing context.'],
+              ['notepad', 'Plain text editor. No special formatting.'],
+            ]
+            for (const [key, hint] of APP_HINTS) {
+              if (targetProcessName.includes(key)) { appContextHint = hint; break }
+            }
+          }
+        }
+
+        text = await postProcess(
+          text, provider, groqApiKey, openaiApiKey,
+          effectiveMode, vocabulary, localBaseUrl, localLlmModel, appContextHint
+        )
+      }
+
+      // 4. Preview before paste — show notification then wait.
+      if (previewBeforePaste) {
+        const preview = text.length > 120 ? text.slice(0, 117) + '…' : text
+        broadcast(IPC.PREVIEW_TEXT, preview)
+        notify('Wispra — pasting in 3 seconds…', preview)
+        await delay(PREVIEW_DELAY_MS)
+      }
+
+      // 5. Inject text.
       await injectText(text, targetWindow)
-      history.add(text, language === 'auto' ? undefined : language, durationSeconds)
+      history.add(text, language === 'auto' ? undefined : language, durationSeconds, detectTopic(text))
+
+      // 6. Post-injection signals.
+      broadcast(IPC.INJECTION_DONE)
+      pendingDoneAnimation = true
+      if (continuousMode && !manualStopRequested) pendingContinuousRestart = true
+      manualStopRequested = false
     })
   })
 
@@ -178,7 +332,7 @@ function wireIpc(): void {
       try {
         const { provider, groqApiKey, openaiApiKey } = store.get()
         const buf = readFileSync(filePath)
-        const text = await transcribe(new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath))
+        const { text } = await transcribe(new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath))
         if (!text) return { ok: false, error: 'No speech detected in the file.' }
         return { ok: true, text }
       } catch (err) {
@@ -187,7 +341,58 @@ function wireIpc(): void {
     }
   )
 
+  // Undo last injection
+  ipcMain.on(IPC.UNDO_INJECTION, () => {
+    void undoLastInjection(targetWindow)
+  })
+
+  // Usage statistics
+  ipcMain.handle(IPC.GET_STATS, () => computeStats(history.list()))
+
+  // Export history
+  ipcMain.handle(IPC.EXPORT_HISTORY, async (_event, format: 'txt' | 'md' | 'csv') => {
+    const entries = history.list()
+    if (entries.length === 0) return { ok: false, error: 'No history to export.' }
+
+    const ext = format === 'md' ? 'md' : format === 'csv' ? 'csv' : 'txt'
+    const result = await dialog.showSaveDialog({
+      title: 'Export Dictation History',
+      defaultPath: `wispra-history.${ext}`,
+      filters: [{ name: ext.toUpperCase(), extensions: [ext] }]
+    })
+    if (result.canceled || !result.filePath) return { ok: false, error: 'Cancelled.' }
+
+    try {
+      let content: string
+      if (format === 'md') content = formatHistoryAsMd(entries)
+      else if (format === 'csv') content = formatHistoryAsCsv(entries)
+      else content = formatHistoryAsTxt(entries)
+      writeFileSync(result.filePath, content, 'utf8')
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Write failed.' }
+    }
+  })
+
+  ipcMain.handle(IPC.SUMMARIZE_TOPIC, async (_event, texts: string[]) => {
+    const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+    try {
+      const summary = await summarizeTexts(texts, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel)
+      return { ok: true, summary }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Summary failed.' }
+    }
+  })
+
   history.onChange((entries) => broadcast(IPC.HISTORY_CHANGED, entries))
+
+  // Overlay window size management for preview text
+  ipcMain.on(IPC.PREVIEW_TEXT, () => {
+    const win = getOverlayWindow()
+    if (win && !win.isDestroyed()) {
+      win.setSize(OVERLAY_SIZE, 160)
+    }
+  })
 }
 
 function applyHotkeyFromSettings(): void {
@@ -231,4 +436,8 @@ function detectMime(filePath: string): string {
     webm: 'audio/webm', mov: 'video/quicktime', mkv: 'video/x-matroska'
   }
   return map[ext] ?? 'audio/mpeg'
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
 }

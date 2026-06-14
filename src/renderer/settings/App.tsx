@@ -11,6 +11,8 @@ import { ModesSection } from './sections/Modes'
 import { VocabularySection } from './sections/Vocabulary'
 import { TranscribeSection } from './sections/Transcribe'
 import { AccountSection } from './sections/Account'
+import { TemplatesSection } from './sections/Templates'
+import { StatisticsSection } from './sections/Statistics'
 import './settings.css'
 
 type Tab = 'settings' | 'transcribe' | 'history'
@@ -68,6 +70,7 @@ export function App(): React.JSX.Element {
           <GeneralSection settings={settings} />
           <ModesSection settings={settings} />
           <VocabularySection settings={settings} />
+          <TemplatesSection settings={settings} />
           <AccountSection settings={settings} />
           <UpdatesSection settings={settings} />
         </main>
@@ -77,6 +80,7 @@ export function App(): React.JSX.Element {
         </main>
       ) : (
         <main key="history">
+          <StatisticsSection />
           <HistorySection />
         </main>
       )}

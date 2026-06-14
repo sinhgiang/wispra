@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.2.0 — 2026-06-14
+
+### New features
+- **Smart mode routing** — App silently detects language and context: Vietnamese speech auto-applies Vietnamese AI cleanup; Zalo and email clients apply their matching mode — all without any UI toggle.
+- **History by topic** — Dictation history now groups by AI-detected topic (Email, Meeting, Tasks, Notes, Message, General) with clickable hashtag filters (#Email, #General…).
+- **History period tabs** — Filter history by All / Today / Yesterday / 3 days ago / This week / Older.
+- **AI summary per topic** — Click "Summarize with AI" inside any topic filter to get a bullet-point summary of everything you dictated on that topic.
+- **Time saved typing** — Hero banner at the top of History showing how many hours and minutes you saved vs. typing at 40 WPM.
+- **Sound feedback** — Rising tone on recording start, two descending tones on error (Web Audio API — works even when Windows system sounds are muted).
+- **Undo last injection** — Say "delete that" or "xóa cái đó" to undo the last dictation (Ctrl+Z).
+- **Done animation** — Overlay bubble flashes green after successful text injection.
+- **Voice commands** — Speak punctuation and formatting: "new paragraph", "period", "comma", "open quote", and more — no AI needed.
+- **Text templates / voice snippets** — Define keyword → expansion pairs (e.g. "mysig" → your full email signature). Supports `[date]` and `[time]` placeholders.
+- **Context-aware AI** — Detects the focused app (Outlook, VS Code, Zalo, etc.) and adds a context hint to the AI cleanup prompt.
+- **Usage statistics** — Total dictations, minutes, words, this-week count, current streak, most active day — shown above history.
+- **Export history** — Export transcript history as TXT, Markdown, or CSV via native save dialog.
+- **Continuous mode** — Auto-restarts recording after each paste. Press hotkey or click icon once to exit the loop.
+- **Preview before paste** — Shows transcribed text for 2.5 s before injecting so you can review it first.
+- **Auto-stop on silence** — Recording stops automatically after 1.5 s of silence.
+- **Zalo mode** — Built-in mode for casual Vietnamese chat in Zalo.
+- **Email mode** — Built-in mode for professional email composition.
+
+### Improvements
+- Settings window opens automatically after install (not just on first run with no API key).
+- AI post-processing is now **enabled by default** — existing installs are migrated automatically.
+- Overlay position is clamped to the screen work area so the icon never gets clipped at screen edges.
+- Installer launches the app immediately after installation completes.
+- Settings versioning system added so future default changes migrate existing users correctly.
+
 ## v0.1.9 — 2026-06-14
 
 ### New features

@@ -7,7 +7,8 @@ import type {
   Settings,
   StatePayload,
   TranscriptEntry,
-  UpdateStatus
+  UpdateStatus,
+  UsageStats
 } from '@shared/types'
 
 /** The only API surface renderers can touch. */
@@ -58,7 +59,33 @@ const api = {
   // --- file transcription ---
   pickFile: (): Promise<string | null> => ipcRenderer.invoke(IPC.PICK_FILE),
   transcribeFile: (filePath: string, language: string): Promise<FileTranscribeResult> =>
-    ipcRenderer.invoke(IPC.TRANSCRIBE_FILE, filePath, language)
+    ipcRenderer.invoke(IPC.TRANSCRIBE_FILE, filePath, language),
+
+  // --- silence auto-stop (does NOT cancel continuous mode loop) ---
+  silenceStop: (): void => ipcRenderer.send(IPC.SILENCE_STOP),
+
+  // --- sound feedback ---
+  onPlaySound: (cb: (type: 'start' | 'error') => void): void => {
+    ipcRenderer.on(IPC.PLAY_SOUND, (_e, type: 'start' | 'error') => cb(type))
+  },
+
+  // --- post-injection feedback ---
+  onInjectionDone: (cb: () => void): void => {
+    ipcRenderer.on(IPC.INJECTION_DONE, () => cb())
+  },
+  onPreviewText: (cb: (text: string) => void): void => {
+    ipcRenderer.on(IPC.PREVIEW_TEXT, (_e, text: string) => cb(text))
+  },
+
+  // --- undo ---
+  undoInjection: (): void => ipcRenderer.send(IPC.UNDO_INJECTION),
+
+  // --- statistics & export ---
+  getStats: (): Promise<UsageStats> => ipcRenderer.invoke(IPC.GET_STATS),
+  exportHistory: (format: 'txt' | 'md' | 'csv'): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.EXPORT_HISTORY, format),
+  summarizeTopic: (texts: string[]): Promise<{ ok: boolean; summary?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SUMMARIZE_TOPIC, texts),
 }
 
 export type RendererApi = typeof api

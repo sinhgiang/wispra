@@ -27,13 +27,14 @@ class History {
     return [...this.entries]
   }
 
-  add(text: string, language?: string, durationSeconds?: number): void {
+  add(text: string, language?: string, durationSeconds?: number, topic?: string): void {
     this.entries.unshift({
       id: randomUUID(),
       text,
       createdAt: new Date().toISOString(),
       language,
-      durationSeconds
+      durationSeconds,
+      topic
     })
     this.entries = this.entries.slice(0, MAX_HISTORY_ENTRIES)
     this.persist()

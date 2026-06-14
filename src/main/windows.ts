@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'path'
 import { OVERLAY_SIZE } from '@shared/constants'
 
@@ -19,7 +19,7 @@ function pageUrl(win: BrowserWindow, page: 'overlay' | 'settings'): void {
 export function createOverlayWindow(): BrowserWindow {
   overlayWindow = new BrowserWindow({
     width: OVERLAY_SIZE,
-    height: OVERLAY_SIZE + 22,
+    height: OVERLAY_SIZE + 44,
     frame: false,
     transparent: true,
     resizable: false,
@@ -52,7 +52,20 @@ export function getOverlayWindow(): BrowserWindow | null {
 export function showOverlayAt(x: number, y: number): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   const offset = 16
-  overlayWindow.setPosition(x + offset, y + offset)
+  const winW = OVERLAY_SIZE
+  const winH = OVERLAY_SIZE + 44
+  const { x: ax, y: ay, width, height } = screen.getDisplayNearestPoint({ x, y }).workArea
+
+  // Try placing bottom-right of cursor; flip to left/up if it would go off-screen.
+  let px = x + offset
+  let py = y + offset
+  if (px + winW > ax + width) px = x - winW - offset
+  if (py + winH > ay + height) py = y - winH - offset
+  // Final clamp so it never goes outside work area.
+  px = Math.max(ax, Math.min(px, ax + width - winW))
+  py = Math.max(ay, Math.min(py, ay + height - winH))
+
+  overlayWindow.setPosition(px, py)
   overlayWindow.showInactive()
 }
 
