@@ -81,8 +81,8 @@ export const DEFAULT_SETTINGS: Settings = {
 // ── Wispra cloud (Phase 3) ───────────────────────────────────────────────────
 // FILL IN these values after creating your Supabase project and Polar product.
 // The anon key and URL are safe to include in the app bundle (they are public by design).
-export const SUPABASE_URL = 'https://YOUR_PROJECT.supabase.co'
-export const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY'
+export const SUPABASE_URL = 'https://tpiycamfsagesjeciubg.supabase.co'
+export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRwaXljYW1mc2FnZXNqZWNpdWJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE0OTA1MTAsImV4cCI6MjA5NzA2NjUxMH0.qxMVAbBSsBhWOeB5Xak_eQthjcI-wXGo87P7bVcoStU'
 export const WISPRA_API_BASE = 'https://wispra-web.vercel.app'
 export const POLAR_CHECKOUT_URL = 'https://buy.polar.sh/YOUR_PRODUCT_LINK'
 /** Free tier limit in seconds (30 minutes per month). */
