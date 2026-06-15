@@ -26,14 +26,7 @@ import {
 } from './windows'
 import { auth } from './auth'
 
-// Register wispra:// custom protocol for OAuth callback
-if (!app.isPackaged) {
-  app.setAsDefaultProtocolClient('wispra', process.execPath, [process.argv[1] ?? ''])
-} else {
-  app.setAsDefaultProtocolClient('wispra')
-}
-
-// macOS: open-url fires when the OS hands us a wispra:// URL
+// macOS: open-url fires when the OS hands us a wispra:// URL (must register before ready)
 app.on('open-url', (event, url) => {
   event.preventDefault()
   if (url.startsWith('wispra://')) {
@@ -79,6 +72,13 @@ async function main(): Promise<void> {
   store.load()
   history.load()
   auth.load()
+
+  // Register wispra:// custom protocol for OAuth callback
+  if (!app.isPackaged) {
+    app.setAsDefaultProtocolClient('wispra', process.execPath, [app.getAppPath()])
+  } else {
+    app.setAsDefaultProtocolClient('wispra')
+  }
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'media')

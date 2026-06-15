@@ -147,6 +147,48 @@ header h1 {
   box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 0 0 1px var(--border);
 }
 
+/* ── Header avatar / sign-in ──────────────── */
+
+.header-avatar {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  max-width: 28px;
+  min-height: 28px;
+  max-height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: center;
+  overflow: hidden;
+  box-sizing: border-box;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+
+.header-avatar:hover { opacity: 0.8; }
+
+.header-avatar--guest {
+  background: transparent;
+  border: 1.5px solid var(--border-md);
+  color: var(--text-3);
+}
+
+.header-avatar--guest:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
+}
+
 /* ── Content animation ────────────────────── */
 
 main {

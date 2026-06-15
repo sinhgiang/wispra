@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import type { Settings } from '@shared/types'
-import { ApiKeySection } from './sections/ApiKey'
 import { HotkeySection } from './sections/Hotkey'
 import { LanguageSection } from './sections/Language'
 import { GeneralSection } from './sections/General'
@@ -15,7 +14,16 @@ import { TemplatesSection } from './sections/Templates'
 import { StatisticsSection } from './sections/Statistics'
 import './settings.css'
 
-type Tab = 'settings' | 'transcribe' | 'history'
+type Tab = 'settings' | 'transcribe' | 'history' | 'account'
+
+function PersonIcon(): React.JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+    </svg>
+  )
+}
 
 function MicIcon(): React.JSX.Element {
   return (
@@ -31,10 +39,18 @@ function MicIcon(): React.JSX.Element {
 export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [tab, setTab] = useState<Tab>('settings')
+  const [authEmail, setAuthEmail] = useState<string | null>(null)
 
   useEffect(() => {
     void window.api.getSettings().then(setSettings)
     window.api.onSettingsChanged(setSettings)
+    void window.api.getAccountInfo().then((info) => {
+      setAuthEmail(info?.email ?? null)
+    })
+    window.api.onAuthStateChanged((state) => {
+      setAuthEmail(state ? (state as { email?: string }).email ?? null : null)
+      if (state) void window.api.getAccountInfo().then((info) => setAuthEmail(info?.email ?? null))
+    })
   }, [])
 
   if (!settings) return <div className="app loading">Loading…</div>
@@ -58,30 +74,43 @@ export function App(): React.JSX.Element {
           <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
             History
           </button>
+          <button className={tab === 'account' ? 'active' : ''} onClick={() => setTab('account')}>
+            Account
+          </button>
         </nav>
+
+        <button
+          className={authEmail ? 'header-avatar' : 'header-avatar header-avatar--guest'}
+          title={authEmail ?? 'Sign in to Wispra Cloud'}
+          onClick={() => setTab('account')}
+        >
+          {authEmail ? authEmail[0].toUpperCase() : <PersonIcon />}
+        </button>
       </header>
 
       {tab === 'settings' ? (
         <main key="settings">
           <OnboardingBanner settings={settings} />
-          <ApiKeySection settings={settings} />
           <HotkeySection settings={settings} />
           <LanguageSection settings={settings} />
           <GeneralSection settings={settings} />
           <ModesSection settings={settings} />
           <VocabularySection settings={settings} />
           <TemplatesSection settings={settings} />
-          <AccountSection settings={settings} />
           <UpdatesSection settings={settings} />
         </main>
       ) : tab === 'transcribe' ? (
         <main key="transcribe">
           <TranscribeSection settings={settings} />
         </main>
-      ) : (
+      ) : tab === 'history' ? (
         <main key="history">
           <StatisticsSection />
           <HistorySection />
+        </main>
+      ) : (
+        <main key="account">
+          <AccountSection settings={settings} />
         </main>
       )}
     </div>

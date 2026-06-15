@@ -52,7 +52,7 @@ export const DEFAULT_MODES: Mode[] = [
 ]
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: 'openai',
+  provider: 'proxy',
   groqApiKey: '',
   openaiApiKey: '',
   hotkey: 'CommandOrControl+Shift+Space',
