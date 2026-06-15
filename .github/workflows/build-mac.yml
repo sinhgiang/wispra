@@ -31,8 +31,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build macOS (unsigned universal)
-        run: npm run build:mac
+      - name: Bundle renderer + main (electron-vite)
+        run: npx electron-vite build
+
+      - name: Package macOS (electron-builder, no auto-publish)
+        run: npx electron-builder --mac --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
