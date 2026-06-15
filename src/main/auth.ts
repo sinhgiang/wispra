@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '@shared/constants'
@@ -17,7 +17,6 @@ type AuthListener = (state: AuthState | null) => void
 class AuthManager {
   private state: AuthState | null = null
   private listeners = new Set<AuthListener>()
-  private authWin: BrowserWindow | null = null
 
   private get filePath(): string {
     return join(app.getPath('userData'), 'auth.json')
@@ -109,62 +108,16 @@ class AuthManager {
   }
 
   /**
-   * Opens a dedicated Electron window for Google OAuth.
-   * Electron intercepts the wispra:// redirect and closes the window automatically —
-   * no browser tab is left open.
+   * Opens the system browser for Google OAuth.
+   * Supabase redirects to wispra-web.vercel.app/auth/callback, which forwards
+   * the token to the app via wispra:// protocol then closes itself.
    */
   openLoginBrowser(): void {
-    // If a login window is already open, just focus it
-    if (this.authWin && !this.authWin.isDestroyed()) {
-      this.authWin.focus()
-      return
-    }
-
-    this.authWin = new BrowserWindow({
-      width: 480,
-      height: 680,
-      title: 'Sign in to Wispra',
-      resizable: false,
-      minimizable: false,
-      fullscreenable: false,
-      autoHideMenuBar: true,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-      },
-    })
-
-    // Use a standard Chrome user agent so Google OAuth works normally
-    this.authWin.webContents.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    )
-
-    const handleCallbackUrl = (url: string): boolean => {
-      if (!url.startsWith('wispra://')) return false
-      this.authWin?.close()
-      this.authWin = null
-      void this.handleCallback(url)
-      return true
-    }
-
-    // Catch server-side 302 redirect → wispra://auth#...
-    this.authWin.webContents.on('will-redirect', (event, url) => {
-      if (handleCallbackUrl(url)) event.preventDefault()
-    })
-
-    // Catch client-side navigation fallback
-    this.authWin.webContents.on('will-navigate', (event, url) => {
-      if (handleCallbackUrl(url)) event.preventDefault()
-    })
-
-    this.authWin.on('closed', () => { this.authWin = null })
-
     const params = new URLSearchParams({
       provider: 'google',
-      redirect_to: 'wispra://auth',
+      redirect_to: 'https://wispra-web.vercel.app/auth/callback',
     })
-    void this.authWin.loadURL(`${SUPABASE_URL}/auth/v1/authorize?${params.toString()}`)
+    void shell.openExternal(`${SUPABASE_URL}/auth/v1/authorize?${params.toString()}`)
   }
 
   /**
