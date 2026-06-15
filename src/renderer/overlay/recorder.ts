@@ -105,6 +105,35 @@ export class Recorder {
 
 const WAV_SAMPLE_RATE = 16_000 // Whisper's native rate — keeps file size small
 
+// RMS below this level is considered silence (0–1 scale after normalising from Int16)
+const SILENCE_RMS = 0.01
+// Keep 300 ms of audio after the last detected speech to avoid cutting off final words
+const SILENCE_PAD_SAMPLES = Math.ceil(WAV_SAMPLE_RATE * 0.3)
+
+/**
+ * Removes trailing silence from PCM data before it is sent to Whisper.
+ * Without this, Whisper hallucinates text during silent portions at the end of recordings.
+ */
+function trimTrailingSilence(samples: Float32Array, sampleRate: number): Float32Array {
+  const windowSamples = Math.ceil(sampleRate * 0.02) // 20 ms analysis window
+  let lastSpeechEnd = samples.length
+
+  for (let i = samples.length - windowSamples; i >= 0; i -= windowSamples) {
+    let sum = 0
+    const end = Math.min(i + windowSamples, samples.length)
+    for (let j = i; j < end; j++) sum += samples[j] * samples[j]
+    const rms = Math.sqrt(sum / (end - i))
+    if (rms > SILENCE_RMS) {
+      lastSpeechEnd = Math.min(i + windowSamples + SILENCE_PAD_SAMPLES, samples.length)
+      break
+    }
+  }
+
+  // Safety: never trim more than 90% of audio (e.g. very quiet recording)
+  const minLength = Math.ceil(samples.length * 0.1)
+  return samples.slice(0, Math.max(lastSpeechEnd, minLength))
+}
+
 /** Decode any MediaRecorder blob → 16kHz mono 16-bit WAV (no library needed). */
 async function encodeWav(blob: Blob): Promise<ArrayBuffer> {
   // Decode the compressed blob into raw PCM
@@ -121,7 +150,7 @@ async function encodeWav(blob: Blob): Promise<ArrayBuffer> {
   src.start()
   const resampled = await offlineCtx.startRendering()
 
-  const channelData = resampled.getChannelData(0)
+  const channelData = trimTrailingSilence(resampled.getChannelData(0), WAV_SAMPLE_RATE)
 
   // Float32 → Int16 PCM
   const pcm = new Int16Array(channelData.length)
