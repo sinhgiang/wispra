@@ -1,10 +1,10 @@
-import { GROQ_API_BASE, OPENAI_API_BASE } from '@shared/constants'
+import { GROQ_API_BASE, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
 import type { Mode, SttProvider } from '@shared/types'
 
 // Use capable models that handle Vietnamese diacritics correctly
 const GROQ_CHAT_MODEL = 'llama-3.3-70b-versatile'
 const OPENAI_CHAT_MODEL = 'gpt-4o-mini'
-const TIMEOUT_MS = 20_000
+const TIMEOUT_MS = 30_000
 const SUMMARY_TIMEOUT_MS = 30_000
 
 const CRITICAL_RULES = `CRITICAL RULES:
@@ -39,6 +39,34 @@ ${fillerLine}${vocabLine}- Add missing punctuation (. , ? ! …)
 ${CRITICAL_RULES}`
 }
 
+// Split long text into sentence-boundary chunks to avoid LLM token limits
+const MAX_CHUNK_WORDS = 400
+
+function splitIntoChunks(text: string): string[] {
+  const wordCount = text.split(/\s+/).length
+  if (wordCount <= MAX_CHUNK_WORDS) return [text]
+
+  // Split at sentence boundaries
+  const sentences = text.split(/(?<=[.!?…\n])\s+/)
+  const chunks: string[] = []
+  let current = ''
+  let currentWords = 0
+
+  for (const sentence of sentences) {
+    const sw = sentence.split(/\s+/).length
+    if (currentWords + sw > MAX_CHUNK_WORDS && current) {
+      chunks.push(current.trim())
+      current = sentence
+      currentWords = sw
+    } else {
+      current = current ? `${current} ${sentence}` : sentence
+      currentWords += sw
+    }
+  }
+  if (current.trim()) chunks.push(current.trim())
+  return chunks.length > 0 ? chunks : [text]
+}
+
 export async function postProcess(
   text: string,
   provider: SttProvider,
@@ -48,7 +76,8 @@ export async function postProcess(
   vocabulary?: string[],
   localBaseUrl?: string,
   localLlmModel?: string,
-  appContextHint?: string
+  appContextHint?: string,
+  proxyToken?: string
 ): Promise<string> {
   if (!text.trim()) return text
 
@@ -60,28 +89,53 @@ export async function postProcess(
     apiKey = 'local'
     base = localBaseUrl ?? 'http://localhost:11434/v1'
     model = localLlmModel ?? 'llama3.2'
+  } else if (provider === 'proxy') {
+    // Route through Wispra Cloud — uses server-side Groq key
+    if (!proxyToken) return text
+    apiKey = proxyToken
+    base = `${WISPRA_API_BASE}/api`
+    model = GROQ_CHAT_MODEL
   } else {
     apiKey = provider === 'openai' ? openaiKey : groqKey
     if (!apiKey) return text
     base = provider === 'openai' ? OPENAI_API_BASE : GROQ_API_BASE
     model = provider === 'openai' ? OPENAI_CHAT_MODEL : GROQ_CHAT_MODEL
   }
+
   const systemPrompt = buildSystemPrompt(mode, vocabulary, appContextHint)
 
+  // For long texts, process in parallel chunks to avoid token limit truncation
+  const chunks = splitIntoChunks(text)
+  const results = await Promise.all(chunks.map((chunk) => processChunk(chunk, base, apiKey, model, systemPrompt, provider === 'proxy')))
+  return results.join(' ')
+}
+
+async function processChunk(
+  text: string,
+  base: string,
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  isProxy: boolean
+): Promise<string> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (isProxy) {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    } else {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    }
+
     const response = await fetch(`${base}/chat/completions`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify({
         model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: text }
         ],
-        max_tokens: 4096,
+        max_tokens: 8192,
         temperature: 0
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS)
@@ -95,10 +149,9 @@ export async function postProcess(
     const result = data.choices?.[0]?.message?.content?.trim()
     if (!result) return text
 
-    // Safety: if output is drastically shorter than input, the model likely
-    // garbled or summarized — fall back to original
+    // Safety: if output is drastically shorter, model likely garbled — keep original chunk
     const ratio = result.length / text.length
-    if (ratio < 0.5 || ratio > 3) return text
+    if (ratio < 0.4 || ratio > 4) return text
 
     return result
   } catch {

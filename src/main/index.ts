@@ -297,7 +297,8 @@ function wireIpc(): void {
 
         text = await postProcess(
           text, provider, groqApiKey, openaiApiKey,
-          effectiveMode, vocabulary, localBaseUrl, localLlmModel, appContextHint
+          effectiveMode, vocabulary, localBaseUrl, localLlmModel, appContextHint,
+          proxyToken
         )
       }
 
