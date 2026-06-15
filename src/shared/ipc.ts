@@ -56,7 +56,13 @@ export const IPC = {
   SILENCE_STOP: 'dictation:silence-stop',
 
   // overlay drag repositioning
-  MOVE_OVERLAY: 'overlay:move'
+  MOVE_OVERLAY: 'overlay:move',
+
+  // cloud auth
+  AUTH_LOGIN: 'auth:login',
+  AUTH_LOGOUT: 'auth:logout',
+  AUTH_STATE: 'auth:state',
+  GET_ACCOUNT_INFO: 'auth:account-info'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

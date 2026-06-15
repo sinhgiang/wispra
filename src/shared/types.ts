@@ -6,7 +6,7 @@ export interface StatePayload {
   message?: string
 }
 
-export type SttProvider = 'groq' | 'openai' | 'local'
+export type SttProvider = 'groq' | 'openai' | 'local' | 'proxy'
 
 export interface Mode {
   id: string
@@ -105,6 +105,18 @@ export interface HotkeyResult {
 export interface ApiKeyTestResult {
   ok: boolean
   error?: string
+}
+
+/** Wispra cloud account info (returned when user is signed in). */
+export interface AccountInfo {
+  email: string
+  plan: 'free' | 'pro'
+  /** Seconds used this month. */
+  usageSeconds: number
+  /** Monthly limit in seconds, or null if unlimited (Pro). */
+  limitSeconds: number | null
+  /** Polar.sh checkout URL for upgrading. */
+  subscribeUrl: string | null
 }
 
 export interface UsageStats {

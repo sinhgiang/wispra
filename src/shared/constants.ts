@@ -78,6 +78,16 @@ export const DEFAULT_SETTINGS: Settings = {
   settingsVersion: 2
 }
 
+// ── Wispra cloud (Phase 3) ───────────────────────────────────────────────────
+// FILL IN these values after creating your Supabase project and Polar product.
+// The anon key and URL are safe to include in the app bundle (they are public by design).
+export const SUPABASE_URL = 'https://YOUR_PROJECT.supabase.co'
+export const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY'
+export const WISPRA_API_BASE = 'https://wispra-web.vercel.app'
+export const POLAR_CHECKOUT_URL = 'https://buy.polar.sh/YOUR_PRODUCT_LINK'
+/** Free tier limit in seconds (30 minutes per month). */
+export const FREE_LIMIT_SECONDS = 30 * 60
+
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'
 export const GROQ_STT_MODEL = 'whisper-large-v3-turbo'
 

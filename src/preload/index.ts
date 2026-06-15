@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
+  AccountInfo,
   ApiKeyTestResult,
   FileTranscribeResult,
   HotkeyResult,
@@ -82,6 +83,14 @@ const api = {
 
   // --- undo ---
   undoInjection: (): void => ipcRenderer.send(IPC.UNDO_INJECTION),
+
+  // --- cloud auth ---
+  loginWithGoogle: (): Promise<void> => ipcRenderer.invoke(IPC.AUTH_LOGIN),
+  logout: (): Promise<void> => ipcRenderer.invoke(IPC.AUTH_LOGOUT),
+  getAccountInfo: (): Promise<AccountInfo | null> => ipcRenderer.invoke(IPC.GET_ACCOUNT_INFO),
+  onAuthStateChanged: (cb: (state: { email: string } | null) => void): void => {
+    ipcRenderer.on(IPC.AUTH_STATE, (_e, state: { email: string } | null) => cb(state))
+  },
 
   // --- statistics & export ---
   getStats: (): Promise<UsageStats> => ipcRenderer.invoke(IPC.GET_STATS),

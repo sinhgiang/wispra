@@ -4,7 +4,8 @@ import {
   OPENAI_API_BASE,
   OPENAI_STT_MODEL,
   TRANSCRIBE_RETRIES,
-  TRANSCRIBE_TIMEOUT_MS
+  TRANSCRIBE_TIMEOUT_MS,
+  WISPRA_API_BASE
 } from '@shared/constants'
 import type { ApiKeyTestResult, SttProvider } from '@shared/types'
 
@@ -40,8 +41,25 @@ export async function transcribe(
   language: string,
   mimeType = 'audio/webm',
   localBaseUrl = 'http://localhost:11434/v1',
-  localSttModel = 'whisper'
+  localSttModel = 'whisper',
+  durationSeconds = 0,
+  proxyToken?: string
 ): Promise<TranscribeResult> {
+  // Wispra cloud proxy provider
+  if (provider === 'proxy') {
+    if (!proxyToken) throw noRetry('Not signed in — open Account settings to log in')
+    let lastError: Error = new Error('Transcription failed')
+    for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
+      try {
+        return await requestViaProxy(audio, proxyToken, language, mimeType, durationSeconds)
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err))
+        if (lastError.name === 'NoRetryError') throw lastError
+      }
+    }
+    throw lastError
+  }
+
   const config = getConfig(provider, groqKey, openaiKey, localBaseUrl, localSttModel)
   if (provider !== 'local' && !config.apiKey) {
     const name = provider === 'openai' ? 'OpenAI' : 'Groq'
@@ -58,6 +76,52 @@ export async function transcribe(
     }
   }
   throw lastError
+}
+
+async function requestViaProxy(
+  audio: Uint8Array,
+  token: string,
+  language: string,
+  mimeType: string,
+  durationSeconds: number
+): Promise<TranscribeResult> {
+  const ext = mimeToExt(mimeType)
+  const form = new FormData()
+  form.append('file', new Blob([audio as BlobPart], { type: mimeType }), `audio.${ext}`)
+  form.append('model', GROQ_STT_MODEL)
+  form.append('response_format', 'json')
+  if (language && language !== 'auto') form.append('language', language)
+
+  let response: Response
+  try {
+    response = await fetch(`${WISPRA_API_BASE}/api/transcribe`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'X-Audio-Duration-Seconds': String(Math.ceil(durationSeconds)),
+      },
+      body: form,
+      signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new Error('Transcription timed out — check your connection')
+    }
+    throw new Error('Network error — check your connection')
+  }
+
+  if (!response.ok) {
+    const detail = await safeErrorDetail(response)
+    if (response.status === 401) throw noRetry('Session expired — sign in again in Account settings')
+    if (response.status === 402) throw noRetry(detail || 'Monthly free limit reached — upgrade to Pro in Account settings')
+    throw new Error(detail || `Transcription failed (HTTP ${response.status})`)
+  }
+
+  const data = (await response.json()) as { text?: string; language?: string }
+  const text = (data.text ?? '').trim()
+  const raw = data.language?.toLowerCase()
+  const detectedLanguage = raw === 'vietnamese' ? 'vi' : raw === 'english' ? 'en' : raw
+  return { text, detectedLanguage }
 }
 
 function mimeToExt(mime: string): string {

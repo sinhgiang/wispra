@@ -11,7 +11,7 @@ export function OnboardingBanner({ settings }: { settings: Settings }): React.JS
   const [key, setKey] = useState('')
   const [status, setStatus] = useState<{ kind: 'ok' | 'err' | 'busy'; text: string } | null>(null)
 
-  const hasKey = !!(settings.groqApiKey || settings.openaiApiKey || settings.provider === 'local')
+  const hasKey = !!(settings.groqApiKey || settings.openaiApiKey || settings.provider === 'local' || settings.provider === 'proxy')
   if (hasKey || dismissed) return null
 
   function dismiss(): void {

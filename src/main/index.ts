@@ -2,8 +2,8 @@ import { app, clipboard, dialog, ipcMain, Notification, screen, session } from '
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
-import type { ApiKeyTestResult, FileTranscribeResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
-import { DONE_DISPLAY_MS, OVERLAY_SIZE, PREVIEW_DELAY_MS } from '@shared/constants'
+import type { AccountInfo, ApiKeyTestResult, FileTranscribeResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
+import { DONE_DISPLAY_MS, FREE_LIMIT_SECONDS, OVERLAY_SIZE, POLAR_CHECKOUT_URL, PREVIEW_DELAY_MS, WISPRA_API_BASE } from '@shared/constants'
 import { controller } from './state'
 import { store } from './store'
 import { history } from './history'
@@ -24,12 +24,53 @@ import {
   openSettingsWindow,
   showOverlayAt
 } from './windows'
+import { auth } from './auth'
+
+// Register wispra:// custom protocol for OAuth callback
+if (!app.isPackaged) {
+  app.setAsDefaultProtocolClient('wispra', process.execPath, [process.argv[1] ?? ''])
+} else {
+  app.setAsDefaultProtocolClient('wispra')
+}
+
+// macOS: open-url fires when the OS hands us a wispra:// URL
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  if (url.startsWith('wispra://')) {
+    void auth.handleCallback(url).then((ok) => {
+      if (ok) onAuthSuccess()
+    })
+  }
+})
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => openSettingsWindow())
+  app.on('second-instance', (_event, commandLine) => {
+    const authUrl = commandLine.find((arg) => arg.startsWith('wispra://'))
+    if (authUrl) {
+      void auth.handleCallback(authUrl).then((ok) => {
+        if (ok) onAuthSuccess()
+      })
+    } else {
+      openSettingsWindow()
+    }
+  })
   void main()
+}
+
+function onAuthSuccess(): void {
+  const s = auth.getState()
+  if (!s) return
+  broadcast(IPC.AUTH_STATE, s)
+  // Auto-switch to proxy if the user has no BYOK key configured
+  const settings = store.get()
+  if (!settings.groqApiKey && !settings.openaiApiKey && settings.provider !== 'local') {
+    store.set({ provider: 'proxy' })
+    broadcast(IPC.SETTINGS_CHANGED, store.get())
+  }
+  openSettingsWindow()
+  notify('Wispra', `Signed in as ${s.email}`)
 }
 
 async function main(): Promise<void> {
@@ -37,6 +78,7 @@ async function main(): Promise<void> {
 
   store.load()
   history.load()
+  auth.load()
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'media')
@@ -154,10 +196,12 @@ function wireIpc(): void {
     void controller.handleAudio(async () => {
       const mode = modes.find((m) => m.id === activeMode)
       const effectiveLang = mode?.language && mode.language !== 'auto' ? mode.language : language
+      const proxyToken = provider === 'proxy' ? await auth.getValidToken() ?? undefined : undefined
 
       const { text: rawText, detectedLanguage } = await transcribe(
         new Uint8Array(audio), provider, groqApiKey, openaiApiKey,
-        effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel
+        effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel,
+        durationSeconds, proxyToken
       )
       if (!rawText) throw new Error('No speech detected')
       let text = rawText
@@ -387,6 +431,49 @@ function wireIpc(): void {
   })
 
   history.onChange((entries) => broadcast(IPC.HISTORY_CHANGED, entries))
+
+  // ── Auth ────────────────────────────────────────────────────────────────────
+
+  ipcMain.handle(IPC.AUTH_LOGIN, () => {
+    auth.openLoginBrowser()
+  })
+
+  ipcMain.handle(IPC.AUTH_LOGOUT, () => {
+    auth.logout()
+    // Reset to BYOK provider (will show onboarding if no key)
+    const settings = store.get()
+    if (settings.provider === 'proxy') {
+      store.set({ provider: 'groq' })
+      broadcast(IPC.SETTINGS_CHANGED, store.get())
+    }
+    broadcast(IPC.AUTH_STATE, null)
+  })
+
+  ipcMain.handle(IPC.GET_ACCOUNT_INFO, async (): Promise<AccountInfo | null> => {
+    const token = await auth.getValidToken()
+    if (!token) return null
+    const state = auth.getState()
+    if (!state) return null
+    try {
+      const response = await fetch(`${WISPRA_API_BASE}/api/usage`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(8_000),
+      })
+      if (!response.ok) {
+        return { email: state.email, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: POLAR_CHECKOUT_URL }
+      }
+      const data = (await response.json()) as { plan: string; usageSeconds: number; limitSeconds: number | null; subscribeUrl: string | null }
+      return {
+        email: state.email,
+        plan: data.plan === 'pro' ? 'pro' : 'free',
+        usageSeconds: data.usageSeconds ?? 0,
+        limitSeconds: data.limitSeconds,
+        subscribeUrl: data.subscribeUrl ?? POLAR_CHECKOUT_URL,
+      }
+    } catch {
+      return { email: state.email, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: POLAR_CHECKOUT_URL }
+    }
+  })
 
   // Overlay drag — move window by delta while keeping it within work area
   ipcMain.on(IPC.MOVE_OVERLAY, (_event, dx: number, dy: number) => {
