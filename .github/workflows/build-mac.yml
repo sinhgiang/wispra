@@ -45,11 +45,8 @@ jobs:
       - name: Upload artifacts to GitHub release
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$TAG" \
-            dist/*.dmg \
-            dist/*.zip \
-            dist/*.zip.blockmap \
-            dist/latest-mac.yml \
-            --clobber
+          shopt -s nullglob
+          FILES=(dist/*.dmg dist/*.dmg.blockmap dist/*.zip dist/*.zip.blockmap dist/latest-mac.yml)
+          gh release upload "$TAG" "${FILES[@]}" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
