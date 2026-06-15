@@ -98,9 +98,29 @@ export function App(): React.JSX.Element {
   }, [handleStart, handleStop])
 
   const { state } = payload
+  const dragRef = useRef<{ startX: number; startY: number; moved: boolean } | null>(null)
 
-  function handleClick(): void {
-    if (state === 'recording') window.api.toggleDictation()
+  function onPointerDown(e: React.PointerEvent<HTMLButtonElement>): void {
+    if (e.button !== 0) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { startX: e.screenX, startY: e.screenY, moved: false }
+  }
+
+  function onPointerMove(e: React.PointerEvent<HTMLButtonElement>): void {
+    if (!dragRef.current) return
+    const dx = e.screenX - dragRef.current.startX
+    const dy = e.screenY - dragRef.current.startY
+    if (!dragRef.current.moved && Math.hypot(dx, dy) < 4) return
+    dragRef.current.moved = true
+    dragRef.current.startX = e.screenX
+    dragRef.current.startY = e.screenY
+    window.api.moveOverlay(dx, dy)
+  }
+
+  function onPointerUp(): void {
+    const wasDrag = dragRef.current?.moved ?? false
+    dragRef.current = null
+    if (!wasDrag && state === 'recording') window.api.toggleDictation()
   }
 
   const showModeBadge = modeLabel && (state === 'recording' || state === 'processing') && !justDone
@@ -113,7 +133,9 @@ export function App(): React.JSX.Element {
         className={`bubble ${justDone ? 'done' : state}`}
         style={state === 'recording' && !justDone ? { transform: `scale(${1 + level * 0.22})` } : undefined}
         aria-label={state === 'recording' ? 'Stop recording' : state}
-        onClick={handleClick}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
       >
         {justDone ? (
           <DoneIcon />

@@ -27,7 +27,7 @@ mac:
       arch: universal
   icon: resources/icon.png
   category: public.app-category.productivity
-  artifactName: ${productName}-${version}-mac.${ext}
+  artifactName: ${productName}-${version}-${arch}.${ext}
   extendInfo:
     NSMicrophoneUsageDescription: Wispra needs microphone access to transcribe your speech.
 publish:

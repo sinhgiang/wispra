@@ -388,6 +388,18 @@ function wireIpc(): void {
 
   history.onChange((entries) => broadcast(IPC.HISTORY_CHANGED, entries))
 
+  // Overlay drag — move window by delta while keeping it within work area
+  ipcMain.on(IPC.MOVE_OVERLAY, (_event, dx: number, dy: number) => {
+    const win = getOverlayWindow()
+    if (!win || win.isDestroyed()) return
+    const [x, y] = win.getPosition()
+    const { x: ax, y: ay, width, height } = screen.getDisplayNearestPoint({ x, y }).workArea
+    const [w, h] = win.getSize()
+    const nx = Math.max(ax, Math.min(x + Math.round(dx), ax + width - w))
+    const ny = Math.max(ay, Math.min(y + Math.round(dy), ay + height - h))
+    win.setPosition(nx, ny)
+  })
+
   // Overlay window size management for preview text
   ipcMain.on(IPC.PREVIEW_TEXT, () => {
     const win = getOverlayWindow()

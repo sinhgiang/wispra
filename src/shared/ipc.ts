@@ -53,7 +53,10 @@ export const IPC = {
   CONTINUOUS_NEXT: 'dictation:continuous-next',
 
   // silence auto-stop (separate from manual toggle so continuous mode is not cancelled)
-  SILENCE_STOP: 'dictation:silence-stop'
+  SILENCE_STOP: 'dictation:silence-stop',
+
+  // overlay drag repositioning
+  MOVE_OVERLAY: 'overlay:move'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

@@ -64,6 +64,9 @@ const api = {
   // --- silence auto-stop (does NOT cancel continuous mode loop) ---
   silenceStop: (): void => ipcRenderer.send(IPC.SILENCE_STOP),
 
+  // --- overlay drag ---
+  moveOverlay: (dx: number, dy: number): void => ipcRenderer.send(IPC.MOVE_OVERLAY, dx, dy),
+
   // --- sound feedback ---
   onPlaySound: (cb: (type: 'start' | 'error') => void): void => {
     ipcRenderer.on(IPC.PLAY_SOUND, (_e, type: 'start' | 'error') => cb(type))
