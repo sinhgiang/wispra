@@ -465,13 +465,14 @@ function wireIpc(): void {
       const data = (await response.json()) as { plan: string; usageSeconds: number; limitSeconds: number | null; subscribeUrl: string | null }
       return {
         email: state.email,
+        avatarUrl: state.avatarUrl,
         plan: data.plan === 'pro' ? 'pro' : 'free',
         usageSeconds: data.usageSeconds ?? 0,
         limitSeconds: data.limitSeconds,
         subscribeUrl: data.subscribeUrl ?? POLAR_CHECKOUT_URL,
       }
     } catch {
-      return { email: state.email, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: POLAR_CHECKOUT_URL }
+      return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: POLAR_CHECKOUT_URL }
     }
   })
 

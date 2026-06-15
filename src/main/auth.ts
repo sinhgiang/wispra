@@ -9,6 +9,7 @@ export interface AuthState {
   expiresAt: number  // Unix ms
   userId: string
   email: string
+  avatarUrl?: string
 }
 
 type AuthListener = (state: AuthState | null) => void
@@ -110,7 +111,8 @@ class AuthManager {
   openLoginBrowser(): void {
     const params = new URLSearchParams({
       provider: 'google',
-      redirect_to: 'wispra://auth',
+      // Redirect to a web page that forwards tokens to the app and closes itself
+      redirect_to: 'https://wispra-web.vercel.app/auth/callback',
     })
     void shell.openExternal(`${SUPABASE_URL}/auth/v1/authorize?${params.toString()}`)
   }
@@ -144,7 +146,11 @@ class AuthManager {
 
       if (!userResp.ok) return false
 
-      const user = (await userResp.json()) as { id: string; email?: string }
+      const user = (await userResp.json()) as {
+        id: string
+        email?: string
+        user_metadata?: { avatar_url?: string; picture?: string }
+      }
 
       this.state = {
         accessToken,
@@ -152,6 +158,7 @@ class AuthManager {
         expiresAt: Date.now() + expiresIn * 1000,
         userId: user.id,
         email: user.email ?? '',
+        avatarUrl: user.user_metadata?.avatar_url ?? user.user_metadata?.picture,
       }
       this.persist()
       this.emit()

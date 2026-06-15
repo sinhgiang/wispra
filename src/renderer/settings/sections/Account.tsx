@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AccountInfo, Settings } from '@shared/types'
+import type { AccountInfo } from '@shared/types'
 
 const FREE_LIMIT_SECONDS = 30 * 60
 
@@ -7,7 +7,7 @@ function formatMinutes(seconds: number): string {
   return (seconds / 60).toFixed(1)
 }
 
-export function AccountSection({ settings }: { settings: Settings }): React.JSX.Element {
+export function AccountSection(): React.JSX.Element {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null | 'loading'>('loading')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [loginBusy, setLoginBusy] = useState(false)
@@ -48,8 +48,6 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
     }
   }
 
-  const hasByokKey = !!(settings.groqApiKey || settings.openaiApiKey)
-
   return (
     <section>
       <h2>Account</h2>
@@ -57,19 +55,7 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
       {/* ── Logged-out state ──────────────────────────────────── */}
       {!isLoggedIn && (
         <>
-          <div className="plan-card plan-byok">
-            <div className="plan-header">
-              <span className="plan-name">BYOK — Free forever</span>
-              {hasByokKey && <span className="plan-badge">Active</span>}
-            </div>
-            <p className="plan-desc">
-              {hasByokKey
-                ? 'Using your own API key. You pay your provider directly at cost price.'
-                : 'Add your Groq or OpenAI key in the Speech Recognition section.'}
-            </p>
-          </div>
-
-          <div className="plan-card plan-pro" style={{ marginTop: '12px' }}>
+          <div className="plan-card plan-pro">
             <div className="plan-header">
               <span className="plan-name">Wispra Cloud</span>
               <span className="plan-badge" style={{ background: 'var(--accent)', color: 'white' }}>New</span>
@@ -178,12 +164,6 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
         </div>
       )}
 
-      {/* Note when BYOK is also set while logged in */}
-      {isLoggedIn && hasByokKey && (
-        <p style={{ fontSize: '12px', color: 'var(--text-3)', marginTop: '10px' }}>
-          You also have an API key configured. Switch provider in Speech Recognition to use BYOK instead.
-        </p>
-      )}
     </section>
   )
 }

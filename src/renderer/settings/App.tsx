@@ -40,16 +40,22 @@ export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [tab, setTab] = useState<Tab>('settings')
   const [authEmail, setAuthEmail] = useState<string | null>(null)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   useEffect(() => {
     void window.api.getSettings().then(setSettings)
     window.api.onSettingsChanged(setSettings)
     void window.api.getAccountInfo().then((info) => {
       setAuthEmail(info?.email ?? null)
+      setAvatarUrl(info?.avatarUrl ?? null)
     })
     window.api.onAuthStateChanged((state) => {
       setAuthEmail(state ? (state as { email?: string }).email ?? null : null)
-      if (state) void window.api.getAccountInfo().then((info) => setAuthEmail(info?.email ?? null))
+      if (state) void window.api.getAccountInfo().then((info) => {
+        setAuthEmail(info?.email ?? null)
+        setAvatarUrl(info?.avatarUrl ?? null)
+      })
+      else setAvatarUrl(null)
     })
   }, [])
 
@@ -84,7 +90,13 @@ export function App(): React.JSX.Element {
           title={authEmail ?? 'Sign in to Wispra Cloud'}
           onClick={() => setTab('account')}
         >
-          {authEmail ? authEmail[0].toUpperCase() : <PersonIcon />}
+          {avatarUrl ? (
+            <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} referrerPolicy="no-referrer" />
+          ) : authEmail ? (
+            authEmail[0].toUpperCase()
+          ) : (
+            <PersonIcon />
+          )}
         </button>
       </header>
 
@@ -110,7 +122,7 @@ export function App(): React.JSX.Element {
         </main>
       ) : (
         <main key="account">
-          <AccountSection settings={settings} />
+          <AccountSection />
         </main>
       )}
     </div>

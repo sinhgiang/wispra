@@ -117,6 +117,8 @@ export interface AccountInfo {
   limitSeconds: number | null
   /** Polar.sh checkout URL for upgrading. */
   subscribeUrl: string | null
+  /** Google profile photo URL. */
+  avatarUrl?: string
 }
 
 export interface UsageStats {
