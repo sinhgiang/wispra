@@ -124,7 +124,11 @@ function simulatePaste(targetWindow: string | null): Promise<void> {
   }
   if (process.platform === 'win32') {
     if (targetWindow) {
-      // Use AttachThreadInput to reliably bring the target window to front, then paste.
+      // Bring the target window to foreground, then paste.
+      // KEY: attach to the CURRENT foreground thread (not the target thread) so that
+      // SetForegroundWindow bypasses Windows' foreground-lock restriction. Also poll
+      // GetForegroundWindow() until the switch actually completes before sending Ctrl+V,
+      // because SendKeys sends to whichever window IS in the foreground at call time.
       const hwnd = targetWindow.trim()
       const script = `
 Add-Type -TypeDefinition @"
@@ -139,18 +143,33 @@ public class FocusPaste {
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
     [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     public static void Paste(long hwndLong) {
         IntPtr hwnd = new IntPtr(hwndLong);
+        if (!IsWindow(hwnd)) return;
         uint pid;
         uint targetTid = GetWindowThreadProcessId(hwnd, out pid);
         uint myTid = GetCurrentThreadId();
         if (IsIconic(hwnd)) ShowWindow(hwnd, 9);
-        AttachThreadInput(myTid, targetTid, true);
+        // Attach to the CURRENT foreground window's thread — this is what allows
+        // SetForegroundWindow to succeed on Windows 10/11 when another app owns focus.
+        IntPtr fgHwnd = GetForegroundWindow();
+        uint fgPid;
+        uint fgTid = GetWindowThreadProcessId(fgHwnd, out fgPid);
+        AttachThreadInput(myTid, fgTid, true);
+        if (fgTid != targetTid) AttachThreadInput(myTid, targetTid, true);
         SetForegroundWindow(hwnd);
         BringWindowToTop(hwnd);
-        AttachThreadInput(myTid, targetTid, false);
-        System.Threading.Thread.Sleep(120);
+        // Poll until the OS confirms the target window is in foreground (max 500ms).
+        int waited = 0;
+        while (GetForegroundWindow() != hwnd && waited < 500) {
+            System.Threading.Thread.Sleep(20);
+            waited += 20;
+        }
         SendKeys.SendWait("^v");
+        AttachThreadInput(myTid, fgTid, false);
+        if (fgTid != targetTid) AttachThreadInput(myTid, targetTid, false);
     }
 }
 "@ -ReferencedAssemblies "System.Windows.Forms"

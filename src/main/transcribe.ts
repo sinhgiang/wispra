@@ -103,7 +103,8 @@ async function requestViaProxy(
   const form = new FormData()
   form.append('file', new Blob([audio as BlobPart], { type: mimeType }), `audio.${ext}`)
   form.append('model', GROQ_STT_MODEL)
-  form.append('response_format', 'json')
+  // verbose_json gives per-segment no_speech_prob so we can filter hallucinations
+  form.append('response_format', 'verbose_json')
   if (language && language !== 'auto') form.append('language', language)
 
   let response: Response
@@ -131,10 +132,19 @@ async function requestViaProxy(
     throw new Error(detail || `Transcription failed (HTTP ${response.status})`)
   }
 
-  const data = (await response.json()) as { text?: string; language?: string }
-  const text = (data.text ?? '').trim()
+  const data = (await response.json()) as VerboseResponse
   const raw = data.language?.toLowerCase()
   const detectedLanguage = raw === 'vietnamese' ? 'vi' : raw === 'english' ? 'en' : raw
+
+  // Filter silence/hallucination segments — same threshold as direct Groq path
+  let text: string
+  if (data.segments && data.segments.length > 0) {
+    const speechSegments = data.segments.filter(s => s.no_speech_prob < NO_SPEECH_THRESHOLD)
+    text = speechSegments.map(s => s.text).join('').trim()
+  } else {
+    text = (data.text ?? '').trim()
+  }
+
   return { text, detectedLanguage }
 }
 

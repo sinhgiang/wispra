@@ -40,8 +40,20 @@ export function createOverlayWindow(): BrowserWindow {
   })
   // Track destruction so showOverlayAt() can recreate when needed.
   overlayWindow.on('closed', () => { overlayWindow = null })
+  // If the renderer process crashes (GPU error, memory pressure after long use),
+  // the window object survives but the content disappears. Destroy and let
+  // showOverlayAt() recreate it on the next recording.
+  overlayWindow.webContents.on('render-process-gone', () => {
+    overlayWindow?.destroy()
+    overlayWindow = null
+  })
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // Re-apply alwaysOnTop each time the overlay is shown — Windows can strip it
+  // when a full-screen app launches or focus moves across monitors.
+  overlayWindow.on('show', () => {
+    overlayWindow?.setAlwaysOnTop(true, 'screen-saver')
+  })
   // Do NOT auto-show — overlay is shown only when recording starts via showOverlayAt()
   pageUrl(overlayWindow, 'overlay')
   return overlayWindow
