@@ -15,6 +15,20 @@ interface ProviderConfig {
   apiKey: string
 }
 
+interface VerboseSegment {
+  text: string
+  no_speech_prob: number
+}
+
+interface VerboseResponse {
+  text?: string
+  language?: string
+  segments?: VerboseSegment[]
+}
+
+/** Discard segments where Whisper is >50% confident there is no real speech (hallucination guard). */
+const NO_SPEECH_THRESHOLD = 0.5
+
 function getConfig(
   provider: SttProvider,
   groqKey: string,
@@ -142,7 +156,7 @@ async function requestTranscription(
   const form = new FormData()
   form.append('file', new Blob([audio as BlobPart], { type: mimeType }), `audio.${ext}`)
   form.append('model', config.model)
-  form.append('response_format', 'json')
+  form.append('response_format', 'verbose_json')
   if (language && language !== 'auto') form.append('language', language)
 
   let response: Response
@@ -168,11 +182,19 @@ async function requestTranscription(
     throw new Error(detail || `Transcription failed (HTTP ${response.status})`)
   }
 
-  const data = (await response.json()) as { text?: string; language?: string }
-  const text = (data.text ?? '').trim()
-  // Normalise language code: Whisper may return "vietnamese" or "vi" depending on model.
+  const data = (await response.json()) as VerboseResponse
   const raw = data.language?.toLowerCase()
   const detectedLanguage = raw === 'vietnamese' ? 'vi' : raw === 'english' ? 'en' : raw
+
+  // Filter out segments Whisper flagged as likely silence/hallucination
+  let text: string
+  if (data.segments && data.segments.length > 0) {
+    const speechSegments = data.segments.filter(s => s.no_speech_prob < NO_SPEECH_THRESHOLD)
+    text = speechSegments.map(s => s.text).join('').trim()
+  } else {
+    text = (data.text ?? '').trim()
+  }
+
   return { text, detectedLanguage }
 }
 

@@ -20,7 +20,7 @@ export const DEFAULT_MODES: Mode[] = [
   {
     id: 'vietnamese',
     name: 'Vietnamese',
-    prompt: 'Correct all Vietnamese diacritics and tones carefully. Fix punctuation. Remove Vietnamese filler words (ừm, à, ý là, kiểu, thì là). Do not translate or change the content.',
+    prompt: 'Correct all Vietnamese diacritics and tones carefully. Add punctuation marks: use comma (,) between clauses and after introductory phrases, use period (.) to end each sentence, use question mark (?) for questions. Remove Vietnamese filler words (ừm, à, ý là, kiểu, thì là, thì, mà). Do not translate or change the content.',
     language: 'vi',
     removeFiller: true,
     builtIn: true
