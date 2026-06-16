@@ -3,7 +3,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
 import type { AccountInfo, ApiKeyTestResult, FileTranscribeResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
-import { DONE_DISPLAY_MS, FREE_LIMIT_SECONDS, OVERLAY_SIZE, POLAR_CHECKOUT_URL, PREVIEW_DELAY_MS, WISPRA_API_BASE } from '@shared/constants'
+import { DONE_DISPLAY_MS, FREE_LIMIT_SECONDS, OVERLAY_SIZE, PREVIEW_DELAY_MS, WISPRA_API_BASE } from '@shared/constants'
 import { controller } from './state'
 import { store } from './store'
 import { history } from './history'
@@ -111,11 +111,17 @@ async function main(): Promise<void> {
 
   const { groqApiKey, openaiApiKey, provider } = store.get()
   const wasOpenedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin
+  // Proxy provider is "ready" when the user is already signed in (token persisted from last session)
+  const isProxyReady = provider === 'proxy' && auth.isLoggedIn()
 
-  if (!groqApiKey && !openaiApiKey && provider !== 'local') {
-    // No API key: always show Settings with welcome message.
+  if (!isProxyReady && !groqApiKey && !openaiApiKey && provider !== 'local') {
+    // No credentials configured: open Settings and explain what to do.
     openSettingsWindow()
-    notify('Welcome to Wispra', 'Add your free Groq API key in Settings to start dictating.')
+    if (provider === 'proxy') {
+      notify('Welcome to Wispra', 'Sign in with Google in Settings to start dictating.')
+    } else {
+      notify('Welcome to Wispra', 'Add your free Groq API key in Settings to start dictating.')
+    }
   } else if (!wasOpenedAtLogin) {
     // Launched manually (install, double-click, etc.): open Settings so user knows app is running.
     openSettingsWindow()
@@ -462,7 +468,7 @@ function wireIpc(): void {
         signal: AbortSignal.timeout(8_000),
       })
       if (!response.ok) {
-        return { email: state.email, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: POLAR_CHECKOUT_URL }
+        return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
       }
       const data = (await response.json()) as { plan: string; usageSeconds: number; limitSeconds: number | null; subscribeUrl: string | null }
       return {
@@ -471,10 +477,10 @@ function wireIpc(): void {
         plan: data.plan === 'pro' ? 'pro' : 'free',
         usageSeconds: data.usageSeconds ?? 0,
         limitSeconds: data.limitSeconds,
-        subscribeUrl: data.subscribeUrl ?? POLAR_CHECKOUT_URL,
+        subscribeUrl: data.subscribeUrl ?? null,
       }
     } catch {
-      return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: POLAR_CHECKOUT_URL }
+      return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
     }
   })
 
