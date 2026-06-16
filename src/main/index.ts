@@ -246,9 +246,9 @@ function wireIpc(): void {
         let effectiveMode = mode
         let appContextHint: string | undefined
 
-        // Layer 1 — Language routing: Vietnamese detected → Vietnamese mode.
-        // Only when language setting is 'auto' (user hasn't pinned a language).
-        if (language === 'auto' && detectedLanguage === 'vi') {
+        // Layer 1 — Language routing: Vietnamese → Vietnamese mode.
+        // Triggers when user pinned 'vi' OR when auto-detect found Vietnamese.
+        if (detectedLanguage === 'vi' || language === 'vi') {
           const viMode = modes.find((m) => m.id === 'vietnamese')
           if (viMode) effectiveMode = viMode
         }

@@ -39,32 +39,42 @@ ${fillerLine}${vocabLine}- Add missing punctuation (. , ? ! …)
 ${CRITICAL_RULES}`
 }
 
-// Split long text into sentence-boundary chunks to avoid LLM token limits
-const MAX_CHUNK_WORDS = 400
+// Split long text into chunks to avoid LLM token limits
+const MAX_CHUNK_WORDS = 350
 
 function splitIntoChunks(text: string): string[] {
-  const wordCount = text.split(/\s+/).length
-  if (wordCount <= MAX_CHUNK_WORDS) return [text]
+  const words = text.split(/\s+/)
+  if (words.length <= MAX_CHUNK_WORDS) return [text]
 
-  // Split at sentence boundaries
+  // Prefer splitting at sentence boundaries if present; fall back to word count
   const sentences = text.split(/(?<=[.!?…\n])\s+/)
-  const chunks: string[] = []
-  let current = ''
-  let currentWords = 0
+  const hasSentenceBoundaries = sentences.length > 1
 
-  for (const sentence of sentences) {
-    const sw = sentence.split(/\s+/).length
-    if (currentWords + sw > MAX_CHUNK_WORDS && current) {
-      chunks.push(current.trim())
-      current = sentence
-      currentWords = sw
-    } else {
-      current = current ? `${current} ${sentence}` : sentence
-      currentWords += sw
+  if (hasSentenceBoundaries) {
+    const chunks: string[] = []
+    let current = ''
+    let currentWords = 0
+    for (const sentence of sentences) {
+      const sw = sentence.split(/\s+/).length
+      if (currentWords + sw > MAX_CHUNK_WORDS && current) {
+        chunks.push(current.trim())
+        current = sentence
+        currentWords = sw
+      } else {
+        current = current ? `${current} ${sentence}` : sentence
+        currentWords += sw
+      }
     }
+    if (current.trim()) chunks.push(current.trim())
+    if (chunks.length > 0) return chunks
   }
-  if (current.trim()) chunks.push(current.trim())
-  return chunks.length > 0 ? chunks : [text]
+
+  // Raw speech: no punctuation — split strictly by word count
+  const chunks: string[] = []
+  for (let i = 0; i < words.length; i += MAX_CHUNK_WORDS) {
+    chunks.push(words.slice(i, i + MAX_CHUNK_WORDS).join(' '))
+  }
+  return chunks
 }
 
 export async function postProcess(
@@ -149,9 +159,9 @@ async function processChunk(
     const result = data.choices?.[0]?.message?.content?.trim()
     if (!result) return text
 
-    // Safety: if output is drastically shorter, model likely garbled — keep original chunk
+    // Safety: if model returned near-empty or extremely long output, it likely failed
     const ratio = result.length / text.length
-    if (ratio < 0.4 || ratio > 4) return text
+    if (ratio < 0.1 || ratio > 8) return text
 
     return result
   } catch {
