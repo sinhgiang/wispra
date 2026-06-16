@@ -359,6 +359,7 @@ function wireIpc(): void {
   })
   ipcMain.on(IPC.COPY_TEXT, (_event, text: string) => clipboard.writeText(text))
 
+  ipcMain.handle(IPC.GET_APP_VERSION, () => app.getVersion())
   ipcMain.handle(IPC.CHECK_UPDATE, () => checkForUpdatesNow())
   ipcMain.on(IPC.INSTALL_UPDATE, () => installUpdate())
 

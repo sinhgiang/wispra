@@ -51,6 +51,7 @@ const api = {
   copyText: (text: string): void => ipcRenderer.send(IPC.COPY_TEXT, text),
 
   // --- updates ---
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke(IPC.GET_APP_VERSION),
   checkForUpdates: (): Promise<void> => ipcRenderer.invoke(IPC.CHECK_UPDATE),
   installUpdate: (): void => ipcRenderer.send(IPC.INSTALL_UPDATE),
   onUpdateStatus: (cb: (status: UpdateStatus) => void): void => {

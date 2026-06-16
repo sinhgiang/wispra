@@ -3,6 +3,11 @@ import type { Settings, UpdateStatus } from '@shared/types'
 
 export function UpdatesSection({ settings }: { settings: Settings }): React.JSX.Element {
   const [status, setStatus] = useState<UpdateStatus>({ status: 'idle' })
+  const [currentVersion, setCurrentVersion] = useState<string>('')
+
+  useEffect(() => {
+    window.api.getAppVersion().then(setCurrentVersion)
+  }, [])
 
   useEffect(() => {
     window.api.onUpdateStatus(setStatus)
@@ -19,7 +24,7 @@ export function UpdatesSection({ settings }: { settings: Settings }): React.JSX.
       case 'downloading': return `Downloading ${status.percent ?? 0}%`
       case 'downloaded': return `v${status.version} ready to install`
       case 'error':      return status.message
-      default:           return "You're up to date"
+      default:           return `You're up to date${currentVersion ? ` — v${currentVersion}` : ''}`
     }
   }
 

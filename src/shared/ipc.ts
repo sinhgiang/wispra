@@ -58,6 +58,9 @@ export const IPC = {
   // overlay drag repositioning
   MOVE_OVERLAY: 'overlay:move',
 
+  // app info
+  GET_APP_VERSION: 'app:version',
+
   // cloud auth
   AUTH_LOGIN: 'auth:login',
   AUTH_LOGOUT: 'auth:logout',
