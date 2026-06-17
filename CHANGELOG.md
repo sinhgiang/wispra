@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.4 — 2026-06-17
+
+### Bug fixes
+- **Text pasted into wrong window on multi-monitor setups** — When clicking on a second monitor during recording, Wispra now attaches to the correct foreground thread before switching focus, and polls until the OS confirms the switch before sending Ctrl+V. Text reliably lands in the right window.
+- **Floating icon disappearing after extended use** — Two separate causes fixed: (1) silent renderer crash (GPU/memory pressure) now destroys and recreates the overlay window automatically; (2) Windows stripping `alwaysOnTop` when a full-screen app launches is now corrected by re-applying on every `show` event.
+- **"Like, share, subscribe" hallucination when using Wispra Cloud** — The proxy path now uses `verbose_json` response format and filters silence segments by `no_speech_prob` threshold, matching the direct Groq path.
+
 ## v0.2.1 — 2026-06-15
 
 ### Bug fixes
