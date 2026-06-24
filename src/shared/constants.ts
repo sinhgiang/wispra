@@ -20,7 +20,7 @@ export const DEFAULT_MODES: Mode[] = [
   {
     id: 'vietnamese',
     name: 'Vietnamese',
-    prompt: 'Correct all Vietnamese diacritics and tones carefully. Add punctuation marks: use comma (,) between clauses and after introductory phrases, use period (.) to end each sentence, use question mark (?) for questions. Remove Vietnamese filler words (ừm, à, ý là, kiểu, thì là, thì, mà). Do not translate or change the content.',
+    prompt: 'Fix Vietnamese diacritics and tones. Capitalize the first word of every sentence and all proper nouns (names of people, places, organizations). Add punctuation: comma (,) between clauses and after introductory phrases, period (.) at the end of each sentence, question mark (?) for questions. Remove filler words (ừm, à, ý là, kiểu, thì là, thì, mà). Do not translate or change the meaning.',
     language: 'vi',
     removeFiller: true,
     builtIn: true
@@ -110,7 +110,7 @@ export const PREVIEW_DELAY_MS = 2500
 /** RMS level below which audio is considered silence for auto-stop mode. */
 export const SILENCE_THRESHOLD = 0.018
 /** Milliseconds of continuous silence before auto-stopping in auto-stop mode. */
-export const SILENCE_DURATION_MS = 1500
+export const SILENCE_DURATION_MS = 3000
 /** Milliseconds to keep the overlay visible after injection (for done animation). */
 export const DONE_DISPLAY_MS = 1400
 

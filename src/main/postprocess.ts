@@ -32,7 +32,8 @@ function buildSystemPrompt(mode?: Mode, vocabulary?: string[], appContextHint?: 
 
   const fillerLine = !mode || mode.removeFiller ? `${FILLER_INSTRUCTION}\n` : ''
   return `${contextLine}You are a transcription editor. Fix the raw speech-to-text output:
-${fillerLine}${vocabLine}- Add missing punctuation: period (.) at end of sentences, comma (,) between clauses and after introductory phrases, question mark (?) for questions
+${fillerLine}${vocabLine}- Capitalize the first word of every sentence and all proper nouns (names of people, places, organizations)
+- Add missing punctuation: period (.) at end of sentences, comma (,) between clauses and after introductory phrases, question mark (?) for questions
 - Fix obvious spelling errors or misheard words
 - Correct Vietnamese diacritics/tones if wrong
 

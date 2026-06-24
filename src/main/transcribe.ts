@@ -29,6 +29,32 @@ interface VerboseResponse {
 /** Discard segments where Whisper is >50% confident there is no real speech (hallucination guard). */
 const NO_SPEECH_THRESHOLD = 0.5
 
+/**
+ * Phrases Whisper hallucinates from its YouTube training data when audio is near-silent
+ * or contains only ambient noise. These appear even with low no_speech_prob because
+ * the model is "confident" it heard something — but it's always wrong.
+ */
+const HALLUCINATION_PHRASES = [
+  'like and subscribe',
+  'like, share and subscribe',
+  'like, comment and subscribe',
+  'please like and subscribe',
+  'please subscribe',
+  "don't forget to subscribe",
+  'subscribe to my channel',
+  'thank you for watching',
+  'thanks for watching',
+  'see you in the next video',
+  'see you next time',
+  'you',
+]
+
+function filterKnownHallucinations(text: string): string {
+  const normalized = text.trim().toLowerCase().replace(/[.,!?。，！？]+/g, '').trim()
+  if (HALLUCINATION_PHRASES.some((p) => normalized === p || normalized.startsWith(p + ' '))) return ''
+  return text
+}
+
 function getConfig(
   provider: SttProvider,
   groqKey: string,
@@ -145,6 +171,9 @@ async function requestViaProxy(
     text = (data.text ?? '').trim()
   }
 
+  // Block known Whisper training-data hallucinations (YouTube phrases etc.)
+  text = filterKnownHallucinations(text)
+
   return { text, detectedLanguage }
 }
 
@@ -204,6 +233,9 @@ async function requestTranscription(
   } else {
     text = (data.text ?? '').trim()
   }
+
+  // Block known Whisper training-data hallucinations (YouTube phrases etc.)
+  text = filterKnownHallucinations(text)
 
   return { text, detectedLanguage }
 }

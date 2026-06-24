@@ -44,6 +44,16 @@ class SettingsStore {
         merged.aiPostProcess = true
         merged.settingsVersion = 2
       }
+
+      if (savedVersion < 3) {
+        // v0.2.5: refresh built-in mode prompts (capitalization + punctuation improvements).
+        merged.modes = merged.modes.map((m) => {
+          if (!m.builtIn) return m
+          const def = DEFAULT_MODES.find((d) => d.id === m.id)
+          return def ? { ...m, prompt: def.prompt, language: def.language, removeFiller: def.removeFiller } : m
+        })
+        merged.settingsVersion = 3
+      }
       // ─────────────────────────────────────────────────────────────────
 
       this.settings = merged
