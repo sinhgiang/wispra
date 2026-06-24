@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.6 — 2026-06-24
+
+### Bug fixes
+- **Recording stops mid-speech** — Switched all users to Toggle mode: recording now only stops when you press the hotkey or click the icon. Auto-stop on silence is disabled. Maximum recording duration extended from 5 to 10 minutes.
+
 ## v0.2.5 — 2026-06-24
 
 ### Bug fixes

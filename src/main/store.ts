@@ -54,6 +54,15 @@ class SettingsStore {
         })
         merged.settingsVersion = 3
       }
+
+      if (savedVersion < 4) {
+        // v0.2.6: switch to toggle mode — auto-stop was interrupting users mid-sentence.
+        // Also disable continuous mode restart which compounded the interruption.
+        merged.inputMode = 'toggle'
+        merged.continuousMode = false
+        if ((merged.autoStopMinutes ?? 5) <= 5) merged.autoStopMinutes = 10
+        merged.settingsVersion = 4
+      }
       // ─────────────────────────────────────────────────────────────────
 
       this.settings = merged

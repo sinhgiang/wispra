@@ -58,7 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkey: 'CommandOrControl+Shift+Space',
   language: 'auto',
   launchAtLogin: false,
-  autoStopMinutes: 5,
+  autoStopMinutes: 10,
   autoUpdate: true,
   aiPostProcess: true,
   modes: DEFAULT_MODES,
