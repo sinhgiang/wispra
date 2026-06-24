@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.5 — 2026-06-24
+
+### Bug fixes
+- **"Like, share, subscribe" hallucination** — Added a blocklist of known Whisper training-data phrases. Even when `no_speech_prob` is low (ambient noise), these phantom phrases are now silently discarded.
+- **Recording stops mid-speech** — Silence auto-stop threshold increased from 1.5 s to 3 s, preventing natural pauses between sentences from triggering a premature stop.
+- **Vietnamese (and all languages) missing capitalization** — AI post-processing now explicitly capitalizes the first word of every sentence and all proper nouns, matching what you'd expect from a transcription editor.
+
 ## v0.2.4 — 2026-06-17
 
 ### Bug fixes
