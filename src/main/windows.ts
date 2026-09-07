@@ -1,18 +1,38 @@
-import { app, BrowserWindow, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, Menu, screen, shell } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
 import { join } from 'path'
 import { OVERLAY_SIZE } from '@shared/constants'
 
 let overlayWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 
-function pageUrl(win: BrowserWindow, page: 'overlay' | 'settings'): void {
+interface MeetingCloseGuard {
+  /** Returns a detail message if a meeting is currently recording/paused, else null (nothing to guard). */
+  activeWarning: () => string | null
+  /** Called once the user confirms closing anyway — should stop and finalize the meeting. */
+  forceStop: () => void
+}
+let meetingCloseGuard: MeetingCloseGuard | null = null
+
+/**
+ * Registers the predicate/action the Settings window's close handler uses to
+ * avoid silently killing an in-progress meeting recording (it lives in the
+ * renderer process, so closing the window would otherwise just end it with no
+ * warning). Kept as an injected interface rather than importing
+ * meetingController directly, so this window-management module doesn't take
+ * on a business-logic dependency — index.ts wires the real implementation.
+ */
+export function setMeetingCloseGuard(guard: MeetingCloseGuard): void {
+  meetingCloseGuard = guard
+}
+
+function pageUrl(win: BrowserWindow, page: 'overlay' | 'settings', extraQuery?: Record<string, string>): void {
+  const query: Record<string, string> = { page, ...extraQuery }
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {
-    void win.loadURL(`${devUrl}?page=${page}`)
+    void win.loadURL(`${devUrl}?${new URLSearchParams(query).toString()}`)
   } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'), {
-      query: { page }
-    })
+    void win.loadFile(join(__dirname, '../renderer/index.html'), { query })
   }
 }
 
@@ -93,7 +113,13 @@ export function hideOverlay(): void {
   overlayWindow.hide()
 }
 
-export function openSettingsWindow(): BrowserWindow {
+/**
+ * Opens (or focuses) the single Settings window. `initialTab` only affects a freshly
+ * created window (passed through as a `?tab=` query param the renderer reads on
+ * mount); if the window is already open, the caller is responsible for switching
+ * tabs via IPC (see IPC.MEETING_OPEN_TAB) since the renderer is already mounted.
+ */
+export function openSettingsWindow(initialTab?: string): BrowserWindow {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.show()
     settingsWindow.focus()
@@ -111,16 +137,67 @@ export function openSettingsWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Meeting Mode lives in this window as a tab and can record for hours while
+      // the user works elsewhere, so it's routinely minimized/occluded/unfocused.
+      // Without this, Chromium throttles timers/rAF in the background and the
+      // meeting recorder's chunk-cut timing drifts or stalls.
+      backgroundThrottling: false
     }
   })
   settingsWindow.on('closed', () => { settingsWindow = null })
+
+  // Electron shows no context menu by default. Wire a minimal one so users can
+  // right-click to copy selected text anywhere (e.g. a Meeting transcript) or
+  // cut/copy/paste/select-all in editable fields (e.g. the meeting title rename input).
+  settingsWindow.webContents.on('context-menu', (_event, params) => {
+    const items: MenuItemConstructorOptions[] = []
+    if (params.isEditable) {
+      items.push(
+        { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
+        { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
+        { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
+        { type: 'separator' },
+        { label: 'Select All', role: 'selectAll', enabled: params.editFlags.canSelectAll }
+      )
+    } else if (params.selectionText) {
+      items.push({ label: 'Copy', role: 'copy' })
+    }
+    if (items.length > 0) Menu.buildFromTemplate(items).popup()
+  })
+
+  // Guard against silently losing an in-progress meeting recording: it runs
+  // entirely in this window's renderer, so a plain close would kill it with
+  // no save and no warning.
+  let forceClosing = false
+  settingsWindow.on('close', (event) => {
+    if (forceClosing) return
+    const detail = meetingCloseGuard?.activeWarning()
+    if (!detail) return
+    event.preventDefault()
+    const win = settingsWindow
+    if (!win) return
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: ['Stop and close', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: 'A meeting recording is in progress',
+      detail
+    })
+    if (choice === 0) {
+      forceClosing = true
+      meetingCloseGuard?.forceStop()
+      win.close()
+    }
+  })
+
   settingsWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
   settingsWindow.webContents.once('did-finish-load', () => settingsWindow?.webContents.closeDevTools())
-  pageUrl(settingsWindow, 'settings')
+  pageUrl(settingsWindow, 'settings', initialTab ? { tab: initialTab } : undefined)
   return settingsWindow
 }
 

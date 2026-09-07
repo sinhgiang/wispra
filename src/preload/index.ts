@@ -3,8 +3,16 @@ import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
   ApiKeyTestResult,
+  ContentPlatform,
   FileTranscribeResult,
   HotkeyResult,
+  MeetingAudioSource,
+  MeetingContentResult,
+  MeetingLanguageConfig,
+  MeetingSegment,
+  MeetingSession,
+  MeetingSessionSummary,
+  MeetingState,
   Settings,
   StatePayload,
   TranscriptEntry,
@@ -99,6 +107,69 @@ const api = {
     ipcRenderer.invoke(IPC.EXPORT_HISTORY, format),
   summarizeTopic: (texts: string[]): Promise<{ ok: boolean; summary?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SUMMARIZE_TOPIC, texts),
+
+  // --- meeting mode ---
+  meetingStart: (languageConfig: MeetingLanguageConfig, audioSource: MeetingAudioSource): void =>
+    ipcRenderer.send(IPC.MEETING_START, languageConfig, audioSource),
+  meetingPause: (): void => ipcRenderer.send(IPC.MEETING_PAUSE),
+  meetingResume: (): void => ipcRenderer.send(IPC.MEETING_RESUME),
+  meetingStop: (): void => ipcRenderer.send(IPC.MEETING_STOP),
+  // Cancels the current session without saving it — see meetingSessions.discard().
+  meetingDiscard: (): void => ipcRenderer.send(IPC.MEETING_DISCARD),
+  meetingCaptureFailed: (message: string): void => ipcRenderer.send(IPC.MEETING_CAPTURE_FAILED, message),
+  meetingChunkCaptured: (
+    audio: ArrayBuffer,
+    meta: { startMs: number; endMs: number; startedAt: string; mimeType: string }
+  ): void => ipcRenderer.send(IPC.MEETING_CHUNK_CAPTURED, audio, meta),
+  getMeetingState: (): Promise<MeetingState> => ipcRenderer.invoke(IPC.MEETING_GET_STATE),
+  getMeetingSessions: (): Promise<MeetingSessionSummary[]> => ipcRenderer.invoke(IPC.MEETING_GET_SESSIONS),
+  getMeetingSession: (id: string): Promise<MeetingSession | null> =>
+    ipcRenderer.invoke(IPC.MEETING_GET_SESSION, id),
+  deleteMeetingSession: (id: string): Promise<void> => ipcRenderer.invoke(IPC.MEETING_DELETE_SESSION, id),
+  renameMeetingSession: (id: string, title: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.MEETING_RENAME_SESSION, id, title),
+  // On-demand: generates (or returns the already-cached) ready-to-post content
+  // for one platform. Resolves null if generation failed (offline, bad key, etc).
+  generateMeetingContent: (id: string, platform: ContentPlatform): Promise<MeetingContentResult | null> =>
+    ipcRenderer.invoke(IPC.MEETING_GENERATE_CONTENT, id, platform),
+  // On-demand retry for a stopped session whose title/summary generation failed —
+  // resolves true on success, false on failure. On success the actual title/summary
+  // update arrives separately via onMeetingSessionUpdated.
+  generateMeetingSummary: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.MEETING_GENERATE_SUMMARY, id),
+  onMeetingStateChanged: (cb: (state: MeetingState) => void): void => {
+    ipcRenderer.on(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state))
+  },
+  onMeetingCaptureStart: (cb: () => void): void => {
+    ipcRenderer.on(IPC.MEETING_CAPTURE_START, () => cb())
+  },
+  onMeetingCapturePause: (cb: () => void): void => {
+    ipcRenderer.on(IPC.MEETING_CAPTURE_PAUSE, () => cb())
+  },
+  onMeetingCaptureResume: (cb: () => void): void => {
+    ipcRenderer.on(IPC.MEETING_CAPTURE_RESUME, () => cb())
+  },
+  onMeetingCaptureStop: (cb: () => void): void => {
+    ipcRenderer.on(IPC.MEETING_CAPTURE_STOP, () => cb())
+  },
+  // Arrives right before onMeetingCaptureStop when the silence safety net (not the
+  // user) ended the recording — lets the renderer explain why it stopped.
+  onMeetingAutoStopped: (cb: () => void): void => {
+    ipcRenderer.on(IPC.MEETING_AUTO_STOPPED, () => cb())
+  },
+  onMeetingSegmentReady: (cb: (segment: MeetingSegment, sessionId: string) => void): void => {
+    ipcRenderer.on(IPC.MEETING_SEGMENT_READY, (_e, segment: MeetingSegment, sessionId: string) =>
+      cb(segment, sessionId)
+    )
+  },
+  // main -> settings renderer: a session's title/summary/status changed (e.g. the
+  // AI-generated title finished after Stop)
+  onMeetingSessionUpdated: (cb: (session: MeetingSession) => void): void => {
+    ipcRenderer.on(IPC.MEETING_SESSION_UPDATED, (_e, session: MeetingSession) => cb(session))
+  },
+  // main -> settings renderer: tray (or another entry point) asked to switch to the Meeting tab
+  onOpenMeetingTab: (cb: () => void): void => {
+    ipcRenderer.on(IPC.MEETING_OPEN_TAB, () => cb())
+  }
 }
 
 export type RendererApi = typeof api

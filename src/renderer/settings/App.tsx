@@ -12,9 +12,16 @@ import { TranscribeSection } from './sections/Transcribe'
 import { AccountSection } from './sections/Account'
 import { TemplatesSection } from './sections/Templates'
 import { StatisticsSection } from './sections/Statistics'
+import { MeetingPanel } from '../meeting/App'
 import './settings.css'
+import '../meeting/meeting.css'
 
-type Tab = 'settings' | 'transcribe' | 'history' | 'account'
+type Tab = 'settings' | 'transcribe' | 'history' | 'account' | 'meeting'
+
+function initialTab(): Tab {
+  const t = new URLSearchParams(window.location.search).get('tab')
+  return t === 'meeting' ? 'meeting' : 'settings'
+}
 
 function PersonIcon(): React.JSX.Element {
   return (
@@ -38,13 +45,16 @@ function MicIcon(): React.JSX.Element {
 
 export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
-  const [tab, setTab] = useState<Tab>('settings')
+  const [tab, setTab] = useState<Tab>(initialTab)
   const [authEmail, setAuthEmail] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   useEffect(() => {
     void window.api.getSettings().then(setSettings)
     window.api.onSettingsChanged(setSettings)
+    // Tray (or another entry point) can ask an already-open Settings window to
+    // jump straight to the Meeting tab.
+    window.api.onOpenMeetingTab(() => setTab('meeting'))
     void window.api.getAccountInfo().then((info) => {
       setAuthEmail(info?.email ?? null)
       setAvatarUrl(info?.avatarUrl ?? null)
@@ -62,7 +72,7 @@ export function App(): React.JSX.Element {
   if (!settings) return <div className="app loading">Loading…</div>
 
   return (
-    <div className="app">
+    <div className={tab === 'meeting' ? 'app app--meeting' : 'app'}>
       <header>
         <div className="wordmark">
           <div className="wordmark-badge">
@@ -71,8 +81,17 @@ export function App(): React.JSX.Element {
           <h1>Wispra</h1>
         </div>
         <nav className="tab-nav">
+          {/* "Dictate" = the always-on hotkey/overlay flow (speak anywhere, text is typed
+              live into whatever app is focused). Kept as the "settings" tab value internally
+              (unchanged routing/query-param key) — only the label + nav position changed, so
+              it reads as the twin of "Meeting" (long-form recorded session) rather than a
+              generic settings screen. See "Transcribe" for the third, distinct STT feature:
+              transcribing an existing audio/video file (no live typing). */}
           <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>
-            Settings
+            Dictate
+          </button>
+          <button className={tab === 'meeting' ? 'active' : ''} onClick={() => setTab('meeting')}>
+            Meeting <span className="tab-beta">BETA</span>
           </button>
           <button className={tab === 'transcribe' ? 'active' : ''} onClick={() => setTab('transcribe')}>
             Transcribe
@@ -119,6 +138,10 @@ export function App(): React.JSX.Element {
         <main key="history">
           <StatisticsSection />
           <HistorySection />
+        </main>
+      ) : tab === 'meeting' ? (
+        <main key="meeting">
+          <MeetingPanel />
         </main>
       ) : (
         <main key="account">

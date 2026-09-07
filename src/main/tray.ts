@@ -8,6 +8,7 @@ let _handlers: {
   onToggle: () => void
   onOpenSettings: () => void
   onSetActiveMode: (id: string) => void
+  onOpenMeeting: () => void
 } | null = null
 
 function trayIcon(state: AppState): Electron.NativeImage {
@@ -20,10 +21,12 @@ function trayIcon(state: AppState): Electron.NativeImage {
 
 function buildMenu(modes: Mode[], activeMode: string): Electron.Menu {
   if (!_handlers) return Menu.buildFromTemplate([])
-  const { onToggle, onOpenSettings, onSetActiveMode } = _handlers
+  const { onToggle, onOpenSettings, onSetActiveMode, onOpenMeeting } = _handlers
 
   const items: Electron.MenuItemConstructorOptions[] = [
     { label: 'Start / Stop Dictation', click: onToggle },
+    { type: 'separator' },
+    { label: 'Meeting Mode (beta)…', click: onOpenMeeting },
     { type: 'separator' }
   ]
 
@@ -53,6 +56,7 @@ export function createTray(handlers: {
   onToggle: () => void
   onOpenSettings: () => void
   onSetActiveMode: (id: string) => void
+  onOpenMeeting: () => void
 }): void {
   _handlers = handlers
   tray = new Tray(trayIcon('idle'))

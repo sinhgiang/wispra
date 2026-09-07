@@ -89,7 +89,11 @@ export const POLAR_CHECKOUT_URL = 'https://buy.polar.sh/YOUR_PRODUCT_LINK'
 export const FREE_LIMIT_SECONDS = 30 * 60
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'
-export const GROQ_STT_MODEL = 'whisper-large-v3-turbo'
+// Full large-v3, not the "-turbo" distilled variant: turbo drops the decoder from 32 to 4
+// layers for ~8x speed, at a real accuracy cost on non-English/tonal languages like
+// Vietnamese. Transcription already happens after recording stops (not live/streaming),
+// so the extra ~1-2s latency is worth it for materially better Vietnamese accuracy.
+export const GROQ_STT_MODEL = 'whisper-large-v3'
 
 export const OPENAI_API_BASE = 'https://api.openai.com/v1'
 export const OPENAI_STT_MODEL = 'whisper-1'
@@ -111,6 +115,28 @@ export const PREVIEW_DELAY_MS = 2500
 export const SILENCE_THRESHOLD = 0.018
 /** Milliseconds of continuous silence before auto-stopping in auto-stop mode. */
 export const SILENCE_DURATION_MS = 3000
+
+// ── Meeting mode chunk cutting (reuses SILENCE_THRESHOLD as the "is this silence" level) ────
+/** Natural-pause chunk cut: silence duration that ends a chunk once speech has started. */
+export const MEETING_SOFT_CUT_MS = 800
+/** Safety-net chunk cut: max continuous speech duration before force-cutting without a pause. */
+export const MEETING_HARD_CAP_MS = 20_000
+/**
+ * A level reading above SILENCE_THRESHOLD must hold continuously for this long before
+ * ChunkCutter treats it as real speech at all. Filters out a single spurious reading
+ * (e.g. faint mic pickup of the computer's own speaker output) so it can never by itself
+ * force a full chunk to be cut and sent for transcription — at the 100ms sampling tick
+ * rate (see LEVEL_TICK_MS in recorder.ts), this requires 2+ consecutive above-threshold
+ * ticks, which real speech always clears but a one-tick blip cannot.
+ */
+export const MEETING_MIN_SPEECH_MS = 200
+/**
+ * Meeting Mode safety net: if a recording sits this long with no real (non-empty)
+ * transcribed speech at all, auto-stop it exactly like a manual Stop — covers a
+ * recording left running by mistake, or Mic-only picking up nothing while background/
+ * computer audio plays with the user saying nothing.
+ */
+export const MEETING_SILENCE_AUTO_STOP_MS = 5 * 60_000
 /** Milliseconds to keep the overlay visible after injection (for done animation). */
 export const DONE_DISPLAY_MS = 1400
 

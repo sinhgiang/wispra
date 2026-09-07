@@ -1,14 +1,37 @@
-import { app, clipboard, dialog, ipcMain, Notification, screen, session } from 'electron'
+import { app, clipboard, desktopCapturer, dialog, ipcMain, Notification, screen, session } from 'electron'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC } from '@shared/ipc'
-import type { AccountInfo, ApiKeyTestResult, FileTranscribeResult, HotkeyResult, Settings, StatePayload } from '@shared/types'
-import { DONE_DISPLAY_MS, FREE_LIMIT_SECONDS, OVERLAY_SIZE, PREVIEW_DELAY_MS, WISPRA_API_BASE } from '@shared/constants'
+import type {
+  AccountInfo,
+  ApiKeyTestResult,
+  ContentPlatform,
+  FileTranscribeResult,
+  HotkeyResult,
+  MeetingAudioSource,
+  MeetingContent,
+  MeetingContentResult,
+  MeetingLanguageConfig,
+  MeetingSession,
+  MeetingState,
+  Settings,
+  StatePayload
+} from '@shared/types'
+import {
+  DONE_DISPLAY_MS,
+  FREE_LIMIT_SECONDS,
+  MEETING_SILENCE_AUTO_STOP_MS,
+  OVERLAY_SIZE,
+  PREVIEW_DELAY_MS,
+  WISPRA_API_BASE
+} from '@shared/constants'
 import { controller } from './state'
+import { meetingController } from './meetingController'
+import { meetingSessions } from './meetingSessions'
 import { store } from './store'
 import { history } from './history'
 import { transcribe, testApiKey } from './transcribe'
-import { postProcess, summarizeTexts } from './postprocess'
+import { postProcess, summarizeTexts, generateMeetingTitle, generateMeetingContent, translateSegment } from './postprocess'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -22,6 +45,7 @@ import {
   getOverlayWindow,
   hideOverlay,
   openSettingsWindow,
+  setMeetingCloseGuard,
   showOverlayAt
 } from './windows'
 import { auth } from './auth'
@@ -84,7 +108,27 @@ async function main(): Promise<void> {
     callback(permission === 'media')
   })
 
+  // Meeting Mode's "System audio" / "Both" capture modes (recorder.ts) get loopback
+  // audio via getDisplayMedia() instead of a real screen-share, so auto-grant it with
+  // no interactive "choose what to share" dialog — there's nothing for the user to
+  // pick, we always want the whole desktop's audio. `audio: 'loopback'` is WASAPI
+  // loopback capture, which is reliable on Windows; the video track it forces along
+  // is discarded immediately by recorder.ts (only the audio track is kept).
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    desktopCapturer
+      .getSources({ types: ['screen'] })
+      .then((sources) => {
+        if (sources.length === 0) {
+          callback({})
+          return
+        }
+        callback({ video: sources[0], audio: 'loopback' })
+      })
+      .catch(() => callback({}))
+  }, { useSystemPicker: false })
+
   wireController()
+  wireMeetingController()
   wireIpc()
 
   createTray({
@@ -93,6 +137,10 @@ async function main(): Promise<void> {
     onSetActiveMode: (id) => {
       store.set({ activeMode: id })
       broadcast(IPC.SETTINGS_CHANGED, store.get())
+    },
+    onOpenMeeting: () => {
+      openSettingsWindow('meeting')
+      broadcast(IPC.MEETING_OPEN_TAB)
     }
   })
   const initial = store.get()
@@ -185,11 +233,273 @@ function wireController(): void {
   controller.on('stop-recording', () => broadcast(IPC.RECORDING_STOP))
 }
 
+/**
+ * Wall-clock time of the most recent real (non-empty) transcribed Meeting Mode
+ * segment, or of the recording starting/resuming — reset in wireMeetingController()'s
+ * event handlers below. Drives the silence auto-stop safety net; meaningless while
+ * not actively recording.
+ */
+let lastMeetingSpeechAt = 0
+
+function wireMeetingController(): void {
+  meetingController.on('state-changed', (state: MeetingState) => {
+    broadcast(IPC.MEETING_STATE_CHANGED, state)
+  })
+  meetingController.on('start-capture', () => {
+    lastMeetingSpeechAt = Date.now()
+    broadcast(IPC.MEETING_CAPTURE_START)
+  })
+  meetingController.on('pause-capture', () => broadcast(IPC.MEETING_CAPTURE_PAUSE))
+  meetingController.on('resume-capture', () => {
+    // Don't count time spent paused against the silence budget.
+    lastMeetingSpeechAt = Date.now()
+    broadcast(IPC.MEETING_CAPTURE_RESUME)
+  })
+  meetingController.on('stop-capture', () => broadcast(IPC.MEETING_CAPTURE_STOP))
+
+  meetingSessions.onSegment((segment, sessionId) => {
+    lastMeetingSpeechAt = Date.now()
+    broadcast(IPC.MEETING_SEGMENT_READY, segment, sessionId)
+  })
+  meetingSessions.onMeta((session) => {
+    broadcast(IPC.MEETING_SESSION_UPDATED, session)
+  })
+
+  // Meeting Mode's mic capture lives in the Settings window's renderer, so closing that
+  // window would otherwise silently kill an in-progress recording with no save/warning.
+  setMeetingCloseGuard({
+    activeWarning: () => {
+      const state = meetingController.getState()
+      if (state !== 'recording' && state !== 'paused') return null
+      return 'Closing this window will stop the recording. The transcript captured so far will be saved.'
+    },
+    forceStop: () => {
+      meetingController.stop()
+      stopMeetingSession()
+    }
+  })
+
+  // Silence auto-stop safety net: a recording left running (or set to Mic-only while
+  // only background/computer audio plays) with no real transcribed speech at all for
+  // MEETING_SILENCE_AUTO_STOP_MS stops itself exactly like a manual Stop. Checked on a
+  // low-frequency timer for the app's lifetime rather than a per-session timeout, so
+  // pause/resume/discard never need to manage it explicitly — it simply no-ops whenever
+  // the state isn't 'recording'.
+  setInterval(() => {
+    if (meetingController.getState() !== 'recording') return
+    if (Date.now() - lastMeetingSpeechAt < MEETING_SILENCE_AUTO_STOP_MS) return
+    broadcast(IPC.MEETING_AUTO_STOPPED)
+    meetingController.stop()
+    stopMeetingSession()
+  }, 15_000)
+}
+
+/**
+ * Stops the active meeting session and, if it captured any speech, kicks off
+ * AI title/summary generation in the background (meetingSessions.stop() has
+ * already flipped it to 'summarizing'). Shared by all three places a meeting
+ * can end (manual Stop, mic failure, window-close guard) so they behave
+ * identically instead of duplicating this chain three times.
+ */
+function stopMeetingSession(): void {
+  void meetingSessions.stop().then((session) => {
+    if (session) void finalizeMeetingSession(session)
+  })
+}
+
+/**
+ * Cancels the active meeting session outright — the "Discard" button's
+ * handler. Unlike stopMeetingSession(), never finalizes or kicks off AI
+ * title/summary generation: the session's JSON file (written incrementally
+ * as it recorded) is deleted immediately via meetingSessions.discard().
+ */
+function discardMeetingSession(): void {
+  meetingSessions.discard()
+}
+
+/**
+ * Asks the LLM for a short topic title + summary for the given session's
+ * current transcript and, on success, applies it via finishSummary — shared by
+ * finalizeMeetingSession (automatic, right after Stop) and
+ * regenerateSessionSummary (the Summary tab's manual "Try again"). Returns
+ * true on success, false on any failure (offline, no key/token, bad response,
+ * truncated/unparseable JSON) so callers can tell "never generated" apart from
+ * "tried and failed". Must never throw.
+ */
+async function requestMeetingSummary(session: MeetingSession): Promise<boolean> {
+  try {
+    const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+    const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+    const transcript = session.segments.map((s) => s.text).join(' ')
+    const result = await generateMeetingTitle(
+      transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken,
+      session.languageConfig?.summary
+    )
+    if (!result) return false
+    meetingSessions.finishSummary(session.id, { title: result.title, summary: result.summary })
+    return true
+  } catch (err) {
+    console.error('[meeting] title generation failed:', err)
+    return false
+  }
+}
+
+/**
+ * Reads the full transcript of a just-stopped session and asks the LLM for a
+ * short topic title + summary, then applies it. Always resolves the session
+ * out of 'summarizing' — on any failure finishSummary() is called with an
+ * empty patch, which just falls back to the existing default date/time title.
+ * Must never throw and never leave a session stuck in 'summarizing'.
+ */
+async function finalizeMeetingSession(session: MeetingSession): Promise<void> {
+  if (session.status !== 'summarizing') return
+  const ok = await requestMeetingSummary(session)
+  if (!ok) meetingSessions.finishSummary(session.id, {})
+}
+
+/**
+ * Manual retry, triggered by the "Try again" button on a stopped session's
+ * Summary tab when the automatic post-Stop generation above failed (e.g. the
+ * session was very long and the model's response got cut off before finishing
+ * the JSON — see the max_tokens comment in generateMeetingTitle). Unlike
+ * finalizeMeetingSession this never touches session.status (already
+ * 'stopped') or any existing segments/content — a pure additive title/summary
+ * update on success, a no-op on failure. Returns false if the session no
+ * longer exists.
+ */
+async function regenerateSessionSummary(id: string): Promise<boolean> {
+  const session = meetingSessions.get(id)
+  if (!session) return false
+  return requestMeetingSummary(session)
+}
+
+/**
+ * On-demand generation of one platform's ready-to-post content, triggered
+ * when the renderer first opens that platform's tab for a stopped session.
+ * Mirrors finalizeMeetingSession's provider/key resolution. Returns null on
+ * any failure (offline, no key/token, bad response) so the renderer can show
+ * a "couldn't generate, try again" state — never throws.
+ */
+async function generateSessionContent(
+  id: string,
+  platform: ContentPlatform
+): Promise<MeetingContentResult | null> {
+  const session = meetingSessions.get(id)
+  if (!session) return null
+  const transcript = session.segments.map((s) => s.text).join(' ')
+  try {
+    const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+    const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+    const result = await generateMeetingContent(
+      platform, transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken,
+      session.languageConfig?.[platform]
+    )
+    if (!result) return null
+
+    let patch: Partial<MeetingContent>
+    if (result.platform === 'website') {
+      patch = { website: { title: result.title, metaDescription: result.metaDescription, body: result.body } }
+    } else if (result.platform === 'facebook') patch = { facebook: result.posts }
+    else if (result.platform === 'instagram') patch = { instagram: result.posts }
+    else if (result.platform === 'linkedin') patch = { linkedin: result.posts }
+    else patch = { twitter: result.posts }
+
+    meetingSessions.setContent(id, patch)
+    return result
+  } catch (err) {
+    console.error('[meeting] content generation failed:', err)
+    return null
+  }
+}
+
 function wireIpc(): void {
   ipcMain.on(IPC.TOGGLE_DICTATION, () => toggleDictation())
   // Silence auto-stop: does NOT set manualStopRequested so continuous mode can restart.
   ipcMain.on(IPC.SILENCE_STOP, () => controller.toggle(store.get().autoStopMinutes * 60_000))
   ipcMain.on(IPC.OPEN_SETTINGS, () => openSettingsWindow())
+
+  // --- meeting mode (step 3: real transcription per chunk, pause/resume, persistence) ---
+  ipcMain.on(
+    IPC.MEETING_START,
+    (_event, languageConfig: MeetingLanguageConfig, audioSource: MeetingAudioSource) => {
+      meetingSessions.start(audioSource ?? 'mic', languageConfig)
+      meetingController.start()
+    }
+  )
+  ipcMain.on(IPC.MEETING_PAUSE, () => meetingController.pause())
+  ipcMain.on(IPC.MEETING_RESUME, () => meetingController.resume())
+  ipcMain.on(IPC.MEETING_STOP, () => {
+    meetingController.stop()
+    stopMeetingSession()
+  })
+  ipcMain.on(IPC.MEETING_DISCARD, () => {
+    meetingController.stop()
+    discardMeetingSession()
+  })
+  ipcMain.on(IPC.MEETING_CAPTURE_FAILED, (_event, message: string) => {
+    meetingController.captureFailed(message)
+    stopMeetingSession()
+  })
+  ipcMain.handle(IPC.MEETING_GET_STATE, (): MeetingState => meetingController.getState())
+  ipcMain.handle(IPC.MEETING_GET_SESSIONS, () => meetingSessions.list())
+  ipcMain.handle(IPC.MEETING_GET_SESSION, (_event, id: string) => meetingSessions.get(id))
+  ipcMain.handle(IPC.MEETING_DELETE_SESSION, (_event, id: string) => meetingSessions.delete(id))
+  ipcMain.handle(IPC.MEETING_RENAME_SESSION, (_event, id: string, title: string) => {
+    const trimmed = title.trim().slice(0, 200)
+    if (trimmed) meetingSessions.rename(id, trimmed)
+  })
+  ipcMain.handle(IPC.MEETING_GENERATE_CONTENT, (_event, id: string, platform: ContentPlatform) =>
+    generateSessionContent(id, platform)
+  )
+  ipcMain.handle(IPC.MEETING_GENERATE_SUMMARY, (_event, id: string) => regenerateSessionSummary(id))
+  ipcMain.on(
+    IPC.MEETING_CHUNK_CAPTURED,
+    (
+      _event,
+      audio: ArrayBuffer,
+      meta: { startMs: number; endMs: number; startedAt: string; mimeType: string }
+    ) => {
+      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localSttModel, localLlmModel, vocabulary } = store.get()
+      // The session's own language choices (set on the Start-recording screen), NOT the
+      // global Dictate language — Meeting Mode is often used in a different language than
+      // the hotkey/overlay flow, and forcing the wrong one here made Whisper mistranscribe
+      // (or drift into translating) chunks recorded in another language entirely.
+      const sessionLangConfig = meetingSessions.getCurrent()?.languageConfig
+      const inputLanguage = sessionLangConfig?.input ?? 'auto'
+      const transcriptLanguage = sessionLangConfig?.transcript ?? 'auto'
+      const bytes = new Uint8Array(audio)
+      const durationSeconds = Math.max(0, Math.round((meta.endMs - meta.startMs) / 1000))
+      meetingSessions.enqueueChunk(meta, async () => {
+        const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+        const { text, detectedLanguage } = await transcribe(
+          bytes, provider, groqApiKey, openaiApiKey, inputLanguage,
+          meta.mimeType || 'audio/webm', localBaseUrl, localSttModel,
+          durationSeconds, proxyToken, vocabulary
+        )
+        if (!text) return null
+        // Transcript language ("auto" = same as spoken) is independent of the target
+        // languages for Summary/Website/etc — translate the plain transcription itself
+        // only when the user explicitly picked a transcript language that actually
+        // differs from what was spoken. Skips a redundant same-language "translation"
+        // call (e.g. spoken Vietnamese + transcript set to Vietnamese) that wastes a
+        // request and adds a chance for the LLM to mangle/refuse an already-fine chunk
+        // for no benefit — checked against both the explicit input-language setting and
+        // Whisper's own per-chunk detection, so it's skipped correctly whether "Spoken"
+        // was set explicitly or left on "auto".
+        if (
+          transcriptLanguage === 'auto' ||
+          transcriptLanguage === inputLanguage ||
+          transcriptLanguage === detectedLanguage
+        ) {
+          return text
+        }
+        return translateSegment(
+          text, transcriptLanguage, provider, groqApiKey, openaiApiKey,
+          localBaseUrl, localLlmModel, proxyToken
+        )
+      })
+    }
+  )
 
   ipcMain.on(IPC.AUDIO_CAPTURED, (_event, audio: ArrayBuffer, durationSeconds: number, mimeType: string) => {
     const {
@@ -207,7 +517,7 @@ function wireIpc(): void {
       const { text: rawText, detectedLanguage } = await transcribe(
         new Uint8Array(audio), provider, groqApiKey, openaiApiKey,
         effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel,
-        durationSeconds, proxyToken
+        durationSeconds, proxyToken, vocabulary
       )
       if (!rawText) throw new Error('No speech detected')
       let text = rawText
@@ -335,6 +645,11 @@ function wireIpc(): void {
   ipcMain.handle(IPC.GET_SETTINGS, (): Settings => store.get())
   ipcMain.handle(IPC.SET_SETTINGS, (_event, partial: Partial<Settings>): Settings => {
     const updated = store.set(partial)
+    // Without this, toggling "Launch at login" only takes effect the next time the
+    // app happens to start on its own (syncLaunchAtLogin at startup, below) — so a
+    // user who checks the box and doesn't manually relaunch right after ends up with
+    // the setting saved but never actually registered with the OS.
+    if (partial.launchAtLogin !== undefined) syncLaunchAtLogin(updated)
     broadcast(IPC.SETTINGS_CHANGED, updated)
     return updated
   })
@@ -384,9 +699,12 @@ function wireIpc(): void {
     IPC.TRANSCRIBE_FILE,
     async (_event, filePath: string, language: string): Promise<FileTranscribeResult> => {
       try {
-        const { provider, groqApiKey, openaiApiKey } = store.get()
+        const { provider, groqApiKey, openaiApiKey, vocabulary } = store.get()
         const buf = readFileSync(filePath)
-        const { text } = await transcribe(new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath))
+        const { text } = await transcribe(
+          new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath),
+          undefined, undefined, undefined, undefined, vocabulary
+        )
         if (!text) return { ok: false, error: 'No speech detected in the file.' }
         return { ok: true, text }
       } catch (err) {

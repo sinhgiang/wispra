@@ -30,11 +30,16 @@ interface VerboseResponse {
 const NO_SPEECH_THRESHOLD = 0.5
 
 /**
- * Phrases Whisper hallucinates from its YouTube training data when audio is near-silent
- * or contains only ambient noise. These appear even with low no_speech_prob because
- * the model is "confident" it heard something — but it's always wrong.
+ * Phrases Whisper hallucinates from its training data (mostly YouTube outros) when
+ * audio is near-silent or contains only ambient noise/trailing silence after real
+ * speech. These appear even with low no_speech_prob because the model is
+ * "confident" it heard something — but it's always wrong. Matched as a substring
+ * against each individual SENTENCE (see filterKnownHallucinations below), not the
+ * whole transcript, so one hallucinated sentence tacked onto real speech doesn't
+ * wipe out the real part with it.
  */
 const HALLUCINATION_PHRASES = [
+  // English YouTube outros
   'like and subscribe',
   'like, share and subscribe',
   'like, comment and subscribe',
@@ -46,13 +51,120 @@ const HALLUCINATION_PHRASES = [
   'thanks for watching',
   'see you in the next video',
   'see you next time',
-  'you',
+  // Vietnamese YouTube outros — Whisper's Vietnamese training data is saturated
+  // with these (e.g. "Ghiền Mì Gõ", a real VN YouTube channel that shows up as a
+  // hallucination constantly, regardless of what the user actually watches).
+  'cảm ơn các bạn đã theo dõi',
+  'cảm ơn các bạn đã xem',
+  'cảm ơn mọi người đã xem',
+  'cảm ơn quý vị đã theo dõi',
+  'cảm ơn bạn đã theo dõi',
+  'hẹn gặp lại các bạn',
+  'hẹn gặp lại trong video',
+  'hẹn gặp lại ở video',
+  'hãy subscribe',
+  'nhớ subscribe',
+  'nhớ like',
+  'đăng ký kênh',
+  'like và subscribe',
+  'đừng quên đăng ký',
+  'không bỏ lỡ những video',
+  'không bỏ lỡ video',
+  'video hấp dẫn',
+  'ghiền mì gõ',
 ]
 
-function filterKnownHallucinations(text: string): string {
-  const normalized = text.trim().toLowerCase().replace(/[.,!?。，！？]+/g, '').trim()
-  if (HALLUCINATION_PHRASES.some((p) => normalized === p || normalized.startsWith(p + ' '))) return ''
+/**
+ * Whisper's optional "prompt" field. Two effects, both documented by OpenAI's own
+ * prompting guide: (1) the model tends to mirror the prompt's writing style, so a
+ * fully-accented, punctuated Vietnamese prompt makes fully-accented, punctuated
+ * Vietnamese output more likely — this directly helps disambiguate unclear/tonal
+ * speech instead of guessing at the nearest plausible-sounding word; (2) listing
+ * proper nouns/jargon primes the model to recognize them correctly during
+ * transcription itself, rather than relying on the AI cleanup step to guess a fix
+ * after the fact (which can't recover a word that was misheard as something else
+ * entirely). Kept short — Whisper only attends to roughly the last 224 tokens of it.
+ */
+function buildSttPrompt(language: string, vocabulary?: string[]): string | undefined {
+  const parts: string[] = []
+  if (language === 'vi') {
+    parts.push(
+      'Đây là bản ghi âm tiếng Việt, có dấu đầy đủ, viết hoa đầu câu và tên riêng, có dấu chấm và dấu phẩy rõ ràng.'
+    )
+  }
+  if (vocabulary && vocabulary.length > 0) {
+    const terms = vocabulary.slice(0, 30).join(', ')
+    parts.push(
+      language === 'vi' ? `Các từ/tên riêng cần giữ nguyên: ${terms}.` : `Keep these terms spelled exactly: ${terms}.`
+    )
+  }
+  const prompt = parts.join(' ').trim()
+  return prompt.length > 0 ? prompt : undefined
+}
+
+/** Splits on sentence-ending punctuation or newlines, keeping each piece trimmed. */
+function splitSentences(text: string): string[] {
   return text
+    .split(/(?<=[.!?…])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/** Words 4+ characters long, lowercased — short function words are skipped since they'd coincidentally overlap with plenty of unrelated real speech too. */
+function distinctiveWords(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[.,!?:;"…]+/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4)
+  )
+}
+
+/**
+ * Catches a distinct Whisper failure mode from the one HALLUCINATION_PHRASES
+ * targets: given the `prompt` param (buildSttPrompt) as prior "context",
+ * unclear/near-silent audio sometimes makes the model just continue or
+ * paraphrase that context instead of admitting it heard nothing, rather than
+ * looping a training-data phrase. Caught the same way real plagiarism
+ * detectors work — not an exact-substring match (the model paraphrases, it
+ * doesn't quote), but a sentence that reuses most of the prompt's own
+ * distinctive wording is never something a real speaker produces by
+ * coincidence.
+ */
+function isPromptEcho(sentence: string, promptWords: Set<string>): boolean {
+  if (promptWords.size === 0) return false
+  const words = [...distinctiveWords(sentence)]
+  if (words.length < 3) return false
+  const overlap = words.filter((w) => promptWords.has(w)).length
+  return overlap / words.length >= 0.5
+}
+
+/**
+ * Drops sentences matching a known hallucination phrase or echoing the STT
+ * prompt itself, and collapses a sentence repeated 3+ times verbatim —
+ * Whisper's other common failure mode on silence/noise is looping the same
+ * line over and over regardless of wording.
+ */
+function filterKnownHallucinations(text: string, sttPrompt?: string): string {
+  const seen = new Map<string, number>()
+  const kept: string[] = []
+  const promptWords = sttPrompt ? distinctiveWords(sttPrompt) : new Set<string>()
+
+  for (const sentence of splitSentences(text)) {
+    const normalized = sentence.toLowerCase().replace(/[.,!?。，！？]+/g, '').trim()
+    if (!normalized) continue
+    if (HALLUCINATION_PHRASES.some((p) => normalized.includes(p))) continue
+    if (isPromptEcho(normalized, promptWords)) continue
+
+    const count = (seen.get(normalized) ?? 0) + 1
+    seen.set(normalized, count)
+    if (count > 2) continue
+
+    kept.push(sentence)
+  }
+
+  return kept.join(' ').trim()
 }
 
 function getConfig(
@@ -83,7 +195,8 @@ export async function transcribe(
   localBaseUrl = 'http://localhost:11434/v1',
   localSttModel = 'whisper',
   durationSeconds = 0,
-  proxyToken?: string
+  proxyToken?: string,
+  vocabulary?: string[]
 ): Promise<TranscribeResult> {
   // Wispra cloud proxy provider
   if (provider === 'proxy') {
@@ -91,7 +204,7 @@ export async function transcribe(
     let lastError: Error = new Error('Transcription failed')
     for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
       try {
-        return await requestViaProxy(audio, proxyToken, language, mimeType, durationSeconds)
+        return await requestViaProxy(audio, proxyToken, language, mimeType, durationSeconds, vocabulary)
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err))
         if (lastError.name === 'NoRetryError') throw lastError
@@ -109,7 +222,7 @@ export async function transcribe(
   let lastError: Error = new Error('Transcription failed')
   for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
     try {
-      return await requestTranscription(audio, config, language, mimeType)
+      return await requestTranscription(audio, config, language, mimeType, vocabulary)
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err))
       if (lastError.name === 'NoRetryError') throw lastError
@@ -123,7 +236,8 @@ async function requestViaProxy(
   token: string,
   language: string,
   mimeType: string,
-  durationSeconds: number
+  durationSeconds: number,
+  vocabulary?: string[]
 ): Promise<TranscribeResult> {
   const ext = mimeToExt(mimeType)
   const form = new FormData()
@@ -132,6 +246,9 @@ async function requestViaProxy(
   // verbose_json gives per-segment no_speech_prob so we can filter hallucinations
   form.append('response_format', 'verbose_json')
   if (language && language !== 'auto') form.append('language', language)
+  // Note: only takes effect once the proxy backend (wispra-web) relays "prompt" to Groq.
+  const sttPrompt = buildSttPrompt(language, vocabulary)
+  if (sttPrompt) form.append('prompt', sttPrompt)
 
   let response: Response
   try {
@@ -171,8 +288,8 @@ async function requestViaProxy(
     text = (data.text ?? '').trim()
   }
 
-  // Block known Whisper training-data hallucinations (YouTube phrases etc.)
-  text = filterKnownHallucinations(text)
+  // Block known Whisper training-data hallucinations (YouTube phrases etc.) and prompt-echo.
+  text = filterKnownHallucinations(text, sttPrompt)
 
   return { text, detectedLanguage }
 }
@@ -189,7 +306,8 @@ async function requestTranscription(
   audio: Uint8Array,
   config: ProviderConfig,
   language: string,
-  mimeType: string
+  mimeType: string,
+  vocabulary?: string[]
 ): Promise<TranscribeResult> {
   const ext = mimeToExt(mimeType)
   const form = new FormData()
@@ -197,6 +315,8 @@ async function requestTranscription(
   form.append('model', config.model)
   form.append('response_format', 'verbose_json')
   if (language && language !== 'auto') form.append('language', language)
+  const sttPrompt = buildSttPrompt(language, vocabulary)
+  if (sttPrompt) form.append('prompt', sttPrompt)
 
   let response: Response
   try {
@@ -234,8 +354,8 @@ async function requestTranscription(
     text = (data.text ?? '').trim()
   }
 
-  // Block known Whisper training-data hallucinations (YouTube phrases etc.)
-  text = filterKnownHallucinations(text)
+  // Block known Whisper training-data hallucinations (YouTube phrases etc.) and prompt-echo.
+  text = filterKnownHallucinations(text, sttPrompt)
 
   return { text, detectedLanguage }
 }
