@@ -1,6 +1,7 @@
 import { app, clipboard, desktopCapturer, dialog, ipcMain, Notification, screen, session } from 'electron'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
@@ -9,6 +10,7 @@ import type {
   FileTranscribeResult,
   HotkeyResult,
   MeetingAudioSource,
+  MeetingChatMessage,
   MeetingContent,
   MeetingContentResult,
   MeetingLanguageConfig,
@@ -28,10 +30,18 @@ import {
 import { controller } from './state'
 import { meetingController } from './meetingController'
 import { meetingSessions } from './meetingSessions'
+import { meetingSpaces } from './meetingSpaces'
 import { store } from './store'
 import { history } from './history'
 import { transcribe, testApiKey } from './transcribe'
-import { postProcess, summarizeTexts, generateMeetingTitle, generateMeetingContent, translateSegment } from './postprocess'
+import {
+  postProcess,
+  summarizeTexts,
+  generateMeetingTitle,
+  generateMeetingContent,
+  translateSegment,
+  askMeetingChat
+} from './postprocess'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -96,6 +106,10 @@ async function main(): Promise<void> {
   store.load()
   history.load()
   auth.load()
+  // Finalizes any Meeting session left stuck mid-flight by an unclean shutdown (crash,
+  // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
+  // before wireIpc() below (no IPC could otherwise start a session).
+  meetingSessions.recoverOrphaned()
 
   // Register wispra:// custom protocol for OAuth callback
   if (!app.isPackaged) {
@@ -412,6 +426,48 @@ async function generateSessionContent(
   }
 }
 
+/**
+ * Answers one question in a session's in-session AI chat about its own transcript
+ * — works whether the session is still recording (meetingSessions.get() returns the
+ * live in-memory session) or already stopped (reads the persisted file). Mirrors
+ * generateSessionContent's provider/key resolution. On success, persists both the
+ * user's question and the assistant's answer together (one appendChatMessages call)
+ * and returns the assistant message; on any failure returns null and persists
+ * nothing, so the renderer can show a transient, non-persisted error bubble instead
+ * of leaving a half-written exchange in the session's chat log. Never throws.
+ */
+async function answerMeetingChatQuestion(id: string, question: string): Promise<MeetingChatMessage | null> {
+  const session = meetingSessions.get(id)
+  if (!session) return null
+  const trimmedQuestion = question.trim()
+  if (!trimmedQuestion) return null
+  try {
+    const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+    const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+    const history = (session.chat ?? []).map((m) => ({ role: m.role, text: m.text }))
+    const result = await askMeetingChat(
+      trimmedQuestion, session.segments, history, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken
+    )
+    if (!result) return null
+
+    const now = new Date().toISOString()
+    const userMessage: MeetingChatMessage = { id: randomUUID(), role: 'user', text: trimmedQuestion, createdAt: now }
+    const assistantMessage: MeetingChatMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      text: result.answer,
+      createdAt: new Date().toISOString(),
+      startSegmentId: result.startSegmentId,
+      endSegmentId: result.endSegmentId
+    }
+    meetingSessions.appendChatMessages(id, [userMessage, assistantMessage])
+    return assistantMessage
+  } catch (err) {
+    console.error('[meeting] chat failed:', err)
+    return null
+  }
+}
+
 function wireIpc(): void {
   ipcMain.on(IPC.TOGGLE_DICTATION, () => toggleDictation())
   // Silence auto-stop: does NOT set manualStopRequested so continuous mode can restart.
@@ -421,8 +477,13 @@ function wireIpc(): void {
   // --- meeting mode (step 3: real transcription per chunk, pause/resume, persistence) ---
   ipcMain.on(
     IPC.MEETING_START,
-    (_event, languageConfig: MeetingLanguageConfig, audioSource: MeetingAudioSource) => {
-      meetingSessions.start(audioSource ?? 'mic', languageConfig)
+    (
+      _event,
+      languageConfig: MeetingLanguageConfig,
+      audioSource: MeetingAudioSource,
+      spaceId?: string
+    ) => {
+      meetingSessions.start(audioSource ?? 'mic', languageConfig, spaceId)
       meetingController.start()
     }
   )
@@ -448,10 +509,31 @@ function wireIpc(): void {
     const trimmed = title.trim().slice(0, 200)
     if (trimmed) meetingSessions.rename(id, trimmed)
   })
+  ipcMain.handle(IPC.MEETING_MOVE_SESSION_TO_SPACE, (_event, id: string, spaceId: string | null) => {
+    meetingSessions.moveToSpace(id, spaceId ?? undefined)
+  })
+
+  // --- meeting spaces (user-created groupings for organizing sessions) ---
+  ipcMain.handle(IPC.MEETING_GET_SPACES, () => meetingSpaces.list())
+  ipcMain.handle(IPC.MEETING_CREATE_SPACE, (_event, name: string) => {
+    const trimmed = name.trim().slice(0, 100)
+    return trimmed ? meetingSpaces.create(trimmed) : null
+  })
+  ipcMain.handle(IPC.MEETING_RENAME_SPACE, (_event, id: string, name: string) => {
+    const trimmed = name.trim().slice(0, 100)
+    if (trimmed) meetingSpaces.rename(id, trimmed)
+  })
+  ipcMain.handle(IPC.MEETING_DELETE_SPACE, (_event, id: string) => {
+    meetingSpaces.delete(id)
+    // Sessions filed under the deleted space fall back to unfiled ("All") rather
+    // than keeping a spaceId that no longer resolves to anything.
+    meetingSessions.clearSpace(id)
+  })
   ipcMain.handle(IPC.MEETING_GENERATE_CONTENT, (_event, id: string, platform: ContentPlatform) =>
     generateSessionContent(id, platform)
   )
   ipcMain.handle(IPC.MEETING_GENERATE_SUMMARY, (_event, id: string) => regenerateSessionSummary(id))
+  ipcMain.handle(IPC.MEETING_CHAT_SEND, (_event, id: string, question: string) => answerMeetingChatQuestion(id, question))
   ipcMain.on(
     IPC.MEETING_CHUNK_CAPTURED,
     (
@@ -834,7 +916,19 @@ function applyHotkeyFromSettings(silent = false): void {
 
 function syncLaunchAtLogin(settings: Settings): void {
   if (process.platform === 'linux') return
-  app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin })
+  if (app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin })
+  } else {
+    // In dev mode process.execPath is the raw electron.exe in node_modules. Without an
+    // explicit path/args, Windows would launch that binary with no app argument at
+    // login, which falls back to Electron's own default screen instead of Wispra —
+    // mirrors the same !app.isPackaged handling used for setAsDefaultProtocolClient above.
+    app.setLoginItemSettings({
+      openAtLogin: settings.launchAtLogin,
+      path: process.execPath,
+      args: [app.getAppPath()]
+    })
+  }
 }
 
 function checkJustUpdated(): void {

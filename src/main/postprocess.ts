@@ -1,5 +1,5 @@
 import { GROQ_API_BASE, LANGUAGES, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
-import type { ContentPlatform, MeetingContentResult, Mode, SttProvider } from '@shared/types'
+import type { ContentPlatform, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -687,6 +687,218 @@ export async function generateMeetingContent(
     return { platform, posts }
   } catch (err) {
     console.error(`[meeting] ${platform} content generation failed:`, err)
+    return null
+  }
+}
+
+// ── In-session AI chat: ask questions about a session's own transcript ──
+// Works both while a session is still recording and after it's stopped — see the
+// chat panel in meeting/App.tsx and appendChatMessages in meetingSessions.ts.
+
+export interface MeetingChatAnswer {
+  answer: string
+  /** Present together, or not at all — see MEETING_CHAT_SYSTEM_PROMPT below. */
+  startSegmentId?: string
+  endSegmentId?: string
+}
+
+const MEETING_CHAT_TIMEOUT_MS = 30_000
+const MEETING_CHAT_MAX_TOKENS = 900
+// Deliberately smaller than MAX_TRANSCRIPT_CHARS: unlike title/content generation,
+// this call also carries a system prompt, replayed chat history, and a real
+// completion budget — all counted against the same per-minute token limit (Groq's
+// free tier is as low as 8000 TPM total, prompt + completion) — so headroom has to
+// come out of the transcript side. Applied per-line so a truncated transcript never
+// cuts a segment (or its ref tag) in half.
+const MEETING_CHAT_TRANSCRIPT_CHAR_BUDGET = 14_000
+// Caps how much prior Q&A is replayed as context for a follow-up question — by
+// message count AND total characters (a single very long prior answer, capped at
+// MEETING_CHAT_MAX_TOKENS itself, could otherwise still blow the token budget on its
+// own) — so a long-running chat's prompt stays bounded without losing the near-term
+// thread. The single most recent message is always kept regardless of size.
+const MEETING_CHAT_MAX_HISTORY_MESSAGES = 8
+const MEETING_CHAT_HISTORY_CHAR_BUDGET = 4_000
+
+const MEETING_CHAT_SYSTEM_PROMPT = `You are answering questions about a meeting/voice-memo transcript, shown to you below as one tagged line per segment: "[ref] (mm:ss) text" — ref is a short reference number for that segment, unrelated to its content or time.
+
+Respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:
+{"answer": "...", "startRef": 12 or null, "endRef": 12 or null}
+
+- "answer": a direct, specific answer to the question, based ONLY on what the transcript actually says. If the transcript doesn't cover it, say so plainly instead of guessing or inventing anything.
+- "startRef"/"endRef": when your answer refers to a specific, contiguous stretch of the transcript, set both to the ref number (shown in brackets, e.g. 12) of the first and last segment of that stretch, so that stretch can be highlighted for the user. Set both to null if the answer doesn't map to one contiguous stretch (e.g. a yes/no question, or a topic discussed in several separate, disconnected places).
+- Answer in the SAME language the question was asked in, regardless of the transcript's own language.
+- Keep the answer conversational and concise — a few sentences, not a report.`
+
+/**
+ * Renders segments as one tagged line each ("[ref] (mm:ss) text") so the model's
+ * answer can cite a startRef/endRef range for the renderer to highlight (see
+ * ParagraphBlock.segmentIds in meeting/App.tsx). Uses short sequential numbers
+ * rather than the segments' real (36-char UUID) ids as the tag — UUIDs are both
+ * expensive in tokens and mostly wasted budget, since only their exact-copy
+ * roundtrip matters, not their value — then maps the model's chosen ref back to the
+ * real segment id via idByTag. Truncates whole lines from the middle when over
+ * budget (both-ends sampling, same idea as MAX_TRANSCRIPT_CHARS elsewhere), never
+ * mid-line, so every ref the model can see stays intact and resolvable; refs that
+ * got truncated away are simply absent from idByTag, so a stale/hallucinated one
+ * safely resolves to no highlight instead of a wrong one.
+ */
+function buildTaggedTranscript(segments: MeetingSegment[]): { text: string; idByTag: Map<string, string> } {
+  const lines = segments.map((seg, i) => {
+    const tag = String(i + 1)
+    const totalSeconds = Math.floor(seg.startMs / 1000)
+    const mm = Math.floor(totalSeconds / 60).toString().padStart(2, '0')
+    const ss = (totalSeconds % 60).toString().padStart(2, '0')
+    return { tag, id: seg.id, line: `[${tag}] (${mm}:${ss}) ${seg.text}` }
+  })
+
+  const fullText = lines.map((l) => l.line).join('\n')
+  if (fullText.length <= MEETING_CHAT_TRANSCRIPT_CHAR_BUDGET) {
+    return { text: fullText, idByTag: new Map(lines.map((l) => [l.tag, l.id])) }
+  }
+
+  const half = MEETING_CHAT_TRANSCRIPT_CHAR_BUDGET / 2
+  const head: typeof lines = []
+  let headLen = 0
+  for (const l of lines) {
+    if (headLen + l.line.length > half) break
+    head.push(l)
+    headLen += l.line.length + 1
+  }
+  const tail: typeof lines = []
+  let tailLen = 0
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (tailLen + lines[i].line.length > half) break
+    tail.unshift(lines[i])
+    tailLen += lines[i].line.length + 1
+  }
+  return {
+    text: `${head.map((l) => l.line).join('\n')}\n\n[...]\n\n${tail.map((l) => l.line).join('\n')}`,
+    idByTag: new Map([...head, ...tail].map((l) => [l.tag, l.id]))
+  }
+}
+
+/**
+ * Trims replayed chat history to a bounded character budget (in addition to the
+ * message-count cap) walking from most recent backwards, so a long-running chat
+ * with sizeable prior answers can't creep the prompt back over the token limit —
+ * the individual-answer cap (MEETING_CHAT_MAX_TOKENS) isn't enough on its own once
+ * several such answers stack up as history. Always keeps at least the single most
+ * recent message, even if it alone exceeds the budget.
+ */
+function buildHistoryMessages(
+  history: Array<{ role: 'user' | 'assistant'; text: string }>
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const recent = history.slice(-MEETING_CHAT_MAX_HISTORY_MESSAGES)
+  const result: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  let used = 0
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const text = recent[i].text
+    if (result.length > 0 && used + text.length > MEETING_CHAT_HISTORY_CHAR_BUDGET) break
+    result.unshift({ role: recent[i].role, content: text })
+    used += text.length
+  }
+  return result
+}
+
+/**
+ * Answers one user question about a session's own transcript, optionally aware of
+ * recent prior chat turns (for natural follow-ups). Returns null on any failure
+ * (offline, no key/token, bad response, empty transcript) so the caller persists
+ * nothing and the renderer can show a transient "couldn't answer" bubble instead of
+ * throwing — this must never break the chat panel or the recording it sits under.
+ */
+export async function askMeetingChat(
+  question: string,
+  segments: MeetingSegment[],
+  history: Array<{ role: 'user' | 'assistant'; text: string }>,
+  provider: SttProvider,
+  groqKey: string,
+  openaiKey: string,
+  localBaseUrl?: string,
+  localLlmModel?: string,
+  proxyToken?: string
+): Promise<MeetingChatAnswer | null> {
+  const trimmedQuestion = question.trim()
+  if (!trimmedQuestion || segments.length === 0) return null
+
+  let apiKey: string
+  let base: string
+  let model: string
+
+  if (provider === 'local') {
+    apiKey = 'local'
+    base = localBaseUrl ?? 'http://localhost:11434/v1'
+    model = localLlmModel ?? 'llama3.2'
+  } else if (provider === 'proxy') {
+    if (!proxyToken) return null
+    apiKey = proxyToken
+    base = `${WISPRA_API_BASE}/api`
+    model = GROQ_CHAT_MODEL
+  } else {
+    apiKey = provider === 'openai' ? openaiKey : groqKey
+    if (!apiKey) return null
+    base = provider === 'openai' ? OPENAI_API_BASE : GROQ_API_BASE
+    model = provider === 'openai' ? OPENAI_CHAT_MODEL : GROQ_CHAT_MODEL
+  }
+
+  const { text: transcript, idByTag } = buildTaggedTranscript(segments)
+  const recentHistory = buildHistoryMessages(history)
+
+  try {
+    const response = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: MEETING_CHAT_SYSTEM_PROMPT },
+          { role: 'user', content: `TRANSCRIPT:\n${transcript}` },
+          ...recentHistory,
+          { role: 'user', content: trimmedQuestion }
+        ],
+        max_tokens: MEETING_CHAT_MAX_TOKENS,
+        temperature: 0.3,
+        response_format: { type: 'json_object' }
+      }),
+      signal: AbortSignal.timeout(MEETING_CHAT_TIMEOUT_MS)
+    })
+    if (!response.ok) {
+      console.error(`[meeting] chat: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
+      return null
+    }
+
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
+    const raw = data.choices?.[0]?.message?.content?.trim()
+    if (!raw) {
+      console.error('[meeting] chat: empty response content')
+      return null
+    }
+
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+    const parsed = JSON.parse(cleaned) as {
+      answer?: string
+      startRef?: string | number | null
+      endRef?: string | number | null
+    }
+    const answer = parsed.answer?.trim()
+    if (!answer) {
+      console.error('[meeting] chat: response JSON had no answer field')
+      return null
+    }
+    // Resolve the model's ref numbers back to real segment ids via idByTag — a ref
+    // the model hallucinated, copied wrong, or that got truncated out of the
+    // transcript it was shown just means no highlight, not a crash.
+    const startTag = parsed.startRef != null ? String(parsed.startRef).trim() : undefined
+    const endTag = parsed.endRef != null ? String(parsed.endRef).trim() : undefined
+    const startSegmentId = startTag ? idByTag.get(startTag) : undefined
+    const endSegmentId = endTag ? idByTag.get(endTag) : undefined
+    return {
+      answer: normalizeEscapes(answer),
+      startSegmentId: startSegmentId && endSegmentId ? startSegmentId : undefined,
+      endSegmentId: startSegmentId && endSegmentId ? endSegmentId : undefined
+    }
+  } catch (err) {
+    console.error('[meeting] chat failed:', err)
     return null
   }
 }

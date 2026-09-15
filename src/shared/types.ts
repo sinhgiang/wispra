@@ -210,6 +210,39 @@ export interface MeetingSession {
   content?: MeetingContent
   /** Language choices picked on the "Start recording" screen. Undefined for sessions recorded before this field existed — treated the same as all-"auto". */
   languageConfig?: MeetingLanguageConfig
+  /** Which space (see MeetingSpace) this session is filed under, if any. Undefined = unfiled, still shown under "All". */
+  spaceId?: string
+  /** Q&A chat with AI about this session's own transcript (see askMeetingChat in postprocess.ts) — works both while still recording and after Stop. Undefined = no chat yet, same "treated as absent" pattern as languageConfig/content. */
+  chat?: MeetingChatMessage[]
+}
+
+/**
+ * One question/answer exchange in a session's chat with AI about its own transcript
+ * — see askMeetingChat in postprocess.ts and the chat panel in meeting/App.tsx.
+ */
+export interface MeetingChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  /** ISO timestamp. */
+  createdAt: string
+  /** First and last segment ids the answer is about (inclusive range), used to highlight
+   * that stretch of the transcript. Both present or both absent — never just one. */
+  startSegmentId?: string
+  endSegmentId?: string
+}
+
+/**
+ * A user-created grouping for meeting sessions (e.g. one per class/course), so the
+ * sidebar can be filtered down to just that space's sessions instead of one flat
+ * list. Purely organizational — deleting a space never deletes the sessions filed
+ * under it, it just clears their spaceId back to unfiled (see meetingSpaces.ts).
+ */
+export interface MeetingSpace {
+  id: string
+  name: string
+  /** ISO timestamp. */
+  createdAt: string
 }
 
 /** Which platform's ready-to-post content to generate/show for a stopped meeting session. */
@@ -240,4 +273,6 @@ export interface MeetingSessionSummary {
   durationMs: number
   audioSource: MeetingAudioSource
   status: 'recording' | 'summarizing' | 'stopped'
+  /** Which space this session is filed under, if any — see MeetingSpace. */
+  spaceId?: string
 }

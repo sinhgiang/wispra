@@ -101,6 +101,15 @@ export const IPC = {
   MEETING_DELETE_SESSION: 'meeting:delete-session',
   // renderer -> main: user renamed a session from the sidebar (kebab menu)
   MEETING_RENAME_SESSION: 'meeting:rename-session',
+  // renderer -> main: user filed/unfiled a session into a space from the sidebar (kebab menu)
+  MEETING_MOVE_SESSION_TO_SPACE: 'meeting:move-session-to-space',
+  // spaces (user-created groupings for organizing sessions, e.g. one per class) —
+  // see MeetingSpace in shared/types.ts and meetingSpaces.ts
+  MEETING_GET_SPACES: 'meeting:get-spaces',
+  MEETING_CREATE_SPACE: 'meeting:create-space',
+  MEETING_RENAME_SPACE: 'meeting:rename-space',
+  // Deleting a space never deletes its sessions — they fall back to unfiled ("All").
+  MEETING_DELETE_SPACE: 'meeting:delete-space',
   MEETING_EXPORT: 'meeting:export',
   // renderer -> main: generate (or return the cached) ready-to-post content for
   // one platform of a stopped session — see generateMeetingContent in postprocess.ts
@@ -112,7 +121,11 @@ export const IPC = {
   MEETING_GENERATE_SUMMARY: 'meeting:generate-summary',
   // main -> settings renderer: a session's title/summary/status changed (e.g. the
   // AI-generated title finished after Stop) — carries the full updated MeetingSession
-  MEETING_SESSION_UPDATED: 'meeting:session-updated'
+  MEETING_SESSION_UPDATED: 'meeting:session-updated',
+  // renderer -> main: user asked the in-session AI chat a question about the transcript
+  // (works while still recording or after Stop) — see askMeetingChat in postprocess.ts.
+  // Resolves the assistant's MeetingChatMessage, or null on failure (nothing persisted).
+  MEETING_CHAT_SEND: 'meeting:chat-send'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

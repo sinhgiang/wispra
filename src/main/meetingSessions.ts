@@ -4,6 +4,7 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 import type {
   MeetingAudioSource,
+  MeetingChatMessage,
   MeetingContent,
   MeetingLanguageConfig,
   MeetingSegment,
@@ -39,8 +40,8 @@ class MeetingSessions {
     return join(this.dir, `${id}.json`)
   }
 
-  /** Starts a new session and persists it immediately (empty transcript) so it shows up in the sidebar right away. */
-  start(audioSource: MeetingAudioSource, languageConfig?: MeetingLanguageConfig): MeetingSession {
+  /** Starts a new session and persists it immediately (empty transcript) so it shows up in the sidebar right away. `spaceId` files it under the space selected in the sidebar at Start time, if any. */
+  start(audioSource: MeetingAudioSource, languageConfig?: MeetingLanguageConfig, spaceId?: string): MeetingSession {
     const now = new Date()
     const session: MeetingSession = {
       id: randomUUID(),
@@ -50,7 +51,8 @@ class MeetingSessions {
       audioSource,
       segments: [],
       status: 'recording',
-      languageConfig
+      languageConfig,
+      spaceId
     }
     this.current = session
     this.queue = Promise.resolve()
@@ -166,6 +168,42 @@ class MeetingSessions {
     this.delete(session.id)
   }
 
+  /**
+   * Call once at app startup (see main()/index.ts), after app.whenReady(). `current`
+   * above always starts null on a fresh process, so a session left mid-flight by an
+   * unclean shutdown (crash, force-quit, power loss, or the process being killed for a
+   * dev-mode restart) would otherwise sit forever with status 'recording' or
+   * 'summarizing' on disk — nothing would ever move it to 'stopped'. That's not just a
+   * cosmetic wrong label: the sidebar kebab menu (rename/move/delete) is gated to
+   * status === 'stopped', and the row's own click handler special-cases 'recording'
+   * rows as "this is the live session" and no-ops instead of opening them — so an
+   * orphaned session becomes permanently unclickable and unmanageable. Finalizing it to
+   * 'stopped' is a pure metadata fix: every already-captured segment, the duration, and
+   * every other field are left exactly as they were (whatever title/summary/content it
+   * already had, it keeps — the existing "Try again" button in the Summary tab already
+   * covers generating a title/summary by hand if the user wants one).
+   */
+  recoverOrphaned(): void {
+    let files: string[] = []
+    try {
+      files = readdirSync(this.dir).filter((f) => f.endsWith('.json'))
+    } catch {
+      return
+    }
+    for (const f of files) {
+      const path = join(this.dir, f)
+      try {
+        const session = JSON.parse(readFileSync(path, 'utf8')) as MeetingSession
+        if (session.status === 'recording' || session.status === 'summarizing') {
+          session.status = 'stopped'
+          writeFileSync(path, JSON.stringify(session, null, 2), 'utf8')
+        }
+      } catch {
+        // Skip a corrupt/partial file rather than failing startup over it.
+      }
+    }
+  }
+
   onSegment(fn: (segment: MeetingSegment, sessionId: string) => void): void {
     this.listeners.add(fn)
   }
@@ -193,7 +231,8 @@ class MeetingSessions {
           createdAt: session.createdAt,
           durationMs: session.durationMs,
           audioSource: session.audioSource,
-          status: session.status
+          status: session.status,
+          spaceId: session.spaceId
         })
       } catch {
         // Skip a corrupt/partial file rather than failing the whole list.
@@ -237,6 +276,39 @@ class MeetingSessions {
   }
 
   /**
+   * User-triggered move into (or out of, when spaceId is undefined) a space from
+   * the sidebar kebab menu ("Move to space"). Unlike rename(), not gated to
+   * 'stopped' sessions — organizing doesn't race any in-flight AI write.
+   * No-ops if the session was deleted in the meantime.
+   */
+  moveToSpace(id: string, spaceId: string | undefined): void {
+    const session = this.get(id)
+    if (!session) return
+    session.spaceId = spaceId
+    this.persist(session)
+    for (const fn of this.metaListeners) fn(session)
+  }
+
+  /**
+   * Called when a space is deleted (see MEETING_DELETE_SPACE handler) so its
+   * sessions fall back to unfiled/"All" instead of keeping a spaceId that no
+   * longer resolves to anything — never deletes the sessions themselves.
+   */
+  clearSpace(spaceId: string): void {
+    let files: string[] = []
+    try {
+      files = readdirSync(this.dir).filter((f) => f.endsWith('.json'))
+    } catch {
+      return
+    }
+    for (const f of files) {
+      const id = f.slice(0, -'.json'.length)
+      const session = this.get(id)
+      if (session?.spaceId === spaceId) this.moveToSpace(id, undefined)
+    }
+  }
+
+  /**
    * Saves one platform's on-demand-generated ready-to-post content (see
    * generateMeetingContent in postprocess.ts) onto a session and notifies
    * listeners, so re-opening that platform's tab later shows the cached
@@ -247,6 +319,20 @@ class MeetingSessions {
     const session = this.get(id)
     if (!session) return
     session.content = { ...session.content, ...patch }
+    this.persist(session)
+    for (const fn of this.metaListeners) fn(session)
+  }
+
+  /**
+   * Appends one Q&A exchange (the user's question + the assistant's answer) to a
+   * session's chat log — see askMeetingChat in postprocess.ts. Not gated to any
+   * particular status: the chat works both while a session is still recording and
+   * once it's stopped. No-ops if the session was deleted in the meantime.
+   */
+  appendChatMessages(id: string, messages: MeetingChatMessage[]): void {
+    const session = this.get(id)
+    if (!session) return
+    session.chat = [...(session.chat ?? []), ...messages]
     this.persist(session)
     for (const fn of this.metaListeners) fn(session)
   }

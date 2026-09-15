@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import type {
   ContentPlatform,
   MeetingAudioSource,
+  MeetingChatMessage,
   MeetingContent,
   MeetingLanguageConfig,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary,
+  MeetingSpace,
   MeetingState
 } from '@shared/types'
 import { LANGUAGES } from '@shared/constants'
@@ -80,6 +82,30 @@ function loadAudioSource(): MeetingAudioSource {
   }
 }
 
+/**
+ * Small folder glyph — used both for each space row in the sidebar (see the
+ * Spaces section below "+ New session") and, smaller, next to a session's
+ * space tag (see meeting-session-space-tag). Inherits text color via
+ * currentColor so it themes automatically.
+ */
+function FolderIcon({ size = 14 }: { size?: number }): ReactElement {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+    </svg>
+  )
+}
+
 function LangField({
   label,
   value,
@@ -102,6 +128,92 @@ function LangField({
         ))}
       </select>
     </label>
+  )
+}
+
+/**
+ * ChatGPT-style Q&A panel about a session's own transcript — shown at the bottom of
+ * both the live-recording view and the past (stopped) session view. Works whether
+ * the session is still recording or already stopped (askMeetingChat in
+ * postprocess.ts reads whichever the session currently is). Purely presentational —
+ * all state (messages, in-flight, error, which answer is highlighted) lives in
+ * MeetingPanel so it can be shared correctly between the live/past variants.
+ */
+function MeetingChatPanel({
+  messages,
+  input,
+  onInputChange,
+  onSend,
+  sending,
+  error,
+  highlightId,
+  onSelectAnswer
+}: {
+  messages: MeetingChatMessage[]
+  input: string
+  onInputChange: (value: string) => void
+  onSend: () => void
+  sending: boolean
+  error: string | null
+  highlightId: string | null
+  onSelectAnswer: (message: MeetingChatMessage) => void
+}): ReactElement {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      onSend()
+    }
+  }
+  return (
+    <div className="meeting-chat-panel">
+      <div className="meeting-chat-header">Ask about this recording</div>
+      <div className="meeting-chat-messages">
+        {messages.length === 0 && !sending ? (
+          <div className="meeting-chat-empty">
+            Ask anything about this recording — e.g. "What did we decide about the budget?" — and the relevant part
+            of the transcript will be highlighted.
+          </div>
+        ) : (
+          messages.map((m) => (
+            <div key={m.id} className={m.role === 'user' ? 'meeting-chat-bubble user' : 'meeting-chat-bubble assistant'}>
+              <p>{m.text}</p>
+              {m.role === 'assistant' && m.startSegmentId && m.endSegmentId && (
+                <button
+                  type="button"
+                  className={
+                    m.id === highlightId ? 'meeting-chat-highlight-btn active' : 'meeting-chat-highlight-btn'
+                  }
+                  onClick={() => onSelectAnswer(m)}
+                >
+                  {m.id === highlightId ? 'Highlighted in transcript' : 'Show in transcript'}
+                </button>
+              )}
+            </div>
+          ))
+        )}
+        {sending && (
+          <div className="meeting-chat-bubble assistant meeting-chat-thinking" aria-label="Thinking…">
+            <span className="meeting-chat-dot" />
+            <span className="meeting-chat-dot" />
+            <span className="meeting-chat-dot" />
+          </div>
+        )}
+      </div>
+      {error && <div className="meeting-chat-error">{error}</div>}
+      <div className="meeting-chat-input-row">
+        <textarea
+          className="meeting-chat-input"
+          placeholder="Ask a question about this recording…"
+          value={input}
+          onChange={(e) => onInputChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={1}
+        />
+        <button type="button" className="meeting-chat-send-btn" onClick={onSend} disabled={sending || !input.trim()}>
+          Send
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -209,6 +321,8 @@ interface ParagraphBlock {
   /** Milliseconds along the session's active (non-paused) timeline — lets the user match a paragraph back to a position in a source recording/video. */
   startMs: number
   text: string
+  /** ids of every segment merged into this block — lets a chat answer's segment-id range (see MeetingChatMessage in shared/types.ts) resolve onto the paragraph block(s) it falls within, for transcript highlighting (see resolveHighlightBlockIds). */
+  segmentIds: string[]
 }
 
 /** Merges consecutive segments into paragraph blocks (isNewParagraph starts a new one), each labeled with the elapsed time and wall-clock time it started. */
@@ -217,12 +331,29 @@ function groupIntoParagraphs(segments: MeetingSegment[]): ParagraphBlock[] {
   for (const seg of segments) {
     const last = blocks[blocks.length - 1]
     if (seg.isNewParagraph || !last) {
-      blocks.push({ id: seg.id, startedAt: seg.startedAt, startMs: seg.startMs, text: seg.text })
+      blocks.push({ id: seg.id, startedAt: seg.startedAt, startMs: seg.startMs, text: seg.text, segmentIds: [seg.id] })
     } else {
       last.text += ' ' + seg.text
+      last.segmentIds.push(seg.id)
     }
   }
   return blocks
+}
+
+/**
+ * Maps a chat answer's startSegmentId/endSegmentId range (see the AI chat panel
+ * below and askMeetingChat in postprocess.ts) onto the paragraph block(s) it spans,
+ * for transcript highlighting. Returns an empty set — never throws — if the message
+ * has no range, or if either id can't be found (e.g. the transcript was truncated
+ * before the LLM call, or the model returned a stale/hallucinated id).
+ */
+function resolveHighlightBlockIds(blocks: ParagraphBlock[], message: MeetingChatMessage | undefined): Set<string> {
+  if (!message?.startSegmentId || !message.endSegmentId) return new Set()
+  const startIdx = blocks.findIndex((b) => b.segmentIds.includes(message.startSegmentId!))
+  const endIdx = blocks.findIndex((b) => b.segmentIds.includes(message.endSegmentId!))
+  if (startIdx === -1 || endIdx === -1) return new Set()
+  const [from, to] = startIdx <= endIdx ? [startIdx, endIdx] : [endIdx, startIdx]
+  return new Set(blocks.slice(from, to + 1).map((b) => b.id))
 }
 
 /**
@@ -268,6 +399,18 @@ export function MeetingPanel(): React.JSX.Element {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   /** The open kebab menu's session id + its screen position (computed from the kebab button's rect so the menu is never clipped by the sidebar's own scroll container). */
   const [menuPos, setMenuPos] = useState<{ id: string; top: number; right: number } | null>(null)
+  /** User-created spaces for organizing sessions (e.g. one per class) — see the space tabs row above the session list. */
+  const [spaces, setSpaces] = useState<MeetingSpace[]>([])
+  /** Which space tab is selected — filters the session list below, and (if not null) is where the next new recording gets filed. null = "All". */
+  const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null)
+  /** True while the inline "new space" name input is showing (the "+" tab). */
+  const [creatingSpace, setCreatingSpace] = useState(false)
+  /** id of the space tab currently being renamed inline, if any. */
+  const [renamingSpaceId, setRenamingSpaceId] = useState<string | null>(null)
+  /** The open space-tab kebab menu's space id + screen position — same pattern as menuPos above, kept separate so opening one never closes the other by accident. */
+  const [spaceMenuPos, setSpaceMenuPos] = useState<{ id: string; top: number; right: number } | null>(null)
+  // Same Escape-vs-blur trick as skipRenameBlurRef, for the space rename input.
+  const skipSpaceRenameBlurRef = useRef(false)
   /** Language choices for the next recording, picked on the idle "Start recording" screen. Persisted across sessions (see loadLangConfig) so the user's usual picks stick. */
   const [langConfig, setLangConfig] = useState<MeetingLanguageConfig>(loadLangConfig)
   /** Audio-source choice for the next recording (mic / system / both), picked on the same idle screen. Persisted the same way as langConfig. */
@@ -295,6 +438,19 @@ export function MeetingPanel(): React.JSX.Element {
   /** Shown in the just-ended session's past view when the silence safety net (not the user) stopped the recording — cleared on starting a new recording or opening a different session. */
   const [autoStopNotice, setAutoStopNotice] = useState<string | null>(null)
 
+  // --- in-session AI chat (see MeetingChatMessage in shared/types.ts, askMeetingChat
+  // in postprocess.ts) — separate message arrays for the live session and whichever
+  // past session is being viewed, so switching between them never mixes histories.
+  // Input/sending/error/highlight are shared since only one of the two chat panels is
+  // ever visible at a time (see isPastChat below).
+  const [liveChat, setLiveChat] = useState<MeetingChatMessage[]>([])
+  const [pastChat, setPastChat] = useState<MeetingChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatSending, setChatSending] = useState(false)
+  const [chatError, setChatError] = useState<string | null>(null)
+  /** id of the assistant chat message currently driving the transcript highlight, if any — set automatically when a fresh answer names a range, or by clicking "Show in transcript" on any past answer. */
+  const [chatHighlightId, setChatHighlightId] = useState<string | null>(null)
+
   useEffect(() => {
     try {
       localStorage.setItem(LANG_CONFIG_STORAGE_KEY, JSON.stringify(langConfig))
@@ -315,6 +471,10 @@ export function MeetingPanel(): React.JSX.Element {
   const startedAtRef = useRef(0)
   const initializedRef = useRef(false)
   const transcriptRef = useRef<HTMLDivElement>(null)
+  // Same purpose as transcriptRef, for the read-only past-session transcript — used
+  // only to scroll a chat-highlighted paragraph into view (see the chatHighlightId
+  // effect below), never auto-scrolled to the bottom like the live one.
+  const pastTranscriptRef = useRef<HTMLDivElement>(null)
   // Set right before a rename input is dismissed via Escape, so the blur that
   // unmounting it triggers is treated as a cancel instead of a commit.
   const skipRenameBlurRef = useRef(false)
@@ -357,6 +517,10 @@ export function MeetingPanel(): React.JSX.Element {
     window.api.onMeetingCaptureStart(() => {
       startedAtRef.current = Date.now()
       setLiveSegments([])
+      setLiveChat([])
+      setChatInput('')
+      setChatError(null)
+      setChatHighlightId(null)
       setViewingPast(null)
       setResumeError(null)
       autoStoppedSessionIdRef.current = null
@@ -413,6 +577,10 @@ export function MeetingPanel(): React.JSX.Element {
         setCurrentSession(null)
         setViewingPast(null)
         setLiveSegments([])
+        setLiveChat([])
+        setChatInput('')
+        setChatError(null)
+        setChatHighlightId(null)
         setAutoStopNotice(null)
       } else {
         // Show the just-finished session in the read-only past view instead of leaving
@@ -445,7 +613,8 @@ export function MeetingPanel(): React.JSX.Element {
                 createdAt: session.createdAt,
                 durationMs: session.durationMs,
                 audioSource: session.audioSource,
-                status: session.status
+                status: session.status,
+                spaceId: session.spaceId
               }
             : s
         )
@@ -457,6 +626,14 @@ export function MeetingPanel(): React.JSX.Element {
         setPastStatus(session.status)
         setPastSummary(session.summary ?? '')
         setPastContent(session.content)
+        setPastChat(session.chat ?? [])
+      }
+      // Same, for the live session's own chat — e.g. an answer that just finished
+      // while the mic is still recording. This is the single source of truth for
+      // liveChat; sendActiveChatMessage below only manages an optimistic bubble
+      // in between sending a question and this broadcast arriving.
+      if (currentSessionIdRef.current === session.id) {
+        setLiveChat(session.chat ?? [])
       }
     })
 
@@ -464,9 +641,14 @@ export function MeetingPanel(): React.JSX.Element {
     // switching away mid-meeting) otherwise has no idea a recording is already
     // in progress until the next state change broadcasts.
     void (async () => {
-      const [state, list] = await Promise.all([window.api.getMeetingState(), window.api.getMeetingSessions()])
+      const [state, list, spaceList] = await Promise.all([
+        window.api.getMeetingState(),
+        window.api.getMeetingSessions(),
+        window.api.getMeetingSpaces()
+      ])
       setMeetingState(state)
       setSessions(list)
+      setSpaces(spaceList)
       if (state === 'recording' || state === 'paused') {
         const active = list.find((s) => s.status === 'recording')
         if (active) {
@@ -474,6 +656,7 @@ export function MeetingPanel(): React.JSX.Element {
           const full = await window.api.getMeetingSession(active.id)
           if (full) {
             setLiveSegments(full.segments)
+            setLiveChat(full.chat ?? [])
             startedAtRef.current = Date.parse(full.createdAt)
           }
         }
@@ -502,6 +685,9 @@ export function MeetingPanel(): React.JSX.Element {
     setGeneratingPlatforms({})
     setSummaryGenerating(false)
     setVariantIndex({ facebook: 0, instagram: 0, linkedin: 0, twitter: 0 })
+    setChatInput('')
+    setChatError(null)
+    setChatHighlightId(null)
     void window.api.getMeetingSession(viewingPastId).then((full) => {
       if (cancelled || !full) return
       setPastSegments(full.segments)
@@ -510,6 +696,7 @@ export function MeetingPanel(): React.JSX.Element {
       setPastStatus(full.status)
       setPastSummary(full.summary ?? '')
       setPastContent(full.content)
+      setPastChat(full.chat ?? [])
     })
     return () => {
       cancelled = true
@@ -549,6 +736,19 @@ export function MeetingPanel(): React.JSX.Element {
     if (el) el.scrollTop = el.scrollHeight
   }, [liveSegments, viewingPastId])
 
+  // Scroll a chat-highlighted paragraph into view when the highlight is set (a fresh
+  // answer with a range, or clicking "Show in transcript" on a past one) — see
+  // resolveHighlightBlockIds and the meeting-paragraph-highlighted class below. In
+  // the live view this can lose to the auto-scroll-to-latest effect above once new
+  // speech arrives, which is the right tradeoff — staying caught up with a live
+  // recording takes priority over a one-off lookup.
+  useEffect(() => {
+    if (!chatHighlightId) return
+    const container = viewingPastId !== null ? pastTranscriptRef.current : transcriptRef.current
+    const target = container?.querySelector<HTMLElement>('.meeting-paragraph-highlighted')
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [chatHighlightId, viewingPastId, pastView])
+
   const isRecording = meetingState === 'recording'
   const isPaused = meetingState === 'paused'
   const showingSession = viewingPastId !== null || currentSessionId !== null
@@ -557,6 +757,10 @@ export function MeetingPanel(): React.JSX.Element {
     setViewingPast(null)
     setCurrentSession(null)
     setLiveSegments([])
+    setLiveChat([])
+    setChatInput('')
+    setChatError(null)
+    setChatHighlightId(null)
     setAutoStopNotice(null)
   }
 
@@ -640,6 +844,53 @@ export function MeetingPanel(): React.JSX.Element {
     })
   }
 
+  // Sidebar kebab menu → "Move to space" — files (or, with spaceId null, unfiles) a
+  // stopped session. Doesn't move the currently-open past view off screen — only the
+  // sidebar's own filtered list (via selectedSpaceId) can do that.
+  const handleMoveToSpace = (sessionId: string, spaceId: string | null): void => {
+    setMenuPos(null)
+    void window.api.moveMeetingSessionToSpace(sessionId, spaceId)
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, spaceId: spaceId ?? undefined } : s)))
+  }
+
+  // "+" tab → inline name input, committed on Enter/blur, cancelled on Escape/empty.
+  const commitCreateSpace = (rawName: string): void => {
+    setCreatingSpace(false)
+    const name = rawName.trim()
+    if (!name) return
+    void window.api.createMeetingSpace(name).then((space) => {
+      if (!space) return
+      setSpaces((prev) => [...prev, space])
+      setSelectedSpaceId(space.id)
+    })
+  }
+
+  const startSpaceRename = (id: string): void => {
+    setSpaceMenuPos(null)
+    setRenamingSpaceId(id)
+  }
+
+  const commitSpaceRename = (id: string, rawName: string): void => {
+    setRenamingSpaceId(null)
+    const name = rawName.trim()
+    const existing = spaces.find((s) => s.id === id)
+    if (!name || !existing || existing.name === name) return
+    void window.api.renameMeetingSpace(id, name)
+    setSpaces((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)))
+  }
+
+  // Never deletes the sessions filed under the space — they fall back to "All"
+  // server-side too (see meetingSessions.clearSpace, called by the IPC handler).
+  const handleDeleteSpace = (id: string, name: string): void => {
+    setSpaceMenuPos(null)
+    if (!window.confirm(`Delete space "${name}"? Its sessions are kept and move back to "All".`)) return
+    void window.api.deleteMeetingSpace(id).then(() => {
+      setSpaces((prev) => prev.filter((s) => s.id !== id))
+      if (selectedSpaceId === id) setSelectedSpaceId(null)
+      setSessions((prev) => prev.map((s) => (s.spaceId === id ? { ...s, spaceId: undefined } : s)))
+    })
+  }
+
   // Live audio-source switcher (near the timer) — lets the user flip mic/system/both
   // mid-recording instead of only once on the idle "Start recording" screen.
   const handleSwitchAudioSource = (newSource: MeetingAudioSource): void => {
@@ -672,6 +923,59 @@ export function MeetingPanel(): React.JSX.Element {
   const liveBlocks = groupIntoParagraphs(liveSegments)
   const pastBlocks = groupIntoParagraphs(pastSegments)
 
+  // --- in-session AI chat wiring (see MeetingChatMessage in shared/types.ts) ---
+  // Only one of the live/past chat panels is ever visible at a time, so a single set
+  // of handlers routes to whichever is active based on which view is open.
+  const isPastChat = viewingPastId !== null
+  const activeChatSessionId = isPastChat ? viewingPastId : currentSessionId
+  const setActiveChatMessages = isPastChat ? setPastChat : setLiveChat
+  const liveHighlightedBlockIds = resolveHighlightBlockIds(liveBlocks, liveChat.find((m) => m.id === chatHighlightId))
+  const pastHighlightedBlockIds = resolveHighlightBlockIds(pastBlocks, pastChat.find((m) => m.id === chatHighlightId))
+
+  // Sends the pending question: appends an optimistic user bubble immediately, then
+  // waits for the authoritative answer. The real messages (both the question and the
+  // answer) arrive moments later via the onMeetingSessionUpdated broadcast and fully
+  // replace liveChat/pastChat (see that handler above) — so on success this function
+  // does nothing to the message list itself, only clears input/highlights a range. On
+  // failure it rolls back the optimistic bubble it added.
+  const sendActiveChatMessage = (): void => {
+    const sessionId = activeChatSessionId
+    const question = chatInput.trim()
+    if (!sessionId || !question || chatSending) return
+    const optimisticId = `pending-${crypto.randomUUID()}`
+    setActiveChatMessages((prev) => [
+      ...prev,
+      { id: optimisticId, role: 'user', text: question, createdAt: new Date().toISOString() }
+    ])
+    setChatInput('')
+    setChatSending(true)
+    setChatError(null)
+    void window.api.sendMeetingChatMessage(sessionId, question).then((result) => {
+      setChatSending(false)
+      if (!result) {
+        setActiveChatMessages((prev) => prev.filter((m) => m.id !== optimisticId))
+        setChatError('Could not get an answer — check your connection/API key, then try again.')
+        return
+      }
+      if (result.startSegmentId && result.endSegmentId) {
+        setChatHighlightId(result.id)
+        if (isPastChat) setPastView('transcript')
+      }
+    })
+  }
+
+  // Toggles the transcript highlight for a past answer's range (clicking it again
+  // clears the highlight), switching to the Transcript tab so the highlight is visible.
+  const selectChatAnswer = (message: MeetingChatMessage): void => {
+    if (!message.startSegmentId || !message.endSegmentId) return
+    setChatHighlightId((prev) => (prev === message.id ? null : message.id))
+    if (isPastChat) setPastView('transcript')
+  }
+
+  // "All" (selectedSpaceId === null) shows every session, including unfiled ones and
+  // ones whose space was since deleted — filtering only ever narrows, never hides.
+  const visibleSessions = selectedSpaceId === null ? sessions : sessions.filter((s) => s.spaceId === selectedSpaceId)
+
   return (
     <div className="meeting">
       <div className="meeting-layout">
@@ -683,13 +987,122 @@ export function MeetingPanel(): React.JSX.Element {
           >
             + New session
           </button>
-          {sessions.length === 0 ? (
-            <div className="meeting-sidebar-empty">No sessions yet</div>
+          <div className="meeting-spaces-section">
+            <button
+              className={selectedSpaceId === null ? 'meeting-space-row all-sessions active' : 'meeting-space-row all-sessions'}
+              onClick={() => setSelectedSpaceId(null)}
+            >
+              All sessions
+            </button>
+            <div className="meeting-spaces-header">
+              <span className="meeting-spaces-label">Spaces</span>
+              <button className="meeting-spaces-add-btn" onClick={() => setCreatingSpace(true)} aria-label="New space" title="New space">
+                +
+              </button>
+            </div>
+            <div className="meeting-spaces-list">
+              {spaces.map((sp) => {
+                const isRenamingThis = renamingSpaceId === sp.id
+                return (
+                  <div key={sp.id} className="meeting-space-row-wrap">
+                    {isRenamingThis ? (
+                      <input
+                        className="meeting-space-rename-input"
+                        autoFocus
+                        maxLength={100}
+                        defaultValue={sp.name}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                          else if (e.key === 'Escape') {
+                            skipSpaceRenameBlurRef.current = true
+                            setRenamingSpaceId(null)
+                          }
+                        }}
+                        onBlur={(e) => {
+                          if (skipSpaceRenameBlurRef.current) {
+                            skipSpaceRenameBlurRef.current = false
+                            return
+                          }
+                          commitSpaceRename(sp.id, e.currentTarget.value)
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <button
+                          className={selectedSpaceId === sp.id ? 'meeting-space-row active' : 'meeting-space-row'}
+                          onClick={() => setSelectedSpaceId(sp.id)}
+                        >
+                          <FolderIcon />
+                          <span className="meeting-space-row-name">{sp.name}</span>
+                        </button>
+                        <button
+                          className={spaceMenuPos?.id === sp.id ? 'meeting-space-row-kebab open' : 'meeting-space-row-kebab'}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (spaceMenuPos?.id === sp.id) {
+                              setSpaceMenuPos(null)
+                              return
+                            }
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            setSpaceMenuPos({ id: sp.id, top: rect.bottom + 4, right: window.innerWidth - rect.right })
+                          }}
+                          aria-label={`"${sp.name}" space options`}
+                        >
+                          ⋯
+                        </button>
+                        {spaceMenuPos?.id === sp.id && (
+                          <>
+                            <div className="meeting-session-menu-backdrop" onClick={() => setSpaceMenuPos(null)} />
+                            <div className="meeting-session-menu" style={{ top: spaceMenuPos.top, right: spaceMenuPos.right }}>
+                              <button onClick={() => startSpaceRename(sp.id)}>Rename</button>
+                              <button className="danger" onClick={() => handleDeleteSpace(sp.id, sp.name)}>
+                                Delete
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+              {creatingSpace && (
+                <input
+                  className="meeting-space-rename-input"
+                  autoFocus
+                  maxLength={100}
+                  placeholder="Space name"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    else if (e.key === 'Escape') {
+                      skipSpaceRenameBlurRef.current = true
+                      setCreatingSpace(false)
+                    }
+                  }}
+                  onBlur={(e) => {
+                    if (skipSpaceRenameBlurRef.current) {
+                      skipSpaceRenameBlurRef.current = false
+                      return
+                    }
+                    commitCreateSpace(e.currentTarget.value)
+                  }}
+                />
+              )}
+            </div>
+          </div>
+          {visibleSessions.length === 0 ? (
+            <div className="meeting-sidebar-empty">
+              {sessions.length === 0 ? 'No sessions yet' : 'No sessions in this space yet'}
+            </div>
           ) : (
             <div className="meeting-session-list" onScroll={() => setMenuPos(null)}>
-              {sessions.map((s) => {
+              {visibleSessions.map((s) => {
                 const isActiveRow = s.status === 'recording' ? viewingPastId === null : viewingPastId === s.id
                 const isRenamingThis = renamingId === s.id
+                // Resolves to undefined both when unfiled and when the space was deleted
+                // (deleting a space only clears spaceId elsewhere, but guard anyway).
+                const sessionSpace = s.spaceId ? spaces.find((sp) => sp.id === s.spaceId) : undefined
                 return (
                   <div key={s.id} className={isActiveRow ? 'meeting-session-row active' : 'meeting-session-row'}>
                     <div
@@ -732,6 +1145,12 @@ export function MeetingPanel(): React.JSX.Element {
                         {s.status === 'recording' && <span className="meeting-session-dot" />}
                         {s.status === 'summarizing' ? 'Summarizing…' : formatElapsed(s.durationMs)}
                       </span>
+                      {sessionSpace && (
+                        <span className="meeting-session-space-tag" title={`In space: ${sessionSpace.name}`}>
+                          <FolderIcon size={10} />
+                          <span className="meeting-session-space-tag-name">{sessionSpace.name}</span>
+                        </span>
+                      )}
                     </div>
                     {s.status === 'stopped' && (
                       <div className="meeting-session-kebab-wrap">
@@ -758,6 +1177,20 @@ export function MeetingPanel(): React.JSX.Element {
                               style={{ top: menuPos.top, right: menuPos.right }}
                             >
                               <button onClick={() => startRename(s.id)}>Rename</button>
+                              {spaces.length > 0 && (
+                                <>
+                                  <div className="meeting-session-menu-label">Move to space</div>
+                                  {spaces.map((sp) => (
+                                    <button key={sp.id} onClick={() => handleMoveToSpace(s.id, sp.id)}>
+                                      {s.spaceId === sp.id ? '✓ ' : ''}
+                                      {sp.name}
+                                    </button>
+                                  ))}
+                                  {s.spaceId && (
+                                    <button onClick={() => handleMoveToSpace(s.id, null)}>Remove from space</button>
+                                  )}
+                                </>
+                              )}
                               <button className="danger" onClick={() => handleDelete(s.id, s.title)}>
                                 Delete
                               </button>
@@ -806,12 +1239,18 @@ export function MeetingPanel(): React.JSX.Element {
               </div>
               {autoStopNotice && <div className="meeting-resume-error">{autoStopNotice}</div>}
               {pastView === 'transcript' ? (
-                <div className="meeting-transcript">
+                <div className="meeting-transcript" ref={pastTranscriptRef}>
                   {pastBlocks.length === 0 ? (
                     <div className="meeting-transcript-empty">No speech was transcribed in this session.</div>
                   ) : (
                     pastBlocks.map((b) => (
-                      <div key={b.id} className="meeting-paragraph">
+                      <div
+                        key={b.id}
+                        data-block-id={b.id}
+                        className={
+                          pastHighlightedBlockIds.has(b.id) ? 'meeting-paragraph meeting-paragraph-highlighted' : 'meeting-paragraph'
+                        }
+                      >
                         <span className="meeting-paragraph-time">
                           <span className="meeting-paragraph-elapsed">{formatElapsed(b.startMs)}</span>
                           <span className="meeting-paragraph-clock">{formatClock(b.startedAt)}</span>
@@ -893,6 +1332,16 @@ export function MeetingPanel(): React.JSX.Element {
                   </div>
                 </>
               )}
+              <MeetingChatPanel
+                messages={pastChat}
+                input={chatInput}
+                onInputChange={setChatInput}
+                onSend={sendActiveChatMessage}
+                sending={chatSending && isPastChat}
+                error={isPastChat ? chatError : null}
+                highlightId={chatHighlightId}
+                onSelectAnswer={selectChatAnswer}
+              />
             </div>
           ) : currentSessionId !== null ? (
             <div className="meeting-session-view">
@@ -953,7 +1402,13 @@ export function MeetingPanel(): React.JSX.Element {
                   </div>
                 ) : (
                   liveBlocks.map((b) => (
-                    <div key={b.id} className="meeting-paragraph">
+                    <div
+                      key={b.id}
+                      data-block-id={b.id}
+                      className={
+                        liveHighlightedBlockIds.has(b.id) ? 'meeting-paragraph meeting-paragraph-highlighted' : 'meeting-paragraph'
+                      }
+                    >
                       <span className="meeting-paragraph-time">
                         <span className="meeting-paragraph-elapsed">{formatElapsed(b.startMs)}</span>
                         <span className="meeting-paragraph-clock">{formatClock(b.startedAt)}</span>
@@ -963,6 +1418,16 @@ export function MeetingPanel(): React.JSX.Element {
                   ))
                 )}
               </div>
+              <MeetingChatPanel
+                messages={liveChat}
+                input={chatInput}
+                onInputChange={setChatInput}
+                onSend={sendActiveChatMessage}
+                sending={chatSending && !isPastChat}
+                error={!isPastChat ? chatError : null}
+                highlightId={chatHighlightId}
+                onSelectAnswer={selectChatAnswer}
+              />
             </div>
           ) : (
             <>
@@ -1026,7 +1491,15 @@ export function MeetingPanel(): React.JSX.Element {
                   />
                 </div>
               </div>
-              <button className="meeting-btn meeting-btn-start" onClick={() => window.api.meetingStart(langConfig, audioSource)}>
+              {selectedSpaceId !== null && (
+                <div className="meeting-space-hint">
+                  Will be saved to <strong>{spaces.find((sp) => sp.id === selectedSpaceId)?.name}</strong>
+                </div>
+              )}
+              <button
+                className="meeting-btn meeting-btn-start"
+                onClick={() => window.api.meetingStart(langConfig, audioSource, selectedSpaceId ?? undefined)}
+              >
                 Start recording
               </button>
             </>

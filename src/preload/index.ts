@@ -7,11 +7,13 @@ import type {
   FileTranscribeResult,
   HotkeyResult,
   MeetingAudioSource,
+  MeetingChatMessage,
   MeetingContentResult,
   MeetingLanguageConfig,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary,
+  MeetingSpace,
   MeetingState,
   Settings,
   StatePayload,
@@ -109,8 +111,11 @@ const api = {
     ipcRenderer.invoke(IPC.SUMMARIZE_TOPIC, texts),
 
   // --- meeting mode ---
-  meetingStart: (languageConfig: MeetingLanguageConfig, audioSource: MeetingAudioSource): void =>
-    ipcRenderer.send(IPC.MEETING_START, languageConfig, audioSource),
+  meetingStart: (
+    languageConfig: MeetingLanguageConfig,
+    audioSource: MeetingAudioSource,
+    spaceId?: string
+  ): void => ipcRenderer.send(IPC.MEETING_START, languageConfig, audioSource, spaceId),
   meetingPause: (): void => ipcRenderer.send(IPC.MEETING_PAUSE),
   meetingResume: (): void => ipcRenderer.send(IPC.MEETING_RESUME),
   meetingStop: (): void => ipcRenderer.send(IPC.MEETING_STOP),
@@ -128,6 +133,17 @@ const api = {
   deleteMeetingSession: (id: string): Promise<void> => ipcRenderer.invoke(IPC.MEETING_DELETE_SESSION, id),
   renameMeetingSession: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(IPC.MEETING_RENAME_SESSION, id, title),
+  // Files (or unfiles, when spaceId is null) a session under a space — sidebar kebab menu.
+  moveMeetingSessionToSpace: (id: string, spaceId: string | null): Promise<void> =>
+    ipcRenderer.invoke(IPC.MEETING_MOVE_SESSION_TO_SPACE, id, spaceId),
+  // --- meeting spaces ---
+  getMeetingSpaces: (): Promise<MeetingSpace[]> => ipcRenderer.invoke(IPC.MEETING_GET_SPACES),
+  createMeetingSpace: (name: string): Promise<MeetingSpace | null> =>
+    ipcRenderer.invoke(IPC.MEETING_CREATE_SPACE, name),
+  renameMeetingSpace: (id: string, name: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.MEETING_RENAME_SPACE, id, name),
+  // Never deletes the sessions filed under it — they fall back to unfiled ("All").
+  deleteMeetingSpace: (id: string): Promise<void> => ipcRenderer.invoke(IPC.MEETING_DELETE_SPACE, id),
   // On-demand: generates (or returns the already-cached) ready-to-post content
   // for one platform. Resolves null if generation failed (offline, bad key, etc).
   generateMeetingContent: (id: string, platform: ContentPlatform): Promise<MeetingContentResult | null> =>
@@ -136,6 +152,11 @@ const api = {
   // resolves true on success, false on failure. On success the actual title/summary
   // update arrives separately via onMeetingSessionUpdated.
   generateMeetingSummary: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.MEETING_GENERATE_SUMMARY, id),
+  // In-session AI chat: ask a question about this session's own transcript (works
+  // while still recording or after Stop). Resolves the assistant's MeetingChatMessage,
+  // or null on failure — the caller persists nothing and shows a transient error.
+  sendMeetingChatMessage: (id: string, question: string): Promise<MeetingChatMessage | null> =>
+    ipcRenderer.invoke(IPC.MEETING_CHAT_SEND, id, question),
   onMeetingStateChanged: (cb: (state: MeetingState) => void): void => {
     ipcRenderer.on(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state))
   },
