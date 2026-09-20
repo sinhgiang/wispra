@@ -80,12 +80,15 @@ export interface Settings {
   templates: Template[]
   /** After injection, automatically start recording again for hands-free dictation. */
   continuousMode: boolean
+  /** Learn from corrections made in History and apply what was learned (Learned tab). */
+  learningEnabled: boolean
   /** Incremented when defaults change, so migrations can upgrade old saved settings. */
   settingsVersion: number
 }
 
 export interface TranscriptEntry {
   id: string
+  /** What the user ended up with: the typed text, or their own version after a History fix. */
   text: string
   /** ISO timestamp. */
   createdAt: string
@@ -94,6 +97,127 @@ export interface TranscriptEntry {
   durationSeconds?: number
   /** Auto-detected topic: 'Email' | 'Meeting' | 'Tasks' | 'Notes' | 'Message' | 'General' */
   topic?: string
+  /** Speech-to-text output before any learned replacement or AI cleanup. Absent on older entries and template expansions. */
+  rawText?: string
+  /** Lowercased process name of the app that was focused when the text was typed (e.g. "chrome"), when known. */
+  app?: string
+  /** What Wispra originally typed. Set only once the user has fixed the entry — `text` then holds their version. */
+  originalText?: string
+  /** Id of the mode whose cleanup prompt was used, when the AI cleanup ran. Lets writing examples be matched by context. */
+  mode?: string
+  /** Whether "Learn from my corrections" was on when this was dictated (unset on entries from before it was tracked). */
+  learning?: boolean
+}
+
+/**
+ * One thing Wispra has learned about the user's vocabulary: a term spelled the way the user wants
+ * it, plus the wrong forms the speech-to-text step is known to produce for it.
+ */
+export interface LexiconEntry {
+  id: string
+  /** The correct form, exactly as the user wants it written ("Claude Code"). */
+  term: string
+  /** Wrong forms speech-to-text produces for this term ("Cloud Code"). May be empty for a plain term. */
+  heardAs: string[]
+  /** How many times the user has confirmed this entry (each repeated correction adds one). */
+  count: number
+  /** Off entries are kept but never applied. */
+  enabled: boolean
+  /** Pinned = trusted: always replaced without a hint round-trip, and first in line for the STT prompt. */
+  pinned: boolean
+  /** 'manual' = typed in the Learned tab; 'correction' = learned from a History fix. */
+  source: 'manual' | 'correction'
+  createdAt: string
+  lastSeen: string
+}
+
+/** A mishearing → correction pair, as shown to the user right after a History fix. */
+export interface LearnedPair {
+  heardAs: string
+  term: string
+}
+
+export interface FixHistoryResult {
+  ok: boolean
+  error?: string
+  /** Pairs added to (or reinforced in) the lexicon by this fix. */
+  learned: LearnedPair[]
+  /** False when the fix was saved but learning is switched off in the Learned tab. */
+  learning: boolean
+}
+
+/**
+ * A candidate for the lexicon that Wispra found by reading the user's own History and Meeting
+ * transcripts. Never applied on its own — it only becomes an entry when the user accepts it.
+ *  - 'variant': a spelling that keeps turning up and looks like a mishearing of a term the user
+ *               already keeps ("Cloud Code" ≈ "Claude Code")
+ *  - 'term':    a name/brand that keeps turning up but is not in the user's word lists yet
+ */
+export type SuggestionKind = 'variant' | 'term'
+
+export interface Suggestion {
+  /** Stable across recomputations, so an ignored suggestion stays ignored. */
+  id: string
+  kind: SuggestionKind
+  /** The spelling to keep ("Claude Code"). */
+  term: string
+  /** 'variant' only: the form found in the text ("Cloud Code"). */
+  heardAs?: string
+  /** How many times the found form (variant) or the term (term) occurs. */
+  count: number
+  /** In how many separate dictations/meetings it occurs. */
+  sources: number
+  /** A short piece of the user's own text around one occurrence. */
+  example: string
+}
+
+/**
+ * One writing habit Wispra noticed in the user's own fixes (e.g. "drops the final full stop").
+ * Habits are derived from History on demand — the user can only switch them on or off.
+ */
+export interface StyleHabit {
+  /** Stable across recomputations ("no-final-stop", "drop:kiểu như"). */
+  id: string
+  /** The instruction given to the AI cleanup step. */
+  text: string
+  /** Why Wispra thinks so, in the user's terms ("Applied in 4 of 5 fixes"). */
+  evidence: string
+  enabled: boolean
+}
+
+/** What Wispra knows about how the user writes — shown in the Learned tab, all of it editable. */
+export interface StyleProfile {
+  /** The user's own description of their style; sent to the AI cleanup step as-is. */
+  notes: string
+  habits: StyleHabit[]
+  /** How many of the user's own fixed dictations can be shown to the AI as examples. */
+  exampleCount: number
+}
+
+/** Fix statistics for a group of dictations. `rate` = word edits per 100 dictated words (null while nothing was dictated). */
+export interface EvalTotals {
+  dictations: number
+  words: number
+  /** Dictations the user fixed at least once. */
+  edited: number
+  /** Words changed by the user's fixes. */
+  edits: number
+  rate: number | null
+}
+
+export interface EvalWeek extends EvalTotals {
+  /** First day of the week (Monday), YYYY-MM-DD. */
+  start: string
+}
+
+/** Is learning helping? Fewer fixes per 100 words over time, and with learning on vs off. */
+export interface EvalReport {
+  /** Oldest first; the last entry is the current week. */
+  weeks: EvalWeek[]
+  /** Dictations made while "Learn from my corrections" was on / off. */
+  on: EvalTotals
+  off: EvalTotals
+  all: EvalTotals
 }
 
 export interface HotkeyResult {

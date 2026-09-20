@@ -3,6 +3,7 @@ import {
   GROQ_STT_MODEL,
   OPENAI_API_BASE,
   OPENAI_STT_MODEL,
+  STT_PROMPT_MAX_TERMS,
   TRANSCRIBE_RETRIES,
   TRANSCRIBE_TIMEOUT_MS,
   WISPRA_API_BASE
@@ -101,7 +102,7 @@ function buildSttPrompt(language: string, vocabulary?: string[]): string | undef
     )
   }
   if (vocabulary && vocabulary.length > 0) {
-    const terms = vocabulary.slice(0, 30).join(', ')
+    const terms = vocabulary.slice(0, STT_PROMPT_MAX_TERMS).join(', ')
     parts.push(
       language === 'vi' ? `Các từ/tên riêng cần giữ nguyên: ${terms}.` : `Keep these terms spelled exactly: ${terms}.`
     )

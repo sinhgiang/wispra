@@ -23,7 +23,43 @@ export const IPC = {
   GET_HISTORY: 'history:get',
   CLEAR_HISTORY: 'history:clear',
   HISTORY_CHANGED: 'history:changed',
+  // renderer -> main: user fixed the text of a History entry; resolves FixHistoryResult
+  // (which word corrections Wispra learned from it) — see lexicon.ts
+  HISTORY_FIX: 'history:fix',
   COPY_TEXT: 'clipboard:copy',
+
+  // personal lexicon (learned vocabulary) — Learned tab in Settings
+  LEXICON_GET: 'lexicon:get',
+  LEXICON_ADD: 'lexicon:add',
+  LEXICON_UPDATE: 'lexicon:update',
+  LEXICON_DELETE: 'lexicon:delete',
+  LEXICON_RESET: 'lexicon:reset',
+  // main -> settings renderer: the lexicon changed (learned from a fix, edited, reset)
+  LEXICON_CHANGED: 'lexicon:changed',
+
+  // suggestions mined from History/Meeting text (candidates only — the user accepts or ignores each)
+  // renderer -> main: compute the current list; resolves Suggestion[]
+  SUGGESTIONS_GET: 'suggestions:get',
+  // renderer -> main: add suggestion `id` to the lexicon; resolves the refreshed Suggestion[]
+  SUGGESTIONS_ACCEPT: 'suggestions:accept',
+  // renderer -> main: never show suggestion `id` again; resolves the refreshed Suggestion[]
+  SUGGESTIONS_DISMISS: 'suggestions:dismiss',
+
+  // writing style learned from the user's fixes (Learned tab)
+  // renderer -> main: resolves the StyleProfile (notes + detected habits + example count)
+  STYLE_GET: 'style:get',
+  // renderer -> main: save the user's own style notes; resolves the refreshed StyleProfile
+  STYLE_SET_NOTES: 'style:set-notes',
+  // renderer -> main: switch one detected habit on/off; resolves the refreshed StyleProfile
+  STYLE_SET_HABIT: 'style:set-habit',
+  // renderer -> main: clear notes and switch every habit back on; resolves the refreshed StyleProfile
+  STYLE_RESET: 'style:reset',
+
+  // is learning helping? fix statistics over time (Learned tab)
+  // renderer -> main: resolves the EvalReport
+  EVAL_GET: 'eval:get',
+  // renderer -> main: forget the statistics; resolves the (empty) EvalReport
+  EVAL_RESET: 'eval:reset',
 
   // auto-update
   UPDATE_STATUS: 'update:status',

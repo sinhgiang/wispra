@@ -75,6 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
   appContextRules: [],
   templates: [],
   continuousMode: false,
+  learningEnabled: true,
   settingsVersion: 2
 }
 
@@ -105,6 +106,62 @@ export const ERROR_DISPLAY_MS = 4_000
 /** Delay between simulated paste and clipboard restore. */
 export const CLIPBOARD_RESTORE_DELAY_MS = 400
 export const MAX_HISTORY_ENTRIES = 100
+
+// ── Personal lexicon (learned vocabulary) ────────────────────────────────────
+/**
+ * Terms sent in the Whisper prompt. Kept short on purpose: Whisper only attends to the last ~224
+ * prompt tokens, and long term lists measurably raise the overall error rate (rare words improve,
+ * everyday words get worse), so only the most relevant terms go in.
+ */
+export const STT_PROMPT_MAX_TERMS = 20
+/** Terms listed in the AI-cleanup prompt — an LLM has no such limit, so this can be wider. */
+export const LLM_PROMPT_MAX_TERMS = 40
+/** Mishearing hints put in one AI-cleanup prompt (only those that actually occur in the text). */
+export const LLM_MAX_CORRECTION_HINTS = 10
+/** The lexicon never grows past this; the least-confirmed, oldest unpinned entries are dropped first. */
+export const MAX_LEXICON_ENTRIES = 500
+/** A correction confirmed this many times is treated as a consistent mishearing and auto-replaced (before that it is only a hint to the AI cleanup step). */
+export const LEXICON_REPLACE_MIN_COUNT = 2
+
+// ── Suggestions mined from History + Meeting transcripts (suggestLogic.ts) ───
+/** A near-miss spelling of a known term must occur this many times before it is suggested. */
+export const SUGGEST_MIN_VARIANT_COUNT = 2
+/** A new name/brand must occur this many times, in at least SUGGEST_MIN_TERM_SOURCES separate dictations/meetings. */
+export const SUGGEST_MIN_TERM_COUNT = 3
+export const SUGGEST_MIN_TERM_SOURCES = 2
+/** At most this many suggestions are shown at once (best first). */
+export const SUGGEST_MAX_ITEMS = 12
+/** Newest finished meetings read when looking for suggestions (History is capped by MAX_HISTORY_ENTRIES). */
+export const SUGGEST_MAX_SESSIONS = 30
+/** Ignored suggestions remembered (oldest forgotten first). */
+export const SUGGEST_MAX_DISMISSED = 500
+
+// ── Writing style (styleLogic.ts) ────────────────────────────────────────────
+/** Past fixed dictations shown to the AI cleanup step as examples of how this user wants text written. */
+export const STYLE_MAX_EXEMPLARS = 4
+/** An example longer than this (either side) is skipped — long examples cost tokens and teach nothing extra. */
+export const STYLE_EXEMPLAR_MAX_CHARS = 400
+export const STYLE_EXEMPLARS_TOTAL_CHARS = 1600
+/** Newest fixes read when looking for habits. */
+export const STYLE_MAX_FIXES_SCANNED = 40
+/** A style habit needs this many fixes where it could apply, and must hold in this share of them. */
+export const STYLE_HABIT_MIN_FIXES = 4
+export const STYLE_HABIT_MIN_RATE = 0.75
+/** A word the user keeps deleting must have been deleted in this many separate fixes. */
+export const STYLE_DROP_MIN_FIXES = 3
+export const STYLE_MAX_HABITS = 6
+export const STYLE_NOTES_MAX_CHARS = 300
+
+// ── Contexts (contextLogic.ts) ───────────────────────────────────────────────
+/** Text read per context (one app's History / one Meeting Space) when ranking terms by relevance — bounds the work per dictation. */
+export const CONTEXT_MAX_CHARS = 300_000
+
+// ── Evaluation: is learning helping? (evalLogic.ts) ──────────────────────────
+export const EVAL_WEEKS_SHOWN = 8
+/** The learning on/off comparison is only shown once each side has this many dictated words. */
+export const EVAL_MIN_WORDS = 200
+/** Day-level records kept (oldest dropped first) — plenty for years of use. */
+export const EVAL_MAX_RECORDS = 1500
 
 export const OVERLAY_SIZE = 64
 /** Extra height for the preview text area below the bubble. */

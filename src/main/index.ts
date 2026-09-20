@@ -8,6 +8,7 @@ import type {
   ApiKeyTestResult,
   ContentPlatform,
   FileTranscribeResult,
+  FixHistoryResult,
   HotkeyResult,
   MeetingAudioSource,
   MeetingChatMessage,
@@ -33,6 +34,12 @@ import { meetingSessions } from './meetingSessions'
 import { meetingSpaces } from './meetingSpaces'
 import { store } from './store'
 import { history } from './history'
+import { lexicon, type LexiconPatch } from './lexicon'
+import { wordCount } from './lexiconLogic'
+import { suggestions } from './suggestions'
+import { style } from './style'
+import { contexts } from './contexts'
+import { evalLog } from './evalLog'
 import { transcribe, testApiKey } from './transcribe'
 import {
   postProcess,
@@ -49,6 +56,7 @@ import { computeStats, formatHistoryAsTxt, formatHistoryAsMd, formatHistoryAsCsv
 import { registerHotkey, unregisterAll, isHotkeyRegistered } from './hotkey'
 import { createTray, updateTray, updateTrayMenu } from './tray'
 import { initUpdater, setAutoUpdate, checkForUpdatesNow, installUpdate } from './updater'
+import { syncLaunchAtLogin } from './loginItem'
 import {
   broadcast,
   createOverlayWindow,
@@ -105,6 +113,10 @@ async function main(): Promise<void> {
 
   store.load()
   history.load()
+  lexicon.load()
+  suggestions.load()
+  style.load()
+  evalLog.load()
   auth.load()
   // Finalizes any Meeting session left stuck mid-flight by an unclean shutdown (crash,
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
@@ -164,7 +176,7 @@ async function main(): Promise<void> {
   // Some startup apps (IME, system tools) briefly hold hotkeys during login — retry silently after 3s.
   setTimeout(() => { if (!isHotkeyRegistered()) applyHotkeyFromSettings(true) }, 3_000)
   syncLaunchAtLogin(store.get())
-  store.onChange(syncLaunchAtLogin)
+  store.onChange((s) => syncLaunchAtLogin(s))
   store.onChange((s) => updateTrayMenu(s.modes, s.activeMode))
   initUpdater(store.get().autoUpdate)
   store.onChange((s) => setAutoUpdate(s.autoUpdate))
@@ -546,19 +558,25 @@ function wireIpc(): void {
       // global Dictate language — Meeting Mode is often used in a different language than
       // the hotkey/overlay flow, and forcing the wrong one here made Whisper mistranscribe
       // (or drift into translating) chunks recorded in another language entirely.
-      const sessionLangConfig = meetingSessions.getCurrent()?.languageConfig
+      const currentSession = meetingSessions.getCurrent()
+      const sessionLangConfig = currentSession?.languageConfig
+      // Terms this Meeting Space's earlier meetings keep using go first in the Whisper prompt.
+      // Captured now: by the time the queued job runs, the session may already be stopped.
+      const spaceRelevance = contexts.relevance({ spaceId: currentSession?.spaceId })
       const inputLanguage = sessionLangConfig?.input ?? 'auto'
       const transcriptLanguage = sessionLangConfig?.transcript ?? 'auto'
       const bytes = new Uint8Array(audio)
       const durationSeconds = Math.max(0, Math.round((meta.endMs - meta.startMs) / 1000))
       meetingSessions.enqueueChunk(meta, async () => {
         const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
-        const { text, detectedLanguage } = await transcribe(
+        const { text: asrText, detectedLanguage } = await transcribe(
           bytes, provider, groqApiKey, openaiApiKey, inputLanguage,
           meta.mimeType || 'audio/webm', localBaseUrl, localSttModel,
-          durationSeconds, proxyToken, vocabulary
+          durationSeconds, proxyToken, lexicon.sttTerms(vocabulary, spaceRelevance)
         )
-        if (!text) return null
+        if (!asrText) return null
+        // The user's confirmed spellings are applied to what was heard, before any translation.
+        const text = lexicon.applyReplacements(asrText)
         // Transcript language ("auto" = same as spoken) is independent of the target
         // languages for Summary/Website/etc — translate the plain transcription itself
         // only when the user explicitly picked a transcript language that actually
@@ -595,11 +613,15 @@ function wireIpc(): void {
       const mode = modes.find((m) => m.id === activeMode)
       const effectiveLang = mode?.language && mode.language !== 'auto' ? mode.language : language
       const proxyToken = provider === 'proxy' ? await auth.getValidToken() ?? undefined : undefined
+      // The app this dictation goes into, captured once: terms that app's History keeps using are
+      // preferred in both prompts, and its writing examples are the ones shown to the AI cleanup.
+      const appName = targetProcessName ?? undefined
+      const appRelevance = contexts.relevance({ app: appName })
 
       const { text: rawText, detectedLanguage } = await transcribe(
         new Uint8Array(audio), provider, groqApiKey, openaiApiKey,
         effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel,
-        durationSeconds, proxyToken, vocabulary
+        durationSeconds, proxyToken, lexicon.sttTerms(vocabulary, appRelevance)
       )
       if (!rawText) throw new Error('No speech detected')
       let text = rawText
@@ -614,7 +636,8 @@ function wireIpc(): void {
             .replace(/\[date\]/gi, now.toLocaleDateString())
             .replace(/\[time\]/gi, now.toLocaleTimeString())
           await injectText(expansion, targetWindow)
-          history.add(expansion, language === 'auto' ? undefined : language, durationSeconds)
+          // Templates are the user's own fixed text: not counted in the learning statistics.
+          history.add(expansion, { language: language === 'auto' ? undefined : language, durationSeconds })
           broadcast(IPC.INJECTION_DONE)
           pendingDoneAnimation = true
           if (continuousMode && !manualStopRequested) pendingContinuousRestart = true
@@ -639,9 +662,13 @@ function wireIpc(): void {
         return
       }
 
+      // 2b. Personal lexicon — spellings the user has confirmed (History → Edit, Learned tab).
+      // Applied after template/command matching so those still see exactly what was said.
+      text = lexicon.applyReplacements(text)
+
       // 3. AI cleanup with smart mode routing (language → app → user rules).
+      let effectiveMode = mode
       if (aiPostProcess) {
-        let effectiveMode = mode
         let appContextHint: string | undefined
 
         // Layer 1 — Language routing: Vietnamese → Vietnamese mode.
@@ -695,8 +722,10 @@ function wireIpc(): void {
 
         text = await postProcess(
           text, provider, groqApiKey, openaiApiKey,
-          effectiveMode, vocabulary, localBaseUrl, localLlmModel, appContextHint,
-          proxyToken
+          effectiveMode, lexicon.llmTerms(vocabulary, appRelevance), localBaseUrl, localLlmModel, appContextHint,
+          proxyToken, lexicon.hintsFor(text),
+          // The user's own writing conventions + a few of their hand-fixed dictations as examples.
+          style.blockFor(text, { app: appName, mode: effectiveMode?.id })
         )
       }
 
@@ -710,7 +739,22 @@ function wireIpc(): void {
 
       // 5. Inject text.
       await injectText(text, targetWindow)
-      history.add(text, language === 'auto' ? undefined : language, durationSeconds, detectTopic(text))
+      const learning = store.get().learningEnabled
+      // Counted only once the text is really in the target app. Before history.add so the
+      // History-changed event already finds it in the statistics. Counts only — never the text.
+      evalLog.recordDictation(wordCount(text), learning)
+      // rawText = what the recognizer returned, kept so later steps can see what was misheard;
+      // app / mode / learning let writing examples be matched by context and fixes be counted fairly.
+      history.add(text, {
+        language: language === 'auto' ? undefined : language,
+        durationSeconds,
+        topic: detectTopic(text),
+        rawText,
+        app: appName,
+        // Only set when the AI cleanup actually ran with a mode's prompt.
+        mode: aiPostProcess ? effectiveMode?.id : undefined,
+        learning
+      })
 
       // 6. Post-injection signals.
       broadcast(IPC.INJECTION_DONE)
@@ -728,10 +772,11 @@ function wireIpc(): void {
   ipcMain.handle(IPC.SET_SETTINGS, (_event, partial: Partial<Settings>): Settings => {
     const updated = store.set(partial)
     // Without this, toggling "Launch at login" only takes effect the next time the
-    // app happens to start on its own (syncLaunchAtLogin at startup, below) — so a
-    // user who checks the box and doesn't manually relaunch right after ends up with
-    // the setting saved but never actually registered with the OS.
-    if (partial.launchAtLogin !== undefined) syncLaunchAtLogin(updated)
+    // app happens to start on its own (syncLaunchAtLogin at startup) — so a user who
+    // checks the box and doesn't manually relaunch right after ends up with the setting
+    // saved but never actually registered with the OS. This is also the only path that
+    // lets an unpackaged dev run touch the OS (see loginItem.ts).
+    if (partial.launchAtLogin !== undefined) syncLaunchAtLogin(updated, true)
     broadcast(IPC.SETTINGS_CHANGED, updated)
     return updated
   })
@@ -762,6 +807,55 @@ function wireIpc(): void {
   })
   ipcMain.on(IPC.COPY_TEXT, (_event, text: string) => clipboard.writeText(text))
 
+  // The user corrected a History entry: save it, then learn any word-level corrections from it.
+  ipcMain.handle(IPC.HISTORY_FIX, (_event, id: string, text: string): FixHistoryResult => {
+    const learning = store.get().learningEnabled
+    const fixed = typeof text === 'string' ? text.trim() : ''
+    if (!fixed) return { ok: false, error: 'The text cannot be empty.', learned: [], learning }
+    if (!history.list().some((e) => e.id === id)) {
+      return { ok: false, error: 'That entry no longer exists.', learned: [], learning }
+    }
+    const change = history.fix(id, fixed)
+    // The fix is counted in the statistics even while learning is off — that is what the
+    // "learning on vs off" comparison is made of. Only the lexicon respects the switch.
+    if (change) evalLog.recordFix(change)
+    const learned = change ? lexicon.learnFromFix(change.before, change.after) : []
+    return { ok: true, learned, learning }
+  })
+
+  // Personal lexicon (Learned tab)
+  ipcMain.handle(IPC.LEXICON_GET, () => lexicon.list())
+  ipcMain.handle(IPC.LEXICON_ADD, (_event, term: string, heardAs: string[]): boolean => {
+    const forms = Array.isArray(heardAs) ? heardAs.filter((h): h is string => typeof h === 'string') : []
+    return typeof term === 'string' && lexicon.add(term, forms) !== null
+  })
+  ipcMain.handle(IPC.LEXICON_UPDATE, (_event, id: string, patch: LexiconPatch): boolean => {
+    return typeof id === 'string' && !!patch && lexicon.update(id, patch)
+  })
+  ipcMain.handle(IPC.LEXICON_DELETE, (_event, id: string): boolean => lexicon.remove(id))
+  ipcMain.handle(IPC.LEXICON_RESET, () => {
+    lexicon.reset()
+    suggestions.resetDismissed() // "start over" also brings back the suggestions the user had hidden
+  })
+
+  // Suggestions mined from History + Meetings (Learned tab) — candidates only; accepting adds to the lexicon
+  ipcMain.handle(IPC.SUGGESTIONS_GET, () => suggestions.list())
+  ipcMain.handle(IPC.SUGGESTIONS_ACCEPT, (_event, id: string) => suggestions.accept(id))
+  ipcMain.handle(IPC.SUGGESTIONS_DISMISS, (_event, id: string) => suggestions.dismiss(id))
+
+  // Writing style (Learned tab): the user's own notes + habits detected from their fixes
+  ipcMain.handle(IPC.STYLE_GET, () => style.profile())
+  ipcMain.handle(IPC.STYLE_SET_NOTES, (_event, notes: string) => style.setNotes(notes))
+  ipcMain.handle(IPC.STYLE_SET_HABIT, (_event, id: string, enabled: boolean) => style.setHabitEnabled(id, enabled === true))
+  ipcMain.handle(IPC.STYLE_RESET, () => style.reset())
+
+  // "Is learning helping?" — fix counts per week and with learning on vs off
+  ipcMain.handle(IPC.EVAL_GET, () => evalLog.report())
+  ipcMain.handle(IPC.EVAL_RESET, () => {
+    evalLog.reset()
+    return evalLog.report()
+  })
+
   ipcMain.handle(IPC.GET_APP_VERSION, () => app.getVersion())
   ipcMain.handle(IPC.CHECK_UPDATE, () => checkForUpdatesNow())
   ipcMain.on(IPC.INSTALL_UPDATE, () => installUpdate())
@@ -785,10 +879,10 @@ function wireIpc(): void {
         const buf = readFileSync(filePath)
         const { text } = await transcribe(
           new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath),
-          undefined, undefined, undefined, undefined, vocabulary
+          undefined, undefined, undefined, undefined, lexicon.sttTerms(vocabulary)
         )
         if (!text) return { ok: false, error: 'No speech detected in the file.' }
-        return { ok: true, text }
+        return { ok: true, text: lexicon.applyReplacements(text) }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : 'Transcription failed.' }
       }
@@ -839,6 +933,7 @@ function wireIpc(): void {
   })
 
   history.onChange((entries) => broadcast(IPC.HISTORY_CHANGED, entries))
+  lexicon.onChange((entries) => broadcast(IPC.LEXICON_CHANGED, entries))
 
   // ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -911,23 +1006,6 @@ function applyHotkeyFromSettings(silent = false): void {
   if (!result.ok && !silent) {
     notify('Wispra hotkey problem', result.error ?? 'Could not register the hotkey.')
     openSettingsWindow()
-  }
-}
-
-function syncLaunchAtLogin(settings: Settings): void {
-  if (process.platform === 'linux') return
-  if (app.isPackaged) {
-    app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin })
-  } else {
-    // In dev mode process.execPath is the raw electron.exe in node_modules. Without an
-    // explicit path/args, Windows would launch that binary with no app argument at
-    // login, which falls back to Electron's own default screen instead of Wispra —
-    // mirrors the same !app.isPackaged handling used for setAsDefaultProtocolClient above.
-    app.setLoginItemSettings({
-      openAtLogin: settings.launchAtLogin,
-      path: process.execPath,
-      args: [app.getAppPath()]
-    })
   }
 }
 

@@ -5,6 +5,7 @@ import { LanguageSection } from './sections/Language'
 import { GeneralSection } from './sections/General'
 import { UpdatesSection } from './sections/Updates'
 import { HistorySection } from './sections/History'
+import { LearnedSection } from './sections/Learned'
 import { OnboardingBanner } from './sections/Onboarding'
 import { ModesSection } from './sections/Modes'
 import { VocabularySection } from './sections/Vocabulary'
@@ -16,7 +17,7 @@ import { MeetingPanel } from '../meeting/App'
 import './settings.css'
 import '../meeting/meeting.css'
 
-type Tab = 'settings' | 'transcribe' | 'history' | 'account' | 'meeting'
+type Tab = 'settings' | 'transcribe' | 'history' | 'learned' | 'account' | 'meeting'
 
 function initialTab(): Tab {
   const t = new URLSearchParams(window.location.search).get('tab')
@@ -99,6 +100,9 @@ export function App(): React.JSX.Element {
           <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
             History
           </button>
+          <button className={tab === 'learned' ? 'active' : ''} onClick={() => setTab('learned')}>
+            Learned
+          </button>
           <button className={tab === 'account' ? 'active' : ''} onClick={() => setTab('account')}>
             Account
           </button>
@@ -138,6 +142,10 @@ export function App(): React.JSX.Element {
         <main key="history">
           <StatisticsSection />
           <HistorySection />
+        </main>
+      ) : tab === 'learned' ? (
+        <main key="learned">
+          <LearnedSection settings={settings} />
         </main>
       ) : tab === 'meeting' ? (
         <main key="meeting">

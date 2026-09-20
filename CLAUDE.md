@@ -45,6 +45,7 @@ processing: main calls Groq API (src/main/transcribe.ts, 30s timeout + 1 retry)
 - No native input-simulation deps (robotjs, nut.js). Paste simulation uses PowerShell `SendKeys` on Windows and AppleScript on macOS.
 - No new runtime npm dependencies without a strong reason — main process uses Node built-ins + Electron APIs + `fetch` only.
 - Settings/history are plain JSON files in `app.getPath('userData')` (see `store.ts`, `history.ts`).
+- OS login item goes through `loginItem.ts` only. An unpackaged (dev) run shares the installed app's default registry value name, so it must never sync at startup or on unrelated settings changes; it only writes its own `Wispra (dev)` entry when the user flips "Launch at login".
 
 ## Manual test checklist (run before ending a work session)
 

@@ -691,6 +691,458 @@ ul.history p {
   background: var(--ok-subtle);
 }
 
+.meta-mid {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.edited-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+/* Inline editor for a History entry */
+.edit-box {
+  margin-bottom: 8px;
+}
+
+.edit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.edit-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-left: 4px;
+}
+
+ul.history p.learn-note {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ok);
+  margin: 8px 0 0;
+}
+
+ul.history p.learn-note.error {
+  color: var(--danger);
+}
+
+/* ── Learned tab ──────────────────────────── */
+
+.learned-sub {
+  margin: 20px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.learned-count {
+  margin-left: 4px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.learned-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.learned-add input[type='text'] {
+  flex: 1 1 200px;
+  max-width: none;
+}
+
+.learned-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.hint.learned-note {
+  margin-top: 8px;
+}
+
+.learned-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.learned-head .learned-sub {
+  margin-bottom: 8px;
+}
+
+button.danger.armed {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+
+.learned-empty {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-3);
+  margin-top: 4px;
+}
+
+.learned-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.learned-list--paused {
+  opacity: 0.55;
+}
+
+.learned-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--r);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+}
+
+.learned-item.is-off .learned-term {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.learned-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.learned-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.learned-term {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.learned-pin {
+  font-size: 11px;
+}
+
+.mode-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  cursor: help;
+}
+
+.mode-badge.mode-replace {
+  color: var(--ok);
+  background: var(--ok-subtle);
+}
+
+.mode-badge.mode-hint {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.mode-badge.mode-spelling,
+.mode-badge.mode-off {
+  color: var(--text-2);
+  background: var(--border);
+}
+
+.learned-forms {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.learned-forms-label {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.form-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 4px 3px 9px;
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  border: 1px solid var(--border-md);
+  font-size: 12.5px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.chip-x:hover {
+  border: none;
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+
+.learned-meta {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.learned-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Learned: suggestions mined from History / Meetings ── */
+
+.suggest-list {
+  list-style: none;
+  margin: 8px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggest-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--r);
+  border: 1.5px solid var(--accent-subtle);
+  background: var(--accent-subtle);
+}
+
+.suggest-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.suggest-title {
+  font-size: 13.5px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.suggest-wrong {
+  color: var(--danger);
+}
+
+.suggest-meta {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.suggest-example {
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.suggest-example mark {
+  background: var(--accent-subtle);
+  color: var(--text);
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.suggest-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Learned: writing style ───────────────── */
+
+.style-notes {
+  position: relative;
+  margin-top: 8px;
+}
+
+.style-notes textarea {
+  padding-bottom: 22px;
+}
+
+.style-count {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.style-habits {
+  margin-top: 2px;
+}
+
+/* ── Learned: is learning helping? ────────── */
+
+.eval-headline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0 14px;
+}
+
+.eval-rate {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.eval-rate-unit {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.eval-rate-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.eval-bars {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 12px 12px 8px;
+  border-radius: var(--r);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+}
+
+.eval-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.eval-track {
+  width: 100%;
+  height: 72px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.eval-bar {
+  width: 70%;
+  max-width: 28px;
+  min-height: 3px;
+  border-radius: 4px 4px 2px 2px;
+  background: var(--accent);
+  transition: height 0.3s ease;
+}
+
+.eval-bar.is-empty {
+  height: 3px !important;
+  background: var(--border-md);
+}
+
+.eval-col-value {
+  min-height: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.eval-col-label {
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.eval-compare {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.eval-side {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: var(--r);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+}
+
+.eval-side-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.eval-side-rate {
+  margin-top: 2px;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.eval-side-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
 /* ── Onboarding banner ────────────────────── */
 
 .onboarding-banner {

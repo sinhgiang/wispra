@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { TranscriptEntry } from '@shared/types'
+import type { FixHistoryResult, TranscriptEntry } from '@shared/types'
 
 // ── Period ───────────────────────────────────────────────────
 type Period = 'all' | 'today' | 'yesterday' | '3days' | 'week' | 'older'
@@ -71,6 +71,17 @@ function formatTime(createdAt: string, period: Period): string {
 // ── Summary state ─────────────────────────────────────────────
 interface SummaryState { loading: boolean; text?: string; error?: string }
 
+// ── Edit / learning feedback ──────────────────────────────────
+/** What to tell the user right after they saved a fix: which corrections Wispra picked up (if any). */
+function learnNote(result: FixHistoryResult): string {
+  if (!result.ok) return result.error ?? 'Could not save the change.'
+  if (!result.learning) return 'Saved. Learning is off, so nothing was learned.'
+  if (result.learned.length === 0) return 'Saved. No word corrections detected.'
+  const shown = result.learned.slice(0, 3).map((p) => `“${p.heardAs}” → “${p.term}”`).join(', ')
+  const more = result.learned.length > 3 ? ` and ${result.learned.length - 3} more` : ''
+  return `Learned: ${shown}${more}. Manage in the Learned tab.`
+}
+
 // ── Component ─────────────────────────────────────────────────
 export function HistorySection(): React.JSX.Element {
   const [entries,   setEntries]   = useState<TranscriptEntry[]>([])
@@ -78,11 +89,34 @@ export function HistorySection(): React.JSX.Element {
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [summaries, setSummaries] = useState<Record<string, SummaryState>>({})
   const [copiedId,  setCopiedId]  = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draft,     setDraft]     = useState('')
+  const [saving,    setSaving]    = useState(false)
+  const [notes,     setNotes]     = useState<Record<string, { text: string; error: boolean }>>({})
 
   useEffect(() => {
     void window.api.getHistory().then(setEntries)
     window.api.onHistoryChanged(setEntries)
   }, [])
+
+  function startEdit(entry: TranscriptEntry): void {
+    setEditingId(entry.id)
+    setDraft(entry.text)
+    setNotes((n) => { const next = { ...n }; delete next[entry.id]; return next })
+  }
+
+  async function saveEdit(entry: TranscriptEntry): Promise<void> {
+    setSaving(true)
+    try {
+      const result = await window.api.fixHistoryEntry(entry.id, draft)
+      setNotes((n) => ({ ...n, [entry.id]: { text: learnNote(result), error: !result.ok } }))
+      if (result.ok) setEditingId(null)
+    } catch {
+      setNotes((n) => ({ ...n, [entry.id]: { text: 'Could not save the change.', error: true } }))
+    } finally {
+      setSaving(false)
+    }
+  }
 
   function changePeriod(p: Period): void {
     setPeriod(p)
@@ -190,9 +224,37 @@ export function HistorySection(): React.JSX.Element {
           <ul className="history">
             {filtered.map((entry) => {
               const tag = getTag(entry)
+              const editing = editingId === entry.id
+              const note = notes[entry.id]
               return (
                 <li key={entry.id}>
-                  <p>{entry.text}</p>
+                  {editing ? (
+                    <div className="edit-box">
+                      <textarea
+                        value={draft}
+                        rows={Math.min(8, Math.max(2, Math.ceil(draft.length / 80)))}
+                        autoFocus
+                        onChange={(e) => setDraft(e.target.value)}
+                      />
+                      <div className="edit-actions">
+                        <button
+                          className="primary copy-btn"
+                          disabled={saving || !draft.trim()}
+                          onClick={() => void saveEdit(entry)}
+                        >
+                          {saving ? 'Saving…' : 'Save'}
+                        </button>
+                        <button className="copy-btn" disabled={saving} onClick={() => setEditingId(null)}>
+                          Cancel
+                        </button>
+                        <span className="edit-hint">
+                          Fix the words Wispra got wrong — it learns your spelling from what you change.
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p>{entry.text}</p>
+                  )}
                   <div className="meta">
                     <button
                       className={`entry-tag-btn${activeTag === tag ? ' active' : ''}`}
@@ -201,14 +263,27 @@ export function HistorySection(): React.JSX.Element {
                     >
                       {TOPIC_ICON[tag] ?? '📌'} #{tag}
                     </button>
-                    <span className="meta-time">{formatTime(entry.createdAt, period)}</span>
-                    <button
-                      className={`copy-btn${copiedId === entry.id ? ' copied' : ''}`}
-                      onClick={() => copy(entry)}
-                    >
-                      {copiedId === entry.id ? 'Copied' : 'Copy'}
-                    </button>
+                    <span className="meta-mid">
+                      <span className="meta-time">{formatTime(entry.createdAt, period)}</span>
+                      {entry.originalText !== undefined && (
+                        <span className="edited-chip" title="You corrected this dictation">edited</span>
+                      )}
+                    </span>
+                    <span className="meta-actions">
+                      {!editing && (
+                        <button className="copy-btn" onClick={() => startEdit(entry)}>
+                          Edit
+                        </button>
+                      )}
+                      <button
+                        className={`copy-btn${copiedId === entry.id ? ' copied' : ''}`}
+                        onClick={() => copy(entry)}
+                      >
+                        {copiedId === entry.id ? 'Copied' : 'Copy'}
+                      </button>
+                    </span>
                   </div>
+                  {note && <p className={`learn-note${note.error ? ' error' : ''}`}>{note.text}</p>}
                 </li>
               )
             })}

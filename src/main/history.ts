@@ -5,6 +5,31 @@ import { randomUUID } from 'crypto'
 import { MAX_HISTORY_ENTRIES } from '@shared/constants'
 import type { TranscriptEntry } from '@shared/types'
 
+/** Everything about a dictation besides its text. All optional: templates and older callers know less. */
+export interface HistoryMeta {
+  language?: string
+  durationSeconds?: number
+  topic?: string
+  /** Speech-to-text output before any learned replacement or AI cleanup. */
+  rawText?: string
+  /** Process name of the app the text went into. */
+  app?: string
+  /** Id of the mode whose cleanup prompt ran. */
+  mode?: string
+  /** Whether "Learn from my corrections" was on. */
+  learning?: boolean
+}
+
+/** What a History fix changed — enough for the lexicon (before/after) and the statistics (original, when, learning). */
+export interface FixChange {
+  before: string
+  after: string
+  /** What Wispra first typed (stays the same across repeated fixes). */
+  original: string
+  createdAt: string
+  learning?: boolean
+}
+
 /** Recent transcripts, newest first, persisted as JSON in userData. */
 class History {
   private entries: TranscriptEntry[] = []
@@ -27,17 +52,31 @@ class History {
     return [...this.entries]
   }
 
-  add(text: string, language?: string, durationSeconds?: number, topic?: string): void {
+  add(text: string, meta: HistoryMeta = {}): void {
     this.entries.unshift({
       id: randomUUID(),
       text,
       createdAt: new Date().toISOString(),
-      language,
-      durationSeconds,
-      topic
+      ...meta
     })
     this.entries = this.entries.slice(0, MAX_HISTORY_ENTRIES)
     this.persist()
+  }
+
+  /**
+   * The user corrected an entry's text. Keeps the first version Wispra produced in `originalText`
+   * (so repeated edits still compare against what was actually typed) and returns before/after,
+   * or null when the entry is gone or the text didn't change.
+   */
+  fix(id: string, text: string): FixChange | null {
+    const entry = this.entries.find((e) => e.id === id)
+    const after = text.trim()
+    if (!entry || !after || after === entry.text) return null
+    const before = entry.text
+    entry.originalText ??= before
+    entry.text = after
+    this.persist()
+    return { before, after, original: entry.originalText, createdAt: entry.createdAt, learning: entry.learning }
   }
 
   clear(): void {

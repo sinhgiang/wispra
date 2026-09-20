@@ -1,11 +1,14 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
   ApiKeyTestResult,
   ContentPlatform,
+  EvalReport,
   FileTranscribeResult,
+  FixHistoryResult,
   HotkeyResult,
+  LexiconEntry,
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContentResult,
@@ -17,6 +20,8 @@ import type {
   MeetingState,
   Settings,
   StatePayload,
+  StyleProfile,
+  Suggestion,
   TranscriptEntry,
   UpdateStatus,
   UsageStats
@@ -55,10 +60,50 @@ const api = {
   // --- history ---
   getHistory: (): Promise<TranscriptEntry[]> => ipcRenderer.invoke(IPC.GET_HISTORY),
   clearHistory: (): Promise<void> => ipcRenderer.invoke(IPC.CLEAR_HISTORY),
-  onHistoryChanged: (cb: (entries: TranscriptEntry[]) => void): void => {
-    ipcRenderer.on(IPC.HISTORY_CHANGED, (_e, entries: TranscriptEntry[]) => cb(entries))
+  /** Returns an unsubscribe function; callers that live as long as the window can ignore it. */
+  onHistoryChanged: (cb: (entries: TranscriptEntry[]) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, entries: TranscriptEntry[]): void => cb(entries)
+    ipcRenderer.on(IPC.HISTORY_CHANGED, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.HISTORY_CHANGED, listener)
+    }
   },
   copyText: (text: string): void => ipcRenderer.send(IPC.COPY_TEXT, text),
+  fixHistoryEntry: (id: string, text: string): Promise<FixHistoryResult> =>
+    ipcRenderer.invoke(IPC.HISTORY_FIX, id, text),
+
+  // --- personal lexicon (Learned tab) ---
+  getLexicon: (): Promise<LexiconEntry[]> => ipcRenderer.invoke(IPC.LEXICON_GET),
+  addLexiconEntry: (term: string, heardAs: string[]): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.LEXICON_ADD, term, heardAs),
+  updateLexiconEntry: (
+    id: string,
+    patch: Partial<Pick<LexiconEntry, 'enabled' | 'pinned' | 'heardAs'>>
+  ): Promise<boolean> => ipcRenderer.invoke(IPC.LEXICON_UPDATE, id, patch),
+  deleteLexiconEntry: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.LEXICON_DELETE, id),
+  resetLexicon: (): Promise<void> => ipcRenderer.invoke(IPC.LEXICON_RESET),
+  /** Returns an unsubscribe function, so a section can stop listening when it unmounts. */
+  onLexiconChanged: (cb: (entries: LexiconEntry[]) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, entries: LexiconEntry[]): void => cb(entries)
+    ipcRenderer.on(IPC.LEXICON_CHANGED, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.LEXICON_CHANGED, listener)
+    }
+  },
+
+  // --- suggestions mined from History + Meetings (Learned tab) ---
+  getSuggestions: (): Promise<Suggestion[]> => ipcRenderer.invoke(IPC.SUGGESTIONS_GET),
+  acceptSuggestion: (id: string): Promise<Suggestion[]> => ipcRenderer.invoke(IPC.SUGGESTIONS_ACCEPT, id),
+  dismissSuggestion: (id: string): Promise<Suggestion[]> => ipcRenderer.invoke(IPC.SUGGESTIONS_DISMISS, id),
+
+  // --- writing style + "is learning helping?" statistics (Learned tab) ---
+  getStyle: (): Promise<StyleProfile> => ipcRenderer.invoke(IPC.STYLE_GET),
+  setStyleNotes: (notes: string): Promise<StyleProfile> => ipcRenderer.invoke(IPC.STYLE_SET_NOTES, notes),
+  setStyleHabit: (id: string, enabled: boolean): Promise<StyleProfile> =>
+    ipcRenderer.invoke(IPC.STYLE_SET_HABIT, id, enabled),
+  resetStyle: (): Promise<StyleProfile> => ipcRenderer.invoke(IPC.STYLE_RESET),
+  getEval: (): Promise<EvalReport> => ipcRenderer.invoke(IPC.EVAL_GET),
+  resetEval: (): Promise<EvalReport> => ipcRenderer.invoke(IPC.EVAL_RESET),
 
   // --- updates ---
   getAppVersion: (): Promise<string> => ipcRenderer.invoke(IPC.GET_APP_VERSION),

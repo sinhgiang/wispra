@@ -1,5 +1,6 @@
 import { GROQ_API_BASE, LANGUAGES, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
 import type { ContentPlatform, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
+import type { CorrectionHint } from './lexiconLogic'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -16,10 +17,27 @@ const CRITICAL_RULES = `CRITICAL RULES:
 
 const FILLER_INSTRUCTION = `- Remove filler words and sounds: "ừm", "ừ", "à", "ờ", "thì là", "ý là", "kiểu như", "kiểu", "như là", "đó là", "thì", "mà", "uh", "um", "erm", "like", "you know", "I mean", "so", "right", "basically", "literally", "actually" (only when used as meaningless fillers, not when they carry real meaning)`
 
-function buildSystemPrompt(mode?: Mode, vocabulary?: string[], appContextHint?: string): string {
+function buildSystemPrompt(
+  mode?: Mode,
+  vocabulary?: string[],
+  appContextHint?: string,
+  corrections?: CorrectionHint[],
+  // The user's own writing conventions and past fixes (style.ts). Empty, or a section ending in a
+  // blank line; placed after the mode's instructions so a personal habit wins over a generic rule.
+  styleBlock = ''
+): string {
   const vocabLine =
     vocabulary && vocabulary.length > 0
       ? `- Preserve exact spelling of these proper nouns/terms: ${vocabulary.join(', ')}\n`
+      : ''
+
+  // Mishearings the user has corrected before but not often enough to be replaced automatically:
+  // the model decides from context whether this occurrence is the same mistake.
+  const hintLine =
+    corrections && corrections.length > 0
+      ? `- The speech recognizer sometimes mishears this user's own terms. Where the sentence clearly means the term, correct it: ${corrections
+          .map((c) => `"${c.heardAs}" → "${c.term}"`)
+          .join('; ')}. If the wording is a genuinely different, ordinary use, leave it.\n`
       : ''
 
   const contextLine = appContextHint
@@ -27,18 +45,18 @@ function buildSystemPrompt(mode?: Mode, vocabulary?: string[], appContextHint?: 
     : ''
 
   if (mode?.prompt) {
-    const extra = vocabLine ? `\n- ${vocabLine.trim()}` : ''
-    return `${contextLine}${mode.prompt}${extra}\n\n${CRITICAL_RULES}`
+    const extra = vocabLine || hintLine ? `\n${vocabLine}${hintLine}`.trimEnd() : ''
+    return `${contextLine}${mode.prompt}${extra}\n\n${styleBlock}${CRITICAL_RULES}`
   }
 
   const fillerLine = !mode || mode.removeFiller ? `${FILLER_INSTRUCTION}\n` : ''
   return `${contextLine}You are a transcription editor. Fix the raw speech-to-text output:
-${fillerLine}${vocabLine}- Capitalize the first word of every sentence and all proper nouns (names of people, places, organizations)
+${fillerLine}${vocabLine}${hintLine}- Capitalize the first word of every sentence and all proper nouns (names of people, places, organizations)
 - Add missing punctuation: period (.) at end of sentences, comma (,) between clauses and after introductory phrases, question mark (?) for questions
 - Fix obvious spelling errors or misheard words
 - Correct Vietnamese diacritics/tones if wrong
 
-${CRITICAL_RULES}`
+${styleBlock}${CRITICAL_RULES}`
 }
 
 // Split long text into chunks to avoid LLM token limits
@@ -89,7 +107,9 @@ export async function postProcess(
   localBaseUrl?: string,
   localLlmModel?: string,
   appContextHint?: string,
-  proxyToken?: string
+  proxyToken?: string,
+  corrections?: CorrectionHint[],
+  styleBlock?: string
 ): Promise<string> {
   if (!text.trim()) return text
 
@@ -114,7 +134,7 @@ export async function postProcess(
     model = provider === 'openai' ? OPENAI_CHAT_MODEL : GROQ_CHAT_MODEL
   }
 
-  const systemPrompt = buildSystemPrompt(mode, vocabulary, appContextHint)
+  const systemPrompt = buildSystemPrompt(mode, vocabulary, appContextHint, corrections, styleBlock)
 
   // For long texts, process in parallel chunks to avoid token limit truncation
   const chunks = splitIntoChunks(text)
