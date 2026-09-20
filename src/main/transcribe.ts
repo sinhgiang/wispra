@@ -75,6 +75,14 @@ const HALLUCINATION_PHRASES = [
 ]
 
 /**
+ * Hallucinations that are only ever safe to drop when they are the WHOLE sentence — unlike
+ * HALLUCINATION_PHRASES these are matched by equality, not substring, because each could
+ * legitimately open a real sentence ("Kết thúc video này, chúng ta sẽ…"). Compared after
+ * normalisation (lowercase, no end punctuation).
+ */
+const HALLUCINATION_SENTENCES = new Set(['kết thúc video'])
+
+/**
  * Whisper's optional "prompt" field. Two effects, both documented by OpenAI's own
  * prompting guide: (1) the model tends to mirror the prompt's writing style, so a
  * fully-accented, punctuated Vietnamese prompt makes fully-accented, punctuated
@@ -140,6 +148,46 @@ function isPromptEcho(sentence: string, promptWords: Set<string>): boolean {
   return overlap / words.length >= 0.5
 }
 
+/** Lowercased letter/digit tokens. Splits on "/" and punctuation too, so the prompt's "từ/tên" becomes "từ", "tên". */
+function wordTokens(text: string): string[] {
+  return text.normalize('NFC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+}
+
+/** Length of the longest common subsequence of two word lists (order-preserving, gaps allowed). */
+function lcsLength(a: string[], b: string[]): number {
+  let prev = new Array<number>(b.length + 1).fill(0)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Array<number>(b.length + 1).fill(0)
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
+    }
+    prev = cur
+  }
+  return prev[b.length]
+}
+
+/**
+ * Second prompt-echo check, for what isPromptEcho cannot see. That one only looks at words of
+ * 4+ characters, but Vietnamese syllables are mostly 2–3 characters ("các từ … cần giữ nguyên"),
+ * so a garbled echo of the prompt's vocabulary line — real case: the prompt says "Các từ/tên
+ * riêng cần giữ nguyên: Github." and Whisper answered silence with "Các từ vài chữ khác cần giữ
+ * nguyên." — slipped straight through.
+ *
+ * Here a sentence is an echo when it shares an ordered run of at least 4 words with ONE prompt
+ * sentence AND that run makes up at least half of BOTH sentences. Requiring it of both sides is
+ * what keeps real speech safe: "Đây là bản ghi âm cuộc họp hôm qua" opens like the prompt's first
+ * sentence, but those 5 words are a small part of the 23-word prompt sentence, so it is kept.
+ */
+function isGarbledPromptEcho(sentence: string, promptSentences: string[][]): boolean {
+  const words = wordTokens(sentence)
+  if (words.length < 4) return false
+  return promptSentences.some((prompt) => {
+    if (prompt.length < 4) return false
+    const common = lcsLength(words, prompt)
+    return common >= 4 && common / words.length >= 0.5 && common / prompt.length >= 0.5
+  })
+}
+
 /**
  * Drops sentences matching a known hallucination phrase or echoing the STT
  * prompt itself, and collapses a sentence repeated 3+ times verbatim —
@@ -150,12 +198,14 @@ function filterKnownHallucinations(text: string, sttPrompt?: string): string {
   const seen = new Map<string, number>()
   const kept: string[] = []
   const promptWords = sttPrompt ? distinctiveWords(sttPrompt) : new Set<string>()
+  const promptSentences = sttPrompt ? splitSentences(sttPrompt).map(wordTokens) : []
 
   for (const sentence of splitSentences(text)) {
-    const normalized = sentence.toLowerCase().replace(/[.,!?。，！？]+/g, '').trim()
+    const normalized = sentence.normalize('NFC').toLowerCase().replace(/[.,!?。，！？]+/g, '').trim()
     if (!normalized) continue
+    if (HALLUCINATION_SENTENCES.has(normalized)) continue
     if (HALLUCINATION_PHRASES.some((p) => normalized.includes(p))) continue
-    if (isPromptEcho(normalized, promptWords)) continue
+    if (isPromptEcho(normalized, promptWords) || isGarbledPromptEcho(normalized, promptSentences)) continue
 
     const count = (seen.get(normalized) ?? 0) + 1
     seen.set(normalized, count)

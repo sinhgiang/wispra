@@ -27,8 +27,12 @@ export function App(): React.JSX.Element {
     const recorder = recorderRef.current
     void recorder.stop().then((result) => {
       setLevel(0)
-      if (result) window.api.sendAudio(result.audio, result.durationSeconds, result.mimeType)
-      else window.api.recordingFailed('Recording produced no audio')
+      if (!result) window.api.recordingFailed('Recording produced no audio')
+      // Silent recording: report it here instead of sending it — Whisper hallucinates text
+      // (its own prompt, "Kết thúc video", …) when handed silence, and it would also burn quota.
+      // Goes through the same error path as an empty transcription, so state returns to idle.
+      else if (!result.hasSpeech) window.api.recordingFailed('No speech detected')
+      else window.api.sendAudio(result.audio, result.durationSeconds, result.mimeType)
     })
   }, [])
 

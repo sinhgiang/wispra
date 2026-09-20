@@ -52,6 +52,8 @@ export class MeetingRecorder {
   private mimeType = ''
   private intervalId: ReturnType<typeof setInterval> | null = null
   private cutter: ChunkCutter | null = null
+  /** The in-flight segment's speech flag; replaced by beginSegment(), and captured by that segment's own onstop so a late-firing stop can't read the next segment's flag. */
+  private segment: { hadSpeech: boolean } | null = null
   private sessionStartedAt = 0
   /** Total milliseconds spent paused so far (completed pauses only). */
   private pausedAccumMs = 0
@@ -186,6 +188,9 @@ export class MeetingRecorder {
     this.stream = newStream
     this.onChunk = onChunk
     this.beginSegment(now)
+    // The switch is a chunk boundary, so the new segment starts with a clean speech state —
+    // otherwise it would inherit "speech seen" from the segment that just ended.
+    this.cutter?.reset(now)
 
     if (oldIntervalId !== null) clearInterval(oldIntervalId)
     if (oldRecorder && oldRecorder.state !== 'inactive') oldRecorder.stop()
@@ -323,10 +328,17 @@ export class MeetingRecorder {
     const startedAt = new Date().toISOString()
     const rec = new MediaRecorder(this.stream, this.mimeType ? { mimeType: this.mimeType } : {})
     const chunks: Blob[] = []
+    const segment = { hadSpeech: false }
+    this.segment = segment
     rec.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data)
     }
     rec.onstop = () => {
+      // Stop/Pause/source-switch end the segment wherever it happens to be, so it may hold
+      // nothing but silence (e.g. the quiet stretch after the last sentence). Whisper answers
+      // silence with invented text — and that fake "speech" would also defeat the 5-minute
+      // silence auto-stop — so a segment with no detected speech is never transcribed.
+      if (!segment.hadSpeech) return
       const blob = new Blob(chunks, { type: rec.mimeType || this.mimeType || 'audio/webm' })
       const endMs = this.activeMs()
       this.onChunk?.({ blob, mimeType: blob.type, startMs, endMs, startedAt })
@@ -363,7 +375,10 @@ export class MeetingRecorder {
       const now = this.activeMs()
       const level = Math.min(1, Math.sqrt(sum / data.length) * 3)
       onLevel(level)
-      if (this.cutter.update(level, now)) {
+      const shouldCut = this.cutter.update(level, now)
+      // Must be read before reset(), which clears the cutter's speech state for the next chunk.
+      if (this.segment && this.cutter.hasSpeech) this.segment.hadSpeech = true
+      if (shouldCut) {
         this.cutter.reset(now)
         this.cutSegment(now)
       }

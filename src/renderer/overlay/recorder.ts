@@ -1,3 +1,13 @@
+import { hasEnoughSpeech } from './speechGate'
+
+export interface RecordingResult {
+  audio: ArrayBuffer
+  durationSeconds: number
+  mimeType: string
+  /** False when the recording is (near-)silent — the caller must NOT send it to the STT provider. */
+  hasSpeech: boolean
+}
+
 /**
  * Microphone capture for the overlay. One recording at a time;
  * the mic and AudioContext are released the moment recording stops.
@@ -35,7 +45,7 @@ export class Recorder {
   }
 
   /** Stops and resolves with WAV audio (universally accepted by STT APIs). */
-  stop(): Promise<{ audio: ArrayBuffer; durationSeconds: number; mimeType: string } | null> {
+  stop(): Promise<RecordingResult | null> {
     const recorder = this.mediaRecorder
     if (!recorder || this.stopping) return Promise.resolve(null)
     this.stopping = true
@@ -47,11 +57,12 @@ export class Recorder {
         const blob = new Blob(this.chunks, { type: mimeType })
         this.cleanup()
         try {
-          const wav = await encodeWav(blob)
-          resolve({ audio: wav, durationSeconds, mimeType: 'audio/wav' })
+          const { wav, hasSpeech } = await encodeWav(blob)
+          resolve({ audio: wav, durationSeconds, mimeType: 'audio/wav', hasSpeech })
         } catch {
-          // Fallback: send raw webm if WAV conversion fails
-          resolve({ audio: await blob.arrayBuffer(), durationSeconds, mimeType })
+          // Fallback: send raw webm if WAV conversion fails. Speech presence can't be
+          // measured without decoded PCM, so fail open rather than drop a real dictation.
+          resolve({ audio: await blob.arrayBuffer(), durationSeconds, mimeType, hasSpeech: true })
         }
       }
       recorder.stop()
@@ -113,6 +124,8 @@ const SILENCE_PAD_SAMPLES = Math.ceil(WAV_SAMPLE_RATE * 0.3)
 /**
  * Removes trailing silence from PCM data before it is sent to Whisper.
  * Without this, Whisper hallucinates text during silent portions at the end of recordings.
+ * Only trims when speech was found — an entirely silent recording is left untouched here,
+ * which is why the caller must also gate on hasEnoughSpeech() before sending anything.
  */
 function trimTrailingSilence(samples: Float32Array, sampleRate: number): Float32Array {
   const windowSamples = Math.ceil(sampleRate * 0.02) // 20 ms analysis window
@@ -134,8 +147,8 @@ function trimTrailingSilence(samples: Float32Array, sampleRate: number): Float32
   return samples.slice(0, Math.max(lastSpeechEnd, minLength))
 }
 
-/** Decode any MediaRecorder blob → 16kHz mono 16-bit WAV (no library needed). */
-async function encodeWav(blob: Blob): Promise<ArrayBuffer> {
+/** Decode any MediaRecorder blob → 16kHz mono 16-bit WAV (no library needed), plus whether it contains any real speech. */
+async function encodeWav(blob: Blob): Promise<{ wav: ArrayBuffer; hasSpeech: boolean }> {
   // Decode the compressed blob into raw PCM
   const decodeCtx = new AudioContext()
   const decoded = await decodeCtx.decodeAudioData(await blob.arrayBuffer())
@@ -150,7 +163,10 @@ async function encodeWav(blob: Blob): Promise<ArrayBuffer> {
   src.start()
   const resampled = await offlineCtx.startRendering()
 
-  const channelData = trimTrailingSilence(resampled.getChannelData(0), WAV_SAMPLE_RATE)
+  const rawSamples = resampled.getChannelData(0)
+  // Measured on the untrimmed samples so it reflects the whole recording.
+  const hasSpeech = hasEnoughSpeech(rawSamples, WAV_SAMPLE_RATE)
+  const channelData = trimTrailingSilence(rawSamples, WAV_SAMPLE_RATE)
 
   // Float32 → Int16 PCM
   const pcm = new Int16Array(channelData.length)
@@ -170,5 +186,5 @@ async function encodeWav(blob: Blob): Promise<ArrayBuffer> {
   v.setUint32(28, WAV_SAMPLE_RATE * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true)
   w(36, 'data'); v.setUint32(40, dataBytes, true)
   new Int16Array(wav, 44).set(pcm)
-  return wav
+  return { wav, hasSpeech }
 }

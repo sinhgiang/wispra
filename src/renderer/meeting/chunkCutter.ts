@@ -1,4 +1,13 @@
-import { MEETING_HARD_CAP_MS, MEETING_MIN_SPEECH_MS, MEETING_SOFT_CUT_MS, SILENCE_THRESHOLD } from '@shared/constants'
+import {
+  MEETING_HARD_CAP_MS,
+  MEETING_MIN_SPEECH_MS,
+  MEETING_MIN_VOICED_MS,
+  MEETING_SOFT_CUT_MS,
+  SILENCE_THRESHOLD
+} from '@shared/constants'
+
+/** Longest gap between two readings that still counts as continuous time (two 100 ms ticks). Kept below MEETING_MIN_VOICED_MS so a single late tick after a stalled timer (throttled/backgrounded window) can never by itself credit enough "speech". */
+const MAX_READING_GAP_MS = 200
 
 /**
  * Pure decision logic for where to cut a continuous mic stream into chunks.
@@ -20,9 +29,14 @@ import { MEETING_HARD_CAP_MS, MEETING_MIN_SPEECH_MS, MEETING_SOFT_CUT_MS, SILENC
  *    ends the chunk at that pause.
  *  - Safety net: a chunk is force-cut after MEETING_HARD_CAP_MS of speech even
  *    without a pause, so one long monologue can't grow unbounded.
+ *  - `hasSpeech` tells the recorder whether the current chunk holds any real speech, so
+ *    the chunk flushed by Stop/Pause is dropped instead of transcribed when it doesn't.
  */
 export class ChunkCutter {
   private chunkStartedAt: number
+  private lastUpdateAt: number
+  /** Total time spent above SILENCE_THRESHOLD in this chunk, contiguous or not. */
+  private voicedMs = 0
   private speechStartedAt: number | null = null
   private silenceStartedAt: number | null = null
   /** First moment of the current unbroken above-threshold streak — not yet "confirmed" as real speech until it holds for MEETING_MIN_SPEECH_MS. Cleared the instant the level drops back to silence, so brief spikes never carry over into the next streak. */
@@ -30,11 +44,14 @@ export class ChunkCutter {
 
   constructor(now: number) {
     this.chunkStartedAt = now
+    this.lastUpdateAt = now
   }
 
   /** Feed one level reading (0..1 RMS, same scale as the existing overlay recorder). Returns true if this reading should end the current chunk. */
   update(level: number, now: number): boolean {
     const isSpeech = level > SILENCE_THRESHOLD
+    if (isSpeech) this.voicedMs += Math.min(Math.max(0, now - this.lastUpdateAt), MAX_READING_GAP_MS)
+    this.lastUpdateAt = now
 
     if (isSpeech) {
       if (this.pendingSpeechAt === null) this.pendingSpeechAt = now
@@ -54,9 +71,16 @@ export class ChunkCutter {
     return softCut || hardCut
   }
 
+  /** True once the current chunk has real speech in it: a confirmed run, or enough total voiced time. Read right after `update()` and before `reset()`. */
+  get hasSpeech(): boolean {
+    return this.speechStartedAt !== null || this.voicedMs >= MEETING_MIN_VOICED_MS
+  }
+
   /** Call right after `update()` returns true, before feeding the next reading. */
   reset(now: number): void {
     this.chunkStartedAt = now
+    this.lastUpdateAt = now
+    this.voicedMs = 0
     this.speechStartedAt = null
     this.silenceStartedAt = null
     this.pendingSpeechAt = null

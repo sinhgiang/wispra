@@ -115,6 +115,15 @@ export const PREVIEW_DELAY_MS = 2500
 export const SILENCE_THRESHOLD = 0.018
 /** Milliseconds of continuous silence before auto-stopping in auto-stop mode. */
 export const SILENCE_DURATION_MS = 3000
+/**
+ * Dictate speech gate (renderer/overlay/speechGate.ts): a recording is only sent to the STT
+ * provider if it holds at least SPEECH_GATE_MIN_VOICED_MS of 20 ms windows whose RMS exceeds
+ * SPEECH_GATE_RMS. Whisper invents text (echoes its own prompt, YouTube outros) when handed
+ * silence, so silent audio must never reach it. SPEECH_GATE_RMS is the sample-level RMS
+ * equivalent of SILENCE_THRESHOLD (which is measured after the recorders' x3 level gain).
+ */
+export const SPEECH_GATE_RMS = 0.006
+export const SPEECH_GATE_MIN_VOICED_MS = 200
 
 // ── Meeting mode chunk cutting (reuses SILENCE_THRESHOLD as the "is this silence" level) ────
 /** Natural-pause chunk cut: silence duration that ends a chunk once speech has started. */
@@ -130,6 +139,14 @@ export const MEETING_HARD_CAP_MS = 20_000
  * ticks, which real speech always clears but a one-tick blip cannot.
  */
 export const MEETING_MIN_SPEECH_MS = 200
+/**
+ * Stop / Pause / audio-source switch flush the in-flight segment whether or not anyone spoke
+ * in it, so a segment is only transcribed if ChunkCutter saw real speech in it: either one
+ * confirmed run (MEETING_MIN_SPEECH_MS) or at least this much total time above SILENCE_THRESHOLD
+ * (not necessarily contiguous). Deliberately lenient — a dropped segment is lost speech, while
+ * a false positive only costs one API call that the hallucination filters can still catch.
+ */
+export const MEETING_MIN_VOICED_MS = 300
 /**
  * Meeting Mode safety net: if a recording sits this long with no real (non-empty)
  * transcribed speech at all, auto-stop it exactly like a manual Stop — covers a
