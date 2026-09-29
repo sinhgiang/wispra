@@ -45,6 +45,14 @@ export const IPC = {
   // renderer -> main: never show suggestion `id` again; resolves the refreshed Suggestion[]
   SUGGESTIONS_DISMISS: 'suggestions:dismiss',
 
+  // vocabulary Wispra learned by itself from History/Meetings (a spelling bias for the recogniser, never a rewrite)
+  // renderer -> main: resolves AutoTerm[] (empty while learning or automatic learning is off)
+  AUTOVOCAB_GET: 'autovocab:get',
+  // renderer -> main: make term `id` one of the user's own words; resolves the refreshed AutoTerm[]
+  AUTOVOCAB_KEEP: 'autovocab:keep',
+  // renderer -> main: never learn term `id` again; resolves the refreshed AutoTerm[]
+  AUTOVOCAB_REMOVE: 'autovocab:remove',
+
   // writing style learned from the user's fixes (Learned tab)
   // renderer -> main: resolves the StyleProfile (notes + detected habits + example count)
   STYLE_GET: 'style:get',

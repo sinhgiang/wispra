@@ -8,10 +8,12 @@ import type { LexiconEntry } from '@shared/types'
  * plain strings. Persistence and settings live in lexicon.ts.
  *
  * How the lexicon learns without poisoning itself: the app's own output already contains its
- * mistakes ("Cloud Code"), so nothing is ever mined from History automatically. An entry only
+ * mistakes ("Cloud Code"), so no ENTRY is ever created from History automatically. An entry only
  * appears when the user explicitly fixes a dictation (or types the entry in themselves), and a
  * correction learned from a single fix is only a HINT to the AI cleanup step until the user has
  * confirmed the same correction again (LEXICON_REPLACE_MIN_COUNT) or pinned it.
+ * What Wispra finds in History by itself (autoVocabLogic.ts) never becomes an entry and never
+ * rewrites text: it is only appended to the speech-recogniser prompt as a spelling to prefer.
  */
 
 /** A mishearing → correction pair pulled out of one user fix. */
@@ -407,12 +409,16 @@ export function selectHints(text: string, entries: LexiconEntry[], limit = LLM_M
  * in this app / meeting space). It only matters when there are more candidates than `limit`: then
  * the unpinned terms that belong to this context beat equally-confirmed ones that do not. It is
  * not called at all when everything fits.
+ *
+ * `auto` are terms Wispra found in the user's own History by itself (autoVocabLogic.ts). They are
+ * the least certain, so they come last and only take the room the user's own words leave over.
  */
 export function selectTerms(
   manual: string[],
   entries: LexiconEntry[],
   limit: number,
-  relevance?: (term: string) => number
+  relevance?: (term: string) => number,
+  auto: string[] = []
 ): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -435,5 +441,15 @@ export function selectTerms(
     rest.sort((x, y) => (score.get(y.id) ?? 0) - (score.get(x.id) ?? 0) || byPriority(x, y))
   }
   for (const e of rest) push(e.term)
+
+  if (auto.length > 0 && out.length < limit) {
+    const extra = auto.filter((t) => !seen.has(normKey(t)))
+    if (relevance && extra.length > limit - out.length) {
+      const score = new Map(extra.map((t) => [t, relevance(t)]))
+      const rank = new Map(extra.map((t, i) => [t, i]))
+      extra.sort((x, y) => (score.get(y) ?? 0) - (score.get(x) ?? 0) || (rank.get(x) ?? 0) - (rank.get(y) ?? 0))
+    }
+    for (const t of extra) push(t)
+  }
   return out.slice(0, limit)
 }

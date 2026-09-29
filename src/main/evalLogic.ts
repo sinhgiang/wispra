@@ -14,7 +14,7 @@ import { countWordEdits } from './lexiconLogic'
 export interface EvalRecord {
   /** Local calendar day of the dictation, YYYY-MM-DD. */
   day: string
-  /** Whether "Learn from my corrections" was on when it was dictated. */
+  /** Whether "Learn my words" was on when it was dictated. */
   learning: boolean
   dictations: number
   words: number

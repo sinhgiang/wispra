@@ -37,6 +37,7 @@ import { history } from './history'
 import { lexicon, type LexiconPatch } from './lexicon'
 import { wordCount } from './lexiconLogic'
 import { suggestions } from './suggestions'
+import { autoVocab } from './autoVocab'
 import { style } from './style'
 import { contexts } from './contexts'
 import { evalLog } from './evalLog'
@@ -122,6 +123,11 @@ async function main(): Promise<void> {
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
   // before wireIpc() below (no IPC could otherwise start a session).
   meetingSessions.recoverOrphaned()
+  // Names Wispra picked up from the user's own History/Meetings help the recogniser (Lexicon.sttTerms)
+  // and are not offered again as suggestions. Worked out in the background so the first dictation finds it ready.
+  lexicon.setAutoTerms(() => autoVocab.terms())
+  suggestions.setAutoTerms(() => autoVocab.terms())
+  autoVocab.invalidate(true)
 
   // Register wispra:// custom protocol for OAuth callback
   if (!app.isPackaged) {
@@ -180,6 +186,7 @@ async function main(): Promise<void> {
   store.onChange((s) => updateTrayMenu(s.modes, s.activeMode))
   initUpdater(store.get().autoUpdate)
   store.onChange((s) => setAutoUpdate(s.autoUpdate))
+  store.onChange((s) => autoVocab.onSettingsChanged(s))
 
   checkJustUpdated()
 
@@ -289,6 +296,8 @@ function wireMeetingController(): void {
   })
   meetingSessions.onMeta((session) => {
     broadcast(IPC.MEETING_SESSION_UPDATED, session)
+    // A finished meeting is more of the user's own words for automatic vocabulary learning.
+    if (session.status === 'stopped') autoVocab.invalidate(true)
   })
 
   // Meeting Mode's mic capture lives in the Settings window's renderer, so closing that
@@ -516,7 +525,11 @@ function wireIpc(): void {
   ipcMain.handle(IPC.MEETING_GET_STATE, (): MeetingState => meetingController.getState())
   ipcMain.handle(IPC.MEETING_GET_SESSIONS, () => meetingSessions.list())
   ipcMain.handle(IPC.MEETING_GET_SESSION, (_event, id: string) => meetingSessions.get(id))
-  ipcMain.handle(IPC.MEETING_DELETE_SESSION, (_event, id: string) => meetingSessions.delete(id))
+  ipcMain.handle(IPC.MEETING_DELETE_SESSION, (_event, id: string) => {
+    const result = meetingSessions.delete(id)
+    autoVocab.invalidate(true) // a deleted meeting no longer counts towards what was learned
+    return result
+  })
   ipcMain.handle(IPC.MEETING_RENAME_SESSION, (_event, id: string, title: string) => {
     const trimmed = title.trim().slice(0, 200)
     if (trimmed) meetingSessions.rename(id, trimmed)
@@ -836,12 +849,19 @@ function wireIpc(): void {
   ipcMain.handle(IPC.LEXICON_RESET, () => {
     lexicon.reset()
     suggestions.resetDismissed() // "start over" also brings back the suggestions the user had hidden
+    autoVocab.invalidate() // …and the automatically learned terms they had removed
   })
 
   // Suggestions mined from History + Meetings (Learned tab) — candidates only; accepting adds to the lexicon
   ipcMain.handle(IPC.SUGGESTIONS_GET, () => suggestions.list())
   ipcMain.handle(IPC.SUGGESTIONS_ACCEPT, (_event, id: string) => suggestions.accept(id))
   ipcMain.handle(IPC.SUGGESTIONS_DISMISS, (_event, id: string) => suggestions.dismiss(id))
+
+  // Vocabulary Wispra learned by itself from History + Meetings (Learned tab) — a spelling bias for the
+  // recogniser only. `fresh` on open so the list reflects the meetings finished since the last look.
+  ipcMain.handle(IPC.AUTOVOCAB_GET, () => autoVocab.list(true))
+  ipcMain.handle(IPC.AUTOVOCAB_KEEP, (_event, id: string) => autoVocab.keep(id))
+  ipcMain.handle(IPC.AUTOVOCAB_REMOVE, (_event, id: string) => autoVocab.remove(id))
 
   // Writing style (Learned tab): the user's own notes + habits detected from their fixes
   ipcMain.handle(IPC.STYLE_GET, () => style.profile())
@@ -934,6 +954,8 @@ function wireIpc(): void {
 
   history.onChange((entries) => broadcast(IPC.HISTORY_CHANGED, entries))
   lexicon.onChange((entries) => broadcast(IPC.LEXICON_CHANGED, entries))
+  history.onChange(() => autoVocab.invalidate())
+  lexicon.onChange(() => autoVocab.invalidate())
 
   // ── Auth ────────────────────────────────────────────────────────────────────
 

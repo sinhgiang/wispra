@@ -82,6 +82,8 @@ export interface Settings {
   continuousMode: boolean
   /** Learn from corrections made in History and apply what was learned (Learned tab). */
   learningEnabled: boolean
+  /** Also learn recurring names/brands/terms from History and meetings by itself (Learned tab). Only meaningful while learningEnabled is on. */
+  autoLearnVocabulary: boolean
   /** Incremented when defaults change, so migrations can upgrade old saved settings. */
   settingsVersion: number
 }
@@ -105,7 +107,7 @@ export interface TranscriptEntry {
   originalText?: string
   /** Id of the mode whose cleanup prompt was used, when the AI cleanup ran. Lets writing examples be matched by context. */
   mode?: string
-  /** Whether "Learn from my corrections" was on when this was dictated (unset on entries from before it was tracked). */
+  /** Whether "Learn my words" was on when this was dictated (unset on entries from before it was tracked). */
   learning?: boolean
 }
 
@@ -172,6 +174,29 @@ export interface Suggestion {
 }
 
 /**
+ * A term Wispra learned by itself from the user's History and meetings — no correction needed.
+ * It is only ever offered to the speech recogniser as a spelling to prefer (never used to rewrite
+ * text), and the user can keep it as one of their own words or remove it for good.
+ */
+export interface AutoTerm {
+  /** "term:<lowercased term>" — the same ids as Suggestion, so removing one also hides the matching suggestion. */
+  id: string
+  /** The spelling to prefer ("Claude Code"). */
+  term: string
+  /** How many times it occurs (via 'seen') or was fixed this way (via 'fixed'). */
+  count: number
+  /** In how many separate dictations/meetings. */
+  sources: number
+  /**
+   * 'seen'  — a name/brand that keeps turning up in what the user dictates
+   * 'fixed' — the AI cleanup keeps changing a look-alike spelling into this one
+   */
+  via: 'seen' | 'fixed'
+  /** 'fixed' only: the spelling that keeps being corrected ("Cloud"). */
+  heardAs?: string
+}
+
+/**
  * One writing habit Wispra noticed in the user's own fixes (e.g. "drops the final full stop").
  * Habits are derived from History on demand — the user can only switch them on or off.
  */
@@ -214,7 +239,7 @@ export interface EvalWeek extends EvalTotals {
 export interface EvalReport {
   /** Oldest first; the last entry is the current week. */
   weeks: EvalWeek[]
-  /** Dictations made while "Learn from my corrections" was on / off. */
+  /** Dictations made while "Learn my words" was on / off. */
   on: EvalTotals
   off: EvalTotals
   all: EvalTotals

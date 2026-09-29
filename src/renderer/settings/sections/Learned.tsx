@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { LexiconEntry, Settings, Suggestion } from '@shared/types'
+import type { AutoTerm, LexiconEntry, Settings, Suggestion } from '@shared/types'
 import { lexiconMode, type LexiconMode } from '@shared/lexiconMode'
 import { StyleCard } from './StyleCard'
 import { EvalCard } from './EvalCard'
@@ -37,6 +37,15 @@ function Highlighted({ text, needle }: { text: string; needle: string }): React.
       {text.slice(at + needle.length)}
     </>
   )
+}
+
+/** What Wispra saw that made it pick the term up — shown as the chip's tooltip. */
+function autoTermTitle(t: AutoTerm): string {
+  const places = t.sources === 1 ? '1 place' : `${t.sources} places`
+  if (t.via === 'fixed') {
+    return `The AI cleanup changed “${t.heardAs}” to “${t.term}” ${t.count}× in ${places}.`
+  }
+  return `You used “${t.term}” ${t.count}× in ${places}.`
 }
 
 function SuggestionCard({
@@ -92,6 +101,7 @@ function SuggestionCard({
 export function LearnedSection({ settings }: { settings: Settings }): React.JSX.Element {
   const [entries, setEntries] = useState<LexiconEntry[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [autoTerms, setAutoTerms] = useState<AutoTerm[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
   const [term, setTerm] = useState('')
   const [heardAs, setHeardAs] = useState('')
@@ -99,6 +109,7 @@ export function LearnedSection({ settings }: { settings: Settings }): React.JSX.
   const [addError, setAddError] = useState<string | null>(null)
 
   const learning = settings.learningEnabled ?? true
+  const autoLearn = learning && (settings.autoLearnVocabulary ?? true)
 
   useEffect(() => {
     let alive = true
@@ -112,27 +123,52 @@ export function LearnedSection({ settings }: { settings: Settings }): React.JSX.
           /* suggestions are optional — keep whatever is shown */
         })
     }
+    const refreshAuto = (): void => {
+      window.api
+        .getAutoTerms()
+        .then((list) => {
+          if (alive) setAutoTerms(list)
+        })
+        .catch(() => {
+          /* optional too — keep whatever is shown */
+        })
+    }
+    const refreshLearned = (): void => {
+      refreshSuggestions()
+      refreshAuto()
+    }
     void window.api.getLexicon().then((list) => {
       if (alive) setEntries(list)
     })
-    refreshSuggestions()
-    // A new lexicon entry (or a History fix) changes what is worth suggesting.
+    refreshLearned()
+    // A new lexicon entry (or a new dictation / History fix) changes what is worth learning or suggesting.
     const offLexicon = window.api.onLexiconChanged((list) => {
       setEntries(list)
-      refreshSuggestions()
+      refreshLearned()
     })
-    const offHistory = window.api.onHistoryChanged(refreshSuggestions)
+    const offHistory = window.api.onHistoryChanged(refreshLearned)
     return () => {
       alive = false
       offLexicon()
       offHistory()
     }
-  }, [learning])
+  }, [learning, autoLearn])
 
   async function resolveSuggestion(id: string, act: (id: string) => Promise<Suggestion[]>): Promise<void> {
     setBusyId(id)
     try {
       setSuggestions(await act(id))
+    } catch {
+      /* the list refreshes on the next change; nothing to show */
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function resolveAuto(id: string, act: (id: string) => Promise<AutoTerm[]>): Promise<void> {
+    setBusyId(id)
+    try {
+      setAutoTerms(await act(id))
     } catch {
       /* the list refreshes on the next change; nothing to show */
     } finally {
@@ -185,9 +221,10 @@ export function LearnedSection({ settings }: { settings: Settings }): React.JSX.
     <section>
       <h2>Learned</h2>
       <p className="hint">
-        Wispra learns your spelling from the fixes you make in History (click <b>Edit</b> on a dictation).
-        Fix a misheard word once and Wispra passes it to the AI cleanup; fix it again and it is replaced
-        automatically. Nothing is learned unless you correct it yourself.
+        Wispra learns your own words two ways. It reads your History and meetings for the names and terms
+        you use again and again, and gives them to the speech recogniser so it hears them right next time.
+        And it learns from the fixes you make in History (click <b>Edit</b> on a dictation): fix a misheard
+        word once and Wispra passes it to the AI cleanup; fix it again and it is replaced automatically.
       </p>
 
       <label className="toggle-row">
@@ -197,13 +234,80 @@ export function LearnedSection({ settings }: { settings: Settings }): React.JSX.
           onChange={(e) => void window.api.setSettings({ learningEnabled: e.target.checked })}
         />
         <div className="toggle-info">
-          <span className="toggle-label">Learn from my corrections</span>
+          <span className="toggle-label">Learn my words</span>
           <span className="toggle-desc">
-            When off, Wispra neither learns new words nor applies the list below. Your list is kept.
+            When off, Wispra neither learns new words nor applies anything below. Your lists are kept.
           </span>
         </div>
         <div className="toggle-switch" />
       </label>
+
+      {learning && (
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={autoLearn}
+            onChange={(e) => void window.api.setSettings({ autoLearnVocabulary: e.target.checked })}
+          />
+          <div className="toggle-info">
+            <span className="toggle-label">Learn my vocabulary from History</span>
+            <span className="toggle-desc">
+              Picks up names, brands and terms you use often, without you fixing anything. It only
+              helps the speech recogniser — your text is never rewritten.
+            </span>
+          </div>
+          <div className="toggle-switch" />
+        </label>
+      )}
+
+      {autoLearn && (
+        <>
+          <h3 className="learned-sub">
+            Picked up from your History <span className="learned-count">{autoTerms.length}</span>
+          </h3>
+          {autoTerms.length === 0 ? (
+            <p className="learned-empty">
+              Nothing yet. Words you use again and again — names, products, abbreviations — show up here
+              once Wispra has seen them in a few of your dictations or meetings.
+            </p>
+          ) : (
+            <>
+              <ul className="auto-list">
+                {autoTerms.map((t) => (
+                  <li key={t.id} className={`auto-chip${busyId === t.id ? ' is-busy' : ''}`} title={autoTermTitle(t)}>
+                    <span className="auto-term">{t.term}</span>
+                    <button
+                      className="chip-x chip-keep"
+                      title="Keep — make it one of your own words"
+                      disabled={busyId === t.id}
+                      onClick={() => void resolveAuto(t.id, window.api.keepAutoTerm)}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 11 11" fill="none">
+                        <path d="M1.5 5.8L4.4 8.6L9.5 2.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    <button
+                      className="chip-x"
+                      title="Remove — Wispra won't use this word again"
+                      disabled={busyId === t.id}
+                      onClick={() => void resolveAuto(t.id, window.api.removeAutoTerm)}
+                    >
+                      <svg width="9" height="9" viewBox="0 0 11 11" fill="none">
+                        <path d="M1 1L10 10M10 1L1 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="hint learned-note">
+                These only nudge the speech recogniser towards your spelling. Hover a word to see why it was
+                picked. Remove one that is wrong — a word Wispra keeps mishearing can look like a word you
+                use. Keep one to add it to Your words below.
+              </p>
+            </>
+          )}
+        </>
+      )}
 
       {learning && suggestions.length > 0 && (
         <>
@@ -266,7 +370,7 @@ export function LearnedSection({ settings }: { settings: Settings }): React.JSX.
 
       {entries.length === 0 ? (
         <p className="learned-empty">
-          Nothing learned yet. Dictate something, then open History and fix a word Wispra got wrong.
+          Nothing here yet. Words you fix in History, keep from the list above, or add yourself appear here.
         </p>
       ) : (
         <ul className={`learned-list${learning ? '' : ' learned-list--paused'}`}>

@@ -3,6 +3,7 @@ import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
   ApiKeyTestResult,
+  AutoTerm,
   ContentPlatform,
   EvalReport,
   FileTranscribeResult,
@@ -95,6 +96,11 @@ const api = {
   getSuggestions: (): Promise<Suggestion[]> => ipcRenderer.invoke(IPC.SUGGESTIONS_GET),
   acceptSuggestion: (id: string): Promise<Suggestion[]> => ipcRenderer.invoke(IPC.SUGGESTIONS_ACCEPT, id),
   dismissSuggestion: (id: string): Promise<Suggestion[]> => ipcRenderer.invoke(IPC.SUGGESTIONS_DISMISS, id),
+
+  // --- vocabulary Wispra learned by itself from History + Meetings (Learned tab) ---
+  getAutoTerms: (): Promise<AutoTerm[]> => ipcRenderer.invoke(IPC.AUTOVOCAB_GET),
+  keepAutoTerm: (id: string): Promise<AutoTerm[]> => ipcRenderer.invoke(IPC.AUTOVOCAB_KEEP, id),
+  removeAutoTerm: (id: string): Promise<AutoTerm[]> => ipcRenderer.invoke(IPC.AUTOVOCAB_REMOVE, id),
 
   // --- writing style + "is learning helping?" statistics (Learned tab) ---
   getStyle: (): Promise<StyleProfile> => ipcRenderer.invoke(IPC.STYLE_GET),

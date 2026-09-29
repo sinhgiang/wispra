@@ -6,19 +6,24 @@ import {
 } from '@shared/constants'
 import type { LexiconEntry, Suggestion } from '@shared/types'
 import { normKey, trimEdgePunct } from './lexiconLogic'
+import { WELL_KNOWN_NAMES } from './wellKnownNames'
 
 /**
  * Pure logic that mines the user's own History and Meeting text for lexicon candidates — no
  * Electron, no file access. Persistence of dismissals and the IPC glue live in suggestions.ts.
  *
- * Nothing found here is ever applied automatically: the app's own output contains its mistakes, so
- * a recurring spelling proves nothing by itself ("cloud" is a perfectly good word). Every candidate
- * is shown to the user with a piece of their own text and only becomes a lexicon entry when they
- * accept it. Two kinds are produced:
+ * Nothing found here is ever turned into a text replacement on its own: the app's own output
+ * contains its mistakes, so a recurring spelling proves nothing by itself ("cloud" is a perfectly
+ * good word). Every candidate is shown to the user with a piece of their own text and only becomes
+ * a lexicon entry when they accept it. (Recurring names are additionally used as a soft spelling
+ * hint for the speech recogniser without asking — see autoVocabLogic.ts, which reuses findTerms.)
+ * Two kinds are produced:
  *  - variant: a spelling that recurs and sounds like a term the user already keeps
  *  - term:    a name/brand that recurs and is missing from the user's word lists
  * Both are limited to Latin-script words without accents: that is where brand and technical names
  * live, and it keeps everyday Vietnamese words (where accents carry the meaning) out of the way.
+ * A recurring look-alike of a well-known name ("Cloud" for "Claude", see wellKnownNames.ts) is
+ * never offered as a new term: it is far more likely a mishearing than a name of its own.
  */
 
 /** One dictation or one meeting. */
@@ -69,7 +74,7 @@ function tokenize(text: string): Token[] {
 }
 
 /** Letters and digits only, lowercased: the form two spellings are compared in. Null unless plain unaccented Latin. */
-function compareKey(text: string): string | null {
+export function compareKey(text: string): string | null {
   const k = text.toLowerCase().replace(/['’._\-\s]/g, '')
   return /^[a-z0-9]+$/.test(k) ? k : null
 }
@@ -115,7 +120,7 @@ function skeleton(s: string): string {
  * "Cloud" ≈ "Claude" and "Courser" ≈ "Cursor" but "Gitlab" ≉ "Github". One being the other plus a
  * few letters ("code" / "codex", "cursors") is an inflection, not a mishearing.
  */
-function looksLike(cand: string, term: string): number | null {
+export function looksLike(cand: string, term: string): number | null {
   if (cand === term) return 0
   const len = term.length
   if (len < MIN_TERM_LENGTH) return null
@@ -127,6 +132,28 @@ function looksLike(cand: string, term: string): number | null {
   return null
 }
 
+// ── Well-known names ─────────────────────────────────────────────────────────
+
+/** compareKey → the owner's spelling, for the well-known names that are long enough to match against. */
+const WELL_KNOWN = new Map<string, string>()
+for (const name of WELL_KNOWN_NAMES) {
+  const key = compareKey(name)
+  if (key && key.length >= MIN_TERM_LENGTH) WELL_KNOWN.set(key, name)
+}
+
+/** "Cloud" for "Claude", "Anthropix" for "Anthropic": a look-alike of a well-known name that is not spelled like it. */
+export function misspeltWellKnown(cmp: string): boolean {
+  if (WELL_KNOWN.has(cmp)) return false
+  for (const key of WELL_KNOWN.keys()) if (looksLike(cmp, key) !== null) return true
+  return false
+}
+
+/** "Youtube" → "YouTube": a well-known name comes back spelled the way its owner spells it; anything else is returned as it is. */
+export function canonicalSpelling(term: string): string {
+  const key = compareKey(term)
+  return (key && WELL_KNOWN.get(key)) || term
+}
+
 // ── What the user already has ────────────────────────────────────────────────
 
 interface Target {
@@ -136,14 +163,14 @@ interface Target {
   words: number
 }
 
-interface Known {
+export interface Known {
   /** Terms a mishearing can be matched to: the custom vocabulary and the enabled lexicon entries. */
   targets: Target[]
   /** Every spelling that is already accounted for — terms, wrong forms, vocabulary — as normKeys. */
   forms: Set<string>
 }
 
-function collectKnown(vocabulary: string[], entries: LexiconEntry[]): Known {
+export function collectKnown(vocabulary: string[], entries: LexiconEntry[]): Known {
   const targets: Target[] = []
   const forms = new Set<string>()
   const addTarget = (term: string): void => {
@@ -170,7 +197,7 @@ function collectKnown(vocabulary: string[], entries: LexiconEntry[]): Known {
 
 // ── Shared counting helpers ──────────────────────────────────────────────────
 
-interface Counted {
+export interface Counted {
   count: number
   /** Separate dictations/meetings it occurs in (docs are scanned one after another). */
   sources: number
@@ -180,12 +207,12 @@ interface Counted {
   ref: { d: number; t: number; i: number; n: number }
 }
 
-function counted(ref: Counted['ref']): Counted {
+export function counted(ref: Counted['ref']): Counted {
   return { count: 0, sources: 0, lastDoc: '', surfaces: new Map(), ref }
 }
 
 /** Counts one more occurrence of `key`; `make` builds its record the first time it is seen. */
-function bump<T extends Counted>(map: Map<string, T>, key: string, surface: string, docId: string, make: () => T): void {
+export function bump<T extends Counted>(map: Map<string, T>, key: string, surface: string, docId: string, make: () => T): void {
   let c = map.get(key)
   if (!c) {
     c = make()
@@ -200,7 +227,7 @@ function bump<T extends Counted>(map: Map<string, T>, key: string, surface: stri
 }
 
 /** The spelling that occurs most often (ties: the first one seen). */
-function commonSurface(c: Counted): string {
+export function commonSurface(c: Counted): string {
   let best = ''
   let bestN = 0
   for (const [s, n] of c.surfaces) {
@@ -304,7 +331,7 @@ const NOT_A_NAME = new Set([
 ])
 
 /** ASCII, at least 3 characters, starts with a capital or has a capital inside ("iPhone"). */
-function nameLike(word: string): boolean {
+export function nameLike(word: string): boolean {
   if (word.length < 3 || !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(word) || !/[A-Za-z]/.test(word)) return false
   if (NOT_A_NAME.has(word.toLowerCase())) return false
   return /^[A-Z]/.test(word) || /^[a-z]+[A-Z]/.test(word)
@@ -315,12 +342,12 @@ function otherCapitalised(token: Token | undefined): boolean {
   return !!token && /^\p{Lu}/u.test(token.word) && !nameLike(token.word)
 }
 
-interface TermHit {
+export interface TermHit {
   key: string
   run: Counted
 }
 
-function findTerms(docs: SuggestDoc[], known: Known, skip: ReadonlySet<string>): TermHit[] {
+export function findTerms(docs: SuggestDoc[], known: Known, skip: ReadonlySet<string>): TermHit[] {
   const runs = new Map<string, Counted>()
   // How often each plain word is written in lower case: "build", "anh" — a word people use in
   // lower case as often as capitalised is an ordinary word, not a name.
@@ -379,6 +406,8 @@ function findTerms(docs: SuggestDoc[], known: Known, skip: ReadonlySet<string>):
     // A near-miss of a known term is a variant at best, never a new term.
     const cmp = compareKey(key)
     if (cmp && known.targets.some((t) => looksLike(cmp, t.cmp) !== null)) continue
+    // Likewise a near-miss of a well-known name ("Cloud" for "Claude"): a mishearing that recurs, not a name of its own.
+    if (cmp && misspeltWellKnown(cmp)) continue
     hits.push({ key, run })
   }
   return hits
@@ -408,7 +437,7 @@ export function computeSuggestions(input: SuggestInput): Suggestion[] {
   const terms: Suggestion[] = termHits.map((h) => ({
     id: `term:${h.key}`,
     kind: 'term',
-    term: commonSurface(h.run),
+    term: canonicalSpelling(commonSurface(h.run)),
     count: h.run.count,
     sources: h.run.sources,
     example: exampleFor(finalText, h.run.ref)

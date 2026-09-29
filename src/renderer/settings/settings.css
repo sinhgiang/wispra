@@ -1005,6 +1005,45 @@ button.danger.armed {
   flex-shrink: 0;
 }
 
+/* ── Learned: vocabulary picked up from History ── */
+
+.auto-list {
+  list-style: none;
+  margin: 8px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.auto-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px 3px 11px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 1px solid var(--border-md);
+  font-size: 13px;
+  color: var(--text);
+  cursor: help;
+}
+
+.auto-chip.is-busy {
+  opacity: 0.5;
+}
+
+.auto-term {
+  margin-right: 4px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.chip-keep:hover {
+  color: var(--ok);
+  background: var(--ok-subtle);
+}
+
 /* ── Learned: writing style ───────────────── */
 
 .style-notes {

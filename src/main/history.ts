@@ -16,7 +16,7 @@ export interface HistoryMeta {
   app?: string
   /** Id of the mode whose cleanup prompt ran. */
   mode?: string
-  /** Whether "Learn from my corrections" was on. */
+  /** Whether "Learn my words" was on. */
   learning?: boolean
 }
 

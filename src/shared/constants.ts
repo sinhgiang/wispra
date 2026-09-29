@@ -76,6 +76,7 @@ export const DEFAULT_SETTINGS: Settings = {
   templates: [],
   continuousMode: false,
   learningEnabled: true,
+  autoLearnVocabulary: true,
   settingsVersion: 2
 }
 
@@ -135,6 +136,20 @@ export const SUGGEST_MAX_ITEMS = 12
 export const SUGGEST_MAX_SESSIONS = 30
 /** Ignored suggestions remembered (oldest forgotten first). */
 export const SUGGEST_MAX_DISMISSED = 500
+
+// ── Vocabulary learned automatically from History (autoVocabLogic.ts) ───────
+// A name/brand that simply occurs a lot uses the SUGGEST_MIN_TERM_* thresholds above.
+/** A spelling the AI cleanup changed the same way this many times, in this many separate dictations, is learned. */
+export const AUTO_MIN_FIX_COUNT = 2
+export const AUTO_MIN_FIX_SOURCES = 2
+/** At most this many automatically learned terms are kept (best first); only the first few fit in a Whisper prompt anyway. */
+export const AUTO_MAX_TERMS = 40
+/** Of two look-alike candidates ("Cloud" / "Claude") the more frequent one only wins when it occurs this many times as often — otherwise neither is learned. */
+export const AUTO_AMBIGUITY_RATIO = 2
+/** How long a list of finished meetings may be reused when refreshing the automatic vocabulary in the background (listing parses every session file). */
+export const AUTO_SESSION_LIST_MAX_AGE_MS = 5 * 60_000
+/** Wait this long after History changes before the automatic vocabulary is recomputed, so it never competes with a dictation being typed. */
+export const AUTO_REFRESH_DELAY_MS = 2_000
 
 // ── Writing style (styleLogic.ts) ────────────────────────────────────────────
 /** Past fixed dictations shown to the AI cleanup step as examples of how this user wants text written. */

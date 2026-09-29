@@ -29,6 +29,8 @@ export type LexiconPatch = Partial<Pick<LexiconEntry, 'enabled' | 'pinned' | 'he
 class Lexicon {
   private entries: LexiconEntry[] = []
   private listeners = new Set<(entries: LexiconEntry[]) => void>()
+  /** Terms Wispra found in History by itself (autoVocab.ts). Injected, so this file doesn't depend on it. */
+  private autoTerms: () => string[] = () => []
 
   private get dir(): string {
     return join(app.getPath('userData'), 'learning')
@@ -121,12 +123,20 @@ class Lexicon {
 
   // ── Using what was learned (all no-ops while learning is switched off) ─────
 
+  setAutoTerms(provider: () => string[]): void {
+    this.autoTerms = provider
+  }
+
   /**
    * Terms for the Whisper prompt: the user's custom vocabulary plus the most useful learned terms,
    * capped. `relevance` (contexts.ts) prefers the terms this app / meeting space actually uses.
+   * The terms Wispra found in History by itself only fill the room that is left — and only go to
+   * the recogniser (see llmTerms), where a wrong one costs a slightly worse guess, not a wrong edit.
    */
   sttTerms(manual: string[], relevance?: (term: string) => number): string[] {
-    return this.on ? selectTerms(manual, this.entries, STT_PROMPT_MAX_TERMS, relevance) : manual.slice(0, STT_PROMPT_MAX_TERMS)
+    return this.on
+      ? selectTerms(manual, this.entries, STT_PROMPT_MAX_TERMS, relevance, this.autoTerms())
+      : manual.slice(0, STT_PROMPT_MAX_TERMS)
   }
 
   /** Terms for the AI-cleanup prompt (wider than the Whisper prompt). */

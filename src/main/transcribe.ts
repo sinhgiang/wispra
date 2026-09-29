@@ -19,6 +19,8 @@ interface ProviderConfig {
 interface VerboseSegment {
   text: string
   no_speech_prob: number
+  /** Average log-probability the model assigned to its own tokens for this segment (0 = certain, very negative = guessing). */
+  avg_logprob?: number
 }
 
 interface VerboseResponse {
@@ -29,6 +31,22 @@ interface VerboseResponse {
 
 /** Discard segments where Whisper is >50% confident there is no real speech (hallucination guard). */
 const NO_SPEECH_THRESHOLD = 0.5
+
+/**
+ * Discard segments the model itself was guessing at, independent of no_speech_prob. This is a
+ * distinct failure mode from silence hallucination: there IS speech (no_speech_prob stays low),
+ * but it was too unclear/mumbled/fast for Whisper to actually make out, so it fills the segment
+ * with low-confidence noise — for Vietnamese this typically comes out as a run of bare initial
+ * consonants with the vowels and tone marks guessed away ("C ph th nh t kh…"), never a real word.
+ * -1.0 is the same default OpenAI's own reference Whisper implementation uses to flag a segment
+ * as unreliable (`logprob_threshold` in whisper's transcribe.py).
+ */
+const LOW_CONFIDENCE_LOGPROB = -1.0
+
+/** A segment is kept only if Whisper both thinks there's real speech AND was confident about the words it produced. */
+function isReliableSegment(s: VerboseSegment): boolean {
+  return s.no_speech_prob < NO_SPEECH_THRESHOLD && (s.avg_logprob === undefined || s.avg_logprob >= LOW_CONFIDENCE_LOGPROB)
+}
 
 /**
  * Phrases Whisper hallucinates from its training data (mostly YouTube outros) when
@@ -190,10 +208,47 @@ function isGarbledPromptEcho(sentence: string, promptSentences: string[][]): boo
 }
 
 /**
- * Drops sentences matching a known hallucination phrase or echoing the STT
- * prompt itself, and collapses a sentence repeated 3+ times verbatim —
- * Whisper's other common failure mode on silence/noise is looping the same
- * line over and over regardless of wording.
+ * A word/syllable with no vowel at all, once diacritics are stripped, is a strong gibberish
+ * signal: every Vietnamese syllable requires a vowel nucleus, and real English words are
+ * essentially never vowel-less except a handful of capitalized acronyms/abbreviations
+ * (exempted below). NFD-normalizing and stripping the combining marks turns any accented
+ * Vietnamese vowel ("ừ", "ệ", "ượ"…) back into a plain a/e/i/o/u/y without having to
+ * enumerate every precomposed character by hand.
+ */
+function looksLikeGibberishToken(token: string): boolean {
+  if (!/^[\p{L}]+$/u.test(token)) return false
+  if (token.length >= 2 && token === token.toUpperCase()) return false // acronym, e.g. "ALT", "CEO"
+  const base = token.normalize('NFD').replace(/[̀-ͯ]/g, '')
+  return !/[aeiouy]/i.test(base)
+}
+
+/**
+ * Catches a third Whisper failure mode, distinct from both isPromptEcho and the avg_logprob
+ * check above: real speech that was too unclear for Whisper to actually make out, where the
+ * model — instead of guessing a whole wrong word — fills the gap with the bare initial
+ * consonant of each syllable and drops the vowel/tone entirely ("C n m l nh v th t th c th
+ * terminal…"). Each individual fragment can still score a merely-average confidence (the model
+ * is "sure" of the one letter it committed to), so this needs its own check independent of
+ * avg_logprob. Real Vietnamese/English sentences are essentially never built from more than a
+ * small minority of vowel-less "words", so a high ratio here is treated as noise — checked per
+ * SENTENCE (not per API segment) so a real sentence next to a garbled one survives.
+ */
+function isGibberishSentence(sentence: string): boolean {
+  const tokens = sentence
+    .normalize('NFC')
+    .split(/\s+/)
+    .map((t) => t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter((t) => t.length > 0 && !/^\d+$/.test(t))
+  if (tokens.length < 4) return false
+  const gibberish = tokens.filter(looksLikeGibberishToken).length
+  return gibberish / tokens.length >= 0.4
+}
+
+/**
+ * Drops sentences matching a known hallucination phrase, echoing the STT prompt itself, or
+ * reading as bare consonant fragments, and collapses a sentence repeated 3+ times verbatim —
+ * Whisper's other common failure mode on silence/noise is looping the same line over and over
+ * regardless of wording.
  */
 function filterKnownHallucinations(text: string, sttPrompt?: string): string {
   const seen = new Map<string, number>()
@@ -207,6 +262,7 @@ function filterKnownHallucinations(text: string, sttPrompt?: string): string {
     if (HALLUCINATION_SENTENCES.has(normalized)) continue
     if (HALLUCINATION_PHRASES.some((p) => normalized.includes(p))) continue
     if (isPromptEcho(normalized, promptWords) || isGarbledPromptEcho(normalized, promptSentences)) continue
+    if (isGibberishSentence(sentence)) continue
 
     const count = (seen.get(normalized) ?? 0) + 1
     seen.set(normalized, count)
@@ -333,7 +389,7 @@ async function requestViaProxy(
   // Filter silence/hallucination segments — same threshold as direct Groq path
   let text: string
   if (data.segments && data.segments.length > 0) {
-    const speechSegments = data.segments.filter(s => s.no_speech_prob < NO_SPEECH_THRESHOLD)
+    const speechSegments = data.segments.filter(isReliableSegment)
     text = speechSegments.map(s => s.text).join('').trim()
   } else {
     text = (data.text ?? '').trim()
@@ -399,7 +455,7 @@ async function requestTranscription(
   // Filter out segments Whisper flagged as likely silence/hallucination
   let text: string
   if (data.segments && data.segments.length > 0) {
-    const speechSegments = data.segments.filter(s => s.no_speech_prob < NO_SPEECH_THRESHOLD)
+    const speechSegments = data.segments.filter(isReliableSegment)
     text = speechSegments.map(s => s.text).join('').trim()
   } else {
     text = (data.text ?? '').trim()
