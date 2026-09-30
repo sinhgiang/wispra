@@ -11,6 +11,7 @@ const SUMMARY_TIMEOUT_MS = 30_000
 
 const CRITICAL_RULES = `CRITICAL RULES:
 - Return ONLY the corrected text. No explanation, no quotes, no preamble.
+- NEVER summarize, shorten, condense, paraphrase, or merge sentences together. Keep every sentence the speaker said, in the same order — only fix spelling, punctuation, grammar, and (if instructed above) remove standalone filler words.
 - NEVER remove content words or change the meaning.
 - NEVER change the language.
 - If the text is already correct, return it unchanged.`
@@ -181,9 +182,13 @@ async function processChunk(
     const result = data.choices?.[0]?.message?.content?.trim()
     if (!result) return text
 
-    // Safety: if model returned near-empty or extremely long output, it likely failed
+    // Safety: if model returned near-empty, extremely long, or drastically shortened output
+    // (a sign it summarized instead of just correcting), it likely failed — fall back to the raw
+    // text. Short inputs get a looser floor since removing a filler-only utterance can legitimately
+    // cut most of its length; longer dictation should stay close to its original length.
     const ratio = result.length / text.length
-    if (ratio < 0.1 || ratio > 8) return text
+    const minRatio = text.length > 40 ? 0.55 : 0.1
+    if (ratio < minRatio || ratio > 8) return text
 
     return result
   } catch {
