@@ -222,6 +222,24 @@ function looksLikeGibberishToken(token: string): boolean {
   return !/[aeiouy]/i.test(base)
 }
 
+/** One whitespace-delimited chunk of a sentence, kept verbatim for reconstruction, plus whether its stripped form reads as gibberish. */
+interface GibberishToken {
+  raw: string
+  isGibberish: boolean
+}
+
+function tokenizeForGibberish(sentence: string): GibberishToken[] {
+  return sentence
+    .normalize('NFC')
+    .split(/\s+/)
+    .filter((raw) => raw.length > 0)
+    .map((raw) => {
+      const stripped = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+      const isGibberish = stripped.length > 0 && !/^\d+$/.test(stripped) && looksLikeGibberishToken(stripped)
+      return { raw, isGibberish }
+    })
+}
+
 /**
  * Catches a third Whisper failure mode, distinct from both isPromptEcho and the avg_logprob
  * check above: real speech that was too unclear for Whisper to actually make out, where the
@@ -229,26 +247,90 @@ function looksLikeGibberishToken(token: string): boolean {
  * consonant of each syllable and drops the vowel/tone entirely ("C n m l nh v th t th c th
  * terminal…"). Each individual fragment can still score a merely-average confidence (the model
  * is "sure" of the one letter it committed to), so this needs its own check independent of
- * avg_logprob. Real Vietnamese/English sentences are essentially never built from more than a
- * small minority of vowel-less "words", so a high ratio here is treated as noise — checked per
- * SENTENCE (not per API segment) so a real sentence next to a garbled one survives.
+ * avg_logprob.
+ *
+ * Built by GROWING RUNS from individually-flagged gibberish tokens, not a single whole-sentence
+ * or windowed ratio. Real bug seen in production: Vietnamese dictation often runs long clauses
+ * together with commas instead of full stops, so a garbled run tacked onto an otherwise-clean
+ * clause ("...làm việc trong 1 của sổ màn hình thôi, L th nh Th lai t khi t m d c gi th di chuy c
+ * terminal tr. Thay vì...") shares one punctuation-delimited "sentence" with a long real prefix —
+ * a whole-sentence ratio gets diluted well under the threshold and the garbage survives
+ * untouched. A naive sliding-window density check fixes that but overshoots the other way: a
+ * window straddling the boundary between real and garbled text can cross the density threshold
+ * while still covering a few real words at its edge, deleting them along with the garbage
+ * (observed deleting "màn hình thôi," from the sentence above).
+ *
+ * Instead: start only from tokens individually flagged by looksLikeGibberishToken, and grow each
+ * run by bridging across up to GIBBERISH_BRIDGE_GAP consecutive non-flagged tokens to the next
+ * flagged one — this is what pulls in short vowel-bearing fragments sitting inside a garbled run
+ * (e.g. "gi", "khi", "di" each contain a vowel and aren't individually flagged) without ever
+ * extending past the first/last actually-flagged token in the run, so real text adjacent to the
+ * run is never touched. A run only becomes a zone once it has accumulated at least
+ * GIBBERISH_MIN_RUN individually-flagged tokens — real prose essentially never has that many
+ * non-acronym vowel-less "words" clustered this close together.
  */
-function isGibberishSentence(sentence: string): boolean {
-  const tokens = sentence
-    .normalize('NFC')
-    .split(/\s+/)
-    .map((t) => t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
-    .filter((t) => t.length > 0 && !/^\d+$/.test(t))
-  if (tokens.length < 4) return false
-  const gibberish = tokens.filter(looksLikeGibberishToken).length
-  return gibberish / tokens.length >= 0.4
+const GIBBERISH_BRIDGE_GAP = 2
+const GIBBERISH_MIN_RUN = 4
+
+function findGibberishZones(flags: boolean[]): boolean[] {
+  const inZone = new Array<boolean>(flags.length).fill(false)
+  let i = 0
+  while (i < flags.length) {
+    if (!flags[i]) {
+      i++
+      continue
+    }
+    let end = i
+    let count = 1
+    let j = i + 1
+    while (j < flags.length) {
+      if (flags[j]) {
+        end = j
+        count++
+        j++
+        continue
+      }
+      let k = j
+      while (k < flags.length && !flags[k] && k - end <= GIBBERISH_BRIDGE_GAP) k++
+      if (k < flags.length && flags[k]) {
+        end = k
+        count++
+        j = k + 1
+      } else {
+        break
+      }
+    }
+    if (count >= GIBBERISH_MIN_RUN) {
+      for (let p = i; p <= end; p++) inZone[p] = true
+    }
+    i = end + 1
+  }
+  return inZone
 }
 
 /**
- * Drops sentences matching a known hallucination phrase, echoing the STT prompt itself, or
- * reading as bare consonant fragments, and collapses a sentence repeated 3+ times verbatim —
- * Whisper's other common failure mode on silence/noise is looping the same line over and over
- * regardless of wording.
+ * Strips any garbled run out of a sentence (see findGibberishZones) and returns what's left, or
+ * '' if the whole sentence was garbled or too little real content survives to be worth keeping.
+ * Punctuation/casing of surviving words is untouched — the AI cleanup pass (postprocess.ts)
+ * re-punctuates whatever this leaves behind.
+ */
+function stripGibberish(sentence: string): string {
+  const tokens = tokenizeForGibberish(sentence)
+  const zones = findGibberishZones(tokens.map((t) => t.isGibberish))
+  if (!zones.some(Boolean)) return sentence
+  const cleaned = tokens
+    .filter((_, i) => !zones[i])
+    .map((t) => t.raw)
+    .join(' ')
+    .trim()
+  return wordTokens(cleaned).length >= 2 ? cleaned : ''
+}
+
+/**
+ * Drops sentences matching a known hallucination phrase or echoing the STT prompt itself, strips
+ * out any bare-consonant-fragment run (see stripGibberish), and collapses a sentence repeated 3+
+ * times verbatim — Whisper's other common failure mode on silence/noise is looping the same line
+ * over and over regardless of wording.
  */
 function filterKnownHallucinations(text: string, sttPrompt?: string): string {
   const seen = new Map<string, number>()
@@ -256,13 +338,14 @@ function filterKnownHallucinations(text: string, sttPrompt?: string): string {
   const promptWords = sttPrompt ? distinctiveWords(sttPrompt) : new Set<string>()
   const promptSentences = sttPrompt ? splitSentences(sttPrompt).map(wordTokens) : []
 
-  for (const sentence of splitSentences(text)) {
+  for (const rawSentence of splitSentences(text)) {
+    const sentence = stripGibberish(rawSentence)
+    if (!sentence) continue
     const normalized = sentence.normalize('NFC').toLowerCase().replace(/[.,!?。，！？]+/g, '').trim()
     if (!normalized) continue
     if (HALLUCINATION_SENTENCES.has(normalized)) continue
     if (HALLUCINATION_PHRASES.some((p) => normalized.includes(p))) continue
     if (isPromptEcho(normalized, promptWords) || isGarbledPromptEcho(normalized, promptSentences)) continue
-    if (isGibberishSentence(sentence)) continue
 
     const count = (seen.get(normalized) ?? 0) + 1
     seen.set(normalized, count)
