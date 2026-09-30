@@ -1,0 +1,24 @@
+{
+  "name": "wispra-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP server exposing read-only access to Wispra's dictation history, meetings, vocabulary, and usage stats.",
+  "main": "dist/index.js",
+  "author": "SinhGiang",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "wispra-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
