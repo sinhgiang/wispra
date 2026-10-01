@@ -196,7 +196,10 @@ function scheduleSync(): void {
  * Wires auto-sync to actual data changes instead of a blind clock: a dictation added to
  * History, a Lexicon edit, or a Meeting update each (re)start a SYNC_DEBOUNCE_MS timer,
  * so a burst of activity collapses into one push shortly after it settles — an idle day
- * triggers nothing. A one-time sync SYNC_STARTUP_DELAY_MS after launch covers anything
+ * triggers nothing. The window is kept short (see SYNC_DEBOUNCE_MS) so content reaches
+ * the cloud quickly enough for the remote MCP (Claude.ai etc.) to see it soon after dictation,
+ * since that server can only ever read the synced copy, never the local machine. A one-time
+ * sync SYNC_STARTUP_DELAY_MS after launch covers anything
  * left over from the last session (e.g. a change whose debounce never got to fire before
  * quit). pushSync() is the actual gate (no-ops unless cloudSyncEnabled is on and the user
  * is logged in), so all of this can wire up unconditionally. The manual "Sync now" button

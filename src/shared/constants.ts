@@ -96,7 +96,7 @@ export const FREE_LIMIT_SECONDS = 30 * 60
 export const SYNC_MEETINGS_PER_REQUEST = 20
 export const SYNC_TIMEOUT_MS = 20_000
 /** Quiet period after a dictation/lexicon/meeting change before auto-sync pushes it. */
-export const SYNC_DEBOUNCE_MS = 60_000
+export const SYNC_DEBOUNCE_MS = 15_000
 /** Delay before the one-time catch-up auto-sync attempt after launch, so it doesn't compete with app startup. */
 export const SYNC_STARTUP_DELAY_MS = 10_000
 
