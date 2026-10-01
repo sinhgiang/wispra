@@ -84,6 +84,8 @@ export interface Settings {
   learningEnabled: boolean
   /** Also learn recurring names/brands/terms from History and meetings by itself (Learned tab). Only meaningful while learningEnabled is on. */
   autoLearnVocabulary: boolean
+  /** Opt-in: push History/Meetings/Lexicon to Supabase (see src/main/sync.ts). Requires being signed in. */
+  cloudSyncEnabled: boolean
   /** Incremented when defaults change, so migrations can upgrade old saved settings. */
   settingsVersion: number
 }
@@ -268,6 +270,31 @@ export interface AccountInfo {
   subscribeUrl: string | null
   /** Google profile photo URL. */
   avatarUrl?: string
+}
+
+/** Cloud sync state (see src/main/sync.ts) — surfaced in Settings > Account. */
+export interface SyncStatus {
+  enabled: boolean
+  syncing: boolean
+  /** ISO timestamp of the last successful sync, or null if never synced. */
+  lastSyncedAt: string | null
+  /** Message from the last failed attempt, or null if the last attempt succeeded (or none happened yet). */
+  lastError: string | null
+}
+
+/**
+ * Remote MCP connection link (see src/main/mcpLink.ts) — a secret URL, pasted as-is into
+ * ChatGPT/Claude.ai/Grok/etc., that lets that client read this user's synced cloud data.
+ * Unlike the reference "shown once" UX, Wispra persists the plaintext URL locally so the
+ * user can come back and copy it again — surfaced in Settings > Account.
+ */
+export interface McpLinkStatus {
+  /** The full connection URL, or null if never generated (or revoked). */
+  url: string | null
+  createdAt: string | null
+  lastUsedAt: string | null
+  /** Message from the last failed attempt to reach wispra-web, or null otherwise. */
+  lastError: string | null
 }
 
 export interface UsageStats {

@@ -10,6 +10,7 @@ import type {
   FixHistoryResult,
   HotkeyResult,
   LexiconEntry,
+  McpLinkStatus,
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContentResult,
@@ -23,6 +24,7 @@ import type {
   StatePayload,
   StyleProfile,
   Suggestion,
+  SyncStatus,
   TranscriptEntry,
   UpdateStatus,
   UsageStats
@@ -153,6 +155,22 @@ const api = {
   onAuthStateChanged: (cb: (state: { email: string } | null) => void): void => {
     ipcRenderer.on(IPC.AUTH_STATE, (_e, state: { email: string } | null) => cb(state))
   },
+
+  // --- cloud sync ---
+  syncNow: (): Promise<SyncStatus> => ipcRenderer.invoke(IPC.SYNC_NOW),
+  getSyncStatus: (): Promise<SyncStatus> => ipcRenderer.invoke(IPC.GET_SYNC_STATUS),
+  onSyncStatusChanged: (cb: (status: SyncStatus) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, status: SyncStatus): void => cb(status)
+    ipcRenderer.on(IPC.SYNC_STATUS_CHANGED, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.SYNC_STATUS_CHANGED, listener)
+    }
+  },
+
+  // --- remote MCP connection (Connect AI assistants card) ---
+  getMcpLink: (): Promise<McpLinkStatus> => ipcRenderer.invoke(IPC.MCP_GET_LINK),
+  generateMcpLink: (): Promise<McpLinkStatus> => ipcRenderer.invoke(IPC.MCP_GENERATE_LINK),
+  revokeMcpLink: (): Promise<McpLinkStatus> => ipcRenderer.invoke(IPC.MCP_REVOKE_LINK),
 
   // --- statistics & export ---
   getStats: (): Promise<UsageStats> => ipcRenderer.invoke(IPC.GET_STATS),

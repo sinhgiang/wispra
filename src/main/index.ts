@@ -15,10 +15,12 @@ import type {
   MeetingContent,
   MeetingContentResult,
   MeetingLanguageConfig,
+  McpLinkStatus,
   MeetingSession,
   MeetingState,
   Settings,
-  StatePayload
+  StatePayload,
+  SyncStatus
 } from '@shared/types'
 import {
   DONE_DISPLAY_MS,
@@ -68,6 +70,8 @@ import {
   showOverlayAt
 } from './windows'
 import { auth } from './auth'
+import { getStatus as getSyncStatus, onStatusChange as onSyncStatusChange, pushSync } from './sync'
+import { getStatus as getMcpLinkStatus, generateLink as generateMcpLink, revokeLink as revokeMcpLink } from './mcpLink'
 
 // macOS: open-url fires when the OS hands us a wispra:// URL (must register before ready)
 app.on('open-url', (event, url) => {
@@ -1000,6 +1004,23 @@ function wireIpc(): void {
       return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
     }
   })
+
+  // ── Cloud sync ─────────────────────────────────────────────────────────────
+
+  ipcMain.handle(IPC.SYNC_NOW, async (): Promise<SyncStatus> => {
+    await pushSync()
+    return getSyncStatus()
+  })
+
+  ipcMain.handle(IPC.GET_SYNC_STATUS, (): SyncStatus => getSyncStatus())
+
+  onSyncStatusChange((status) => broadcast(IPC.SYNC_STATUS_CHANGED, status))
+
+  // ── Remote MCP connection ────────────────────────────────────────────────
+
+  ipcMain.handle(IPC.MCP_GET_LINK, (): Promise<McpLinkStatus> => getMcpLinkStatus())
+  ipcMain.handle(IPC.MCP_GENERATE_LINK, (): Promise<McpLinkStatus> => generateMcpLink())
+  ipcMain.handle(IPC.MCP_REVOKE_LINK, (): Promise<McpLinkStatus> => revokeMcpLink())
 
   // Overlay drag — move window by delta while keeping it within work area
   ipcMain.on(IPC.MOVE_OVERLAY, (_event, dx: number, dy: number) => {

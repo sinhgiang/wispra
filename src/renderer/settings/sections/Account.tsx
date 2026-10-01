@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AccountInfo } from '@shared/types'
+import type { AccountInfo, McpLinkStatus, Settings, SyncStatus } from '@shared/types'
 
 const FREE_LIMIT_SECONDS = 30 * 60
 
@@ -7,11 +7,24 @@ function formatMinutes(seconds: number): string {
   return (seconds / 60).toFixed(1)
 }
 
-export function AccountSection(): React.JSX.Element {
+function formatSyncStatus(status: SyncStatus | null): string | null {
+  if (!status) return null
+  if (status.syncing) return 'Syncing…'
+  if (status.lastError) return 'Sync failed — will retry'
+  if (status.lastSyncedAt) return `Last synced ${new Date(status.lastSyncedAt).toLocaleString()}`
+  return null
+}
+
+export function AccountSection({ settings }: { settings: Settings }): React.JSX.Element {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null | 'loading'>('loading')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [loginBusy, setLoginBusy] = useState(false)
   const [logoutBusy, setLogoutBusy] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
+  const [syncBusy, setSyncBusy] = useState(false)
+  const [mcpStatus, setMcpStatus] = useState<McpLinkStatus | null>(null)
+  const [mcpBusy, setMcpBusy] = useState(false)
+  const [mcpCopied, setMcpCopied] = useState(false)
 
   useEffect(() => {
     void window.api.getAccountInfo().then((info) => {
@@ -27,7 +40,53 @@ export function AccountSection(): React.JSX.Element {
         void window.api.getAccountInfo().then(setAccountInfo)
       }
     })
+
+    void window.api.getSyncStatus().then(setSyncStatus)
+    window.api.onSyncStatusChanged(setSyncStatus)
   }, [])
+
+  useEffect(() => {
+    if (isLoggedIn && settings.cloudSyncEnabled) {
+      void window.api.getMcpLink().then(setMcpStatus)
+    }
+  }, [isLoggedIn, settings.cloudSyncEnabled])
+
+  async function handleSyncNow(): Promise<void> {
+    setSyncBusy(true)
+    try {
+      setSyncStatus(await window.api.syncNow())
+    } finally {
+      setSyncBusy(false)
+    }
+  }
+
+  async function handleGenerateMcpLink(confirmMessage?: string): Promise<void> {
+    if (confirmMessage && !window.confirm(confirmMessage)) return
+    setMcpBusy(true)
+    try {
+      setMcpStatus(await window.api.generateMcpLink())
+      setMcpCopied(false)
+    } finally {
+      setMcpBusy(false)
+    }
+  }
+
+  async function handleRevokeMcpLink(): Promise<void> {
+    if (!window.confirm('Revoke this connection? Any AI assistant using this link will stop being able to read your data.')) return
+    setMcpBusy(true)
+    try {
+      setMcpStatus(await window.api.revokeMcpLink())
+    } finally {
+      setMcpBusy(false)
+    }
+  }
+
+  function handleCopyMcpLink(): void {
+    if (!mcpStatus?.url) return
+    window.api.copyText(mcpStatus.url)
+    setMcpCopied(true)
+    setTimeout(() => setMcpCopied(false), 2000)
+  }
 
   async function handleLogin(): Promise<void> {
     setLoginBusy(true)
@@ -161,6 +220,122 @@ export function AccountSection(): React.JSX.Element {
               {logoutBusy ? 'Signing out…' : 'Sign out'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── Cloud sync ─────────────────────────────────────────── */}
+      {isLoggedIn && (
+        <div style={{ marginTop: '16px' }}>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={settings.cloudSyncEnabled}
+              onChange={(e) => void window.api.setSettings({ cloudSyncEnabled: e.target.checked })}
+            />
+            <div className="toggle-info">
+              <span className="toggle-label">Sync to cloud</span>
+              <span className="toggle-desc">
+                Push your dictation history, meeting transcripts, and learned vocabulary to Wispra
+                Cloud, so other tools can access them.
+              </span>
+            </div>
+            <div className="toggle-switch" />
+          </label>
+
+          {settings.cloudSyncEnabled && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+              <button
+                onClick={() => void handleSyncNow()}
+                disabled={syncBusy || syncStatus?.syncing}
+                style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)' }}
+              >
+                {syncBusy || syncStatus?.syncing ? 'Syncing…' : 'Sync now'}
+              </button>
+              {formatSyncStatus(syncStatus) && (
+                <span style={{ fontSize: '12px', color: syncStatus?.lastError ? 'var(--danger)' : 'var(--text-2)' }}>
+                  {formatSyncStatus(syncStatus)}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Remote MCP connection ─────────────────────────────────── */}
+      {isLoggedIn && settings.cloudSyncEnabled && (
+        <div className="plan-card" style={{ marginTop: '16px' }}>
+          <div className="plan-header">
+            <span className="plan-name">Connect AI assistants</span>
+          </div>
+          <p className="plan-desc" style={{ marginBottom: '10px' }}>
+            Paste this link into ChatGPT, Claude.ai, Grok, or any MCP-compatible client to let it
+            read your synced dictation history, meeting transcripts, and vocabulary. Anyone with
+            the link can use it — treat it like a password.
+          </p>
+
+          {mcpStatus === null && <p className="plan-desc" style={{ opacity: 0.5 }}>Loading…</p>}
+
+          {mcpStatus !== null && !mcpStatus.url && (
+            <button className="primary" disabled={mcpBusy} onClick={() => void handleGenerateMcpLink()}>
+              {mcpBusy ? 'Generating…' : 'Generate connection link'}
+            </button>
+          )}
+
+          {mcpStatus !== null && mcpStatus.url && (
+            <>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  readOnly
+                  value={mcpStatus.url}
+                  onFocus={(e) => e.target.select()}
+                  style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    padding: '6px 8px',
+                    borderRadius: 'var(--r-sm)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text-2)',
+                  }}
+                />
+                <button
+                  onClick={handleCopyMcpLink}
+                  style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)' }}
+                >
+                  {mcpCopied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() =>
+                    void handleGenerateMcpLink(
+                      'Regenerate this link? The current one will stop working for any AI assistant already using it.'
+                    )
+                  }
+                  disabled={mcpBusy}
+                  style={{ fontSize: '13px', color: 'var(--text-2)', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}
+                >
+                  Regenerate
+                </button>
+                <button
+                  onClick={() => void handleRevokeMcpLink()}
+                  disabled={mcpBusy}
+                  style={{ fontSize: '13px', color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}
+                >
+                  Revoke
+                </button>
+                {mcpStatus.lastUsedAt && (
+                  <span style={{ fontSize: '12px', color: 'var(--text-2)' }}>
+                    Last used {new Date(mcpStatus.lastUsedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              {mcpStatus.lastError && (
+                <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '6px' }}>{mcpStatus.lastError}</p>
+              )}
+            </>
+          )}
         </div>
       )}
 

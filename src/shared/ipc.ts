@@ -111,6 +111,23 @@ export const IPC = {
   AUTH_STATE: 'auth:state',
   GET_ACCOUNT_INFO: 'auth:account-info',
 
+  // cloud sync — opt-in push of History/Meetings/Lexicon to Supabase (see src/main/sync.ts)
+  // renderer -> main: trigger an immediate sync; resolves once the attempt finishes (success or failure)
+  SYNC_NOW: 'sync:now',
+  // renderer -> main: resolves the current SyncStatus
+  GET_SYNC_STATUS: 'sync:get-status',
+  // main -> settings renderer: pushed after every sync attempt (success or failure)
+  SYNC_STATUS_CHANGED: 'sync:status-changed',
+
+  // remote MCP connection — secret link (see src/main/mcpLink.ts) that lets ChatGPT/Claude.ai/
+  // Grok/etc. read this user's synced_* data from wispra-web's /api/mcp/[token] route
+  // renderer -> main: resolves the current McpLinkStatus
+  MCP_GET_LINK: 'mcp:get-link',
+  // renderer -> main: generate (first time) or rotate (replace) the link; resolves McpLinkStatus
+  MCP_GENERATE_LINK: 'mcp:generate-link',
+  // renderer -> main: revoke the link so it stops working; resolves McpLinkStatus
+  MCP_REVOKE_LINK: 'mcp:revoke-link',
+
   // meeting mode (long-form continuous recording) — fully separate from the channels above
   // main -> settings renderer: switch the Settings window to the Meeting tab (e.g. from tray)
   MEETING_OPEN_TAB: 'meeting:open-tab',

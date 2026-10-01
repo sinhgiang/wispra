@@ -77,6 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   continuousMode: false,
   learningEnabled: true,
   autoLearnVocabulary: true,
+  cloudSyncEnabled: false,
   settingsVersion: 2
 }
 
@@ -89,6 +90,11 @@ export const WISPRA_API_BASE = 'https://wispra-web.vercel.app'
 export const POLAR_CHECKOUT_URL = 'https://buy.polar.sh/YOUR_PRODUCT_LINK'
 /** Free tier limit in seconds (30 minutes per month). */
 export const FREE_LIMIT_SECONDS = 30 * 60
+
+// ── Cloud sync (sync.ts) ──────────────────────────────────────────────────────
+/** Meeting sessions sent per POST /api/sync request — keeps request bodies well under Vercel's limit. */
+export const SYNC_MEETINGS_PER_REQUEST = 20
+export const SYNC_TIMEOUT_MS = 20_000
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'
 // Full large-v3, not the "-turbo" distilled variant: turbo drops the decoder from 32 to 4

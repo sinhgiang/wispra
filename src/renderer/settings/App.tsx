@@ -153,7 +153,7 @@ export function App(): React.JSX.Element {
         </main>
       ) : (
         <main key="account">
-          <AccountSection />
+          <AccountSection settings={settings} />
         </main>
       )}
     </div>
