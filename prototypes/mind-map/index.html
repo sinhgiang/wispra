@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wispra — Mind map design prototype</title>
+<style>
+  /* Tokens copied from src/renderer/settings/settings.css so the prototype matches the app. */
+  :root {
+    --accent: #6366f1;
+    --accent-hover: #4f46e5;
+    --accent-subtle: rgba(99, 102, 241, 0.1);
+    --bg: #ffffff;
+    --surface: #f7f7f8;
+    --surface-2: #f0f0f2;
+    --border: rgba(0, 0, 0, 0.07);
+    --border-md: rgba(0, 0, 0, 0.13);
+    --text: #111827;
+    --text-2: #6b7280;
+    --text-3: #9ca3af;
+    --r: 10px;
+    --r-sm: 7px;
+    --r-pill: 100px;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --shadow: 0 8px 28px rgba(15, 17, 23, 0.12), 0 1px 3px rgba(15, 17, 23, 0.08);
+    --float: rgba(255, 255, 255, 0.92);
+    --stage: #e9eaee;
+  }
+  :root[data-theme='dark'] {
+    --bg: #0f1117;
+    --surface: #181b22;
+    --surface-2: #1d2029;
+    --border: rgba(255, 255, 255, 0.07);
+    --border-md: rgba(255, 255, 255, 0.12);
+    --text: #eef0f5;
+    --text-2: #8892a4;
+    --text-3: #4b5563;
+    --shadow: 0 10px 32px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --float: rgba(24, 27, 34, 0.92);
+    --stage: #05060a;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--stage);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-md); border-radius: 99px; }
+
+  /* ── Prototype bar (NOT part of the app) ───────────────────────────── */
+  .proto-bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 7px 14px;
+    background: #14161c;
+    color: #c9cfdb;
+    font-size: 12px;
+  }
+  .proto-bar strong { color: #fff; font-weight: 600; }
+  .proto-bar .spacer { flex: 1; }
+  .proto-group { display: flex; align-items: center; gap: 6px; }
+  .proto-seg { display: flex; background: #262a34; border-radius: 6px; padding: 2px; }
+  .proto-seg button, .proto-btn {
+    border: none;
+    background: transparent;
+    color: #aab1c0;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .proto-seg button.active { background: #3b4150; color: #fff; }
+  .proto-btn { background: #262a34; }
+  .proto-btn:hover, .proto-seg button:hover { color: #fff; }
+
+  /* ── App window ────────────────────────────────────────────────────── */
+  .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .window {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .stage.compact { padding: 16px; }
+  .stage.compact .window {
+    width: 780px;
+    height: 600px;
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border-md);
+  }
+
+  .app-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .wordmark { display: flex; align-items: center; gap: 8px; }
+  .wordmark-badge {
+    width: 24px; height: 24px; border-radius: 7px; background: var(--accent);
+    display: grid; place-items: center; color: #fff;
+  }
+  .wordmark h1 { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+  .tab-nav { display: flex; gap: 2px; overflow: hidden; }
+  .tab-nav span {
+    font-size: 12.5px; font-weight: 500; color: var(--text-2);
+    padding: 5px 10px; border-radius: var(--r-sm); white-space: nowrap;
+  }
+  .tab-nav span.active { background: var(--surface-2); color: var(--text); }
+  .tab-beta { font-size: 8.5px; font-weight: 700; color: var(--accent); margin-left: 3px; vertical-align: 1px; }
+
+  .meeting-layout { flex: 1; display: flex; min-height: 0; }
+  .meeting-sidebar {
+    width: 200px; flex-shrink: 0; border-right: 1px solid var(--border);
+    padding: 14px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .meeting-new-btn {
+    border: 1px solid var(--border-md); background: var(--surface); color: var(--text);
+    border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-weight: 500; text-align: center;
+  }
+  .side-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); padding: 4px 2px 0; }
+  .session-row { border-radius: var(--r-sm); padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .session-row.active { background: var(--accent-subtle); }
+  .session-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-meta { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+  .meeting-main { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px; display: flex; flex-direction: column; }
+  .meeting-session-view { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  /* Header, tabs and text views keep the app's 900px reading width; only the map goes edge to edge. */
+  .meeting-session-view > * { width: 100%; max-width: 900px; margin-left: auto; margin-right: auto; }
+  .meeting-session-view > .view[data-view='mindmap'] { max-width: none; }
+  .meeting-session-heading h2 { font-size: 15px; font-weight: 600; }
+  .meeting-session-date { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .meeting-view-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .meeting-view-toggle { display: flex; flex-wrap: wrap; gap: 2px; background: var(--surface-2); border-radius: var(--r-pill); padding: 2px; }
+  .meeting-view-btn {
+    border: none; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 500;
+    padding: 5px 12px; border-radius: var(--r-pill); cursor: pointer;
+  }
+  .meeting-view-btn:hover { color: var(--text); }
+  .meeting-view-btn.active { background: var(--surface); color: var(--text); }
+  .meeting-view-btn .new-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-left: 5px; vertical-align: 2px; }
+  .meeting-copy-btn {
+    flex-shrink: 0; border: 1px solid var(--border-md); background: var(--surface); color: var(--text-2);
+    border-radius: var(--r-sm); padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  .meeting-copy-btn:hover { background: var(--surface-2); }
+
+  .view { flex: 1; min-height: 0; display: none; }
+  .view.active { display: flex; flex-direction: column; }
+
+  /* Transcript */
+  .meeting-transcript { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 0 14px 0 10px; }
+  .meeting-paragraph { display: flex; gap: 10px; }
+  .meeting-paragraph-time { flex-shrink: 0; width: 64px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+  .meeting-paragraph-elapsed { display: block; font-size: 11px; font-weight: 600; color: var(--text-2); }
+  .meeting-paragraph-clock { display: block; font-size: 10px; color: var(--text-3); margin-top: 1px; }
+  .meeting-paragraph p { min-width: 0; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.55; }
+  .meeting-paragraph-highlighted {
+    margin: 0 -10px; padding: 8px 10px; border-radius: var(--r-sm);
+    background: rgba(245, 158, 11, 0.14); box-shadow: inset 2px 0 0 #f59e0b;
+  }
+  :root[data-theme='dark'] .meeting-paragraph-highlighted { background: rgba(245, 158, 11, 0.2); }
+  .from-map {
+    flex-shrink: 0; display: none; align-items: center; gap: 10px; margin-bottom: 10px;
+    padding: 7px 8px 7px 12px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-2);
+  }
+  .from-map.show { display: flex; }
+  .from-map b { color: var(--text); font-weight: 600; }
+  .from-map .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .from-map .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Summary + placeholders */
+  .meeting-summary-view { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+  .meeting-summary-view h3 { margin: 16px 0 4px; font-size: 14px; font-weight: 700; }
+  .meeting-summary-view h3:first-child { margin-top: 0; }
+  .meeting-summary-view p, .meeting-summary-view li { font-size: 13.5px; line-height: 1.6; }
+  .meeting-summary-view ul { padding-left: 20px; margin-bottom: 10px; }
+  .placeholder { color: var(--text-3); font-size: 13px; text-align: center; padding-top: 40px; }
+
+  /* ── Mind map ──────────────────────────────────────────────────────── */
+  .mm-panel {
+    position: relative; flex: 1; min-height: 0;
+    border: 1px solid var(--border-md); border-radius: 14px; overflow: hidden;
+    background: var(--bg);
+    container-type: inline-size;
+  }
+  .window.mm-full .mm-panel { position: absolute; inset: 0; z-index: 20; border: none; border-radius: 0; }
+  .mm-canvas { position: absolute; inset: 0; cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .mm-canvas.mm-grabbing { cursor: grabbing; }
+  .mm-node { cursor: pointer; outline: none; }
+  .mm-node .mm-box { transition: filter 0.12s ease; }
+  .mm-node:hover .mm-box { filter: brightness(0.96) saturate(1.15); }
+  :root[data-theme='dark'] .mm-node:hover .mm-box { filter: brightness(1.18); }
+  .mm-node:focus-visible .mm-ring { display: inline !important; }
+  .mm-toggle circle { transition: transform 0.12s ease; transform-box: fill-box; transform-origin: center; }
+  .mm-toggle:hover circle { transform: scale(1.18); }
+
+  .mm-float {
+    position: absolute; z-index: 3; display: flex; align-items: center; gap: 2px;
+    padding: 3px; border-radius: 11px; background: var(--float);
+    border: 1px solid var(--border-md); box-shadow: 0 2px 10px rgba(15, 17, 23, 0.07);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .mm-float.tl { top: 12px; left: 12px; }
+  .mm-float.tr { top: 12px; right: 12px; }
+  .mm-float.br { bottom: 12px; right: 12px; }
+  .mm-float .label { font-size: 11px; font-weight: 600; color: var(--text-3); padding: 0 6px 0 8px; }
+  .mm-btn {
+    height: 28px; min-width: 28px; padding: 0 8px; border: none; background: transparent; color: var(--text-2);
+    border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+  }
+  .mm-btn:hover { background: var(--surface-2); color: var(--text); }
+  .mm-btn.active { background: var(--accent-subtle); color: var(--accent); font-weight: 600; }
+  :root[data-theme='dark'] .mm-btn.active { color: #a5b4fc; }
+  .mm-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+  .mm-btn.zoom-label { min-width: 48px; font-variant-numeric: tabular-nums; }
+  .mm-sep { width: 1px; height: 16px; background: var(--border-md); margin: 0 3px; }
+  .mm-hint {
+    position: absolute; left: 14px; bottom: 14px; z-index: 2; font-size: 11.5px; color: var(--text-3);
+    pointer-events: none; transition: opacity 0.4s ease;
+  }
+  .mm-hint.hide { opacity: 0; }
+
+  /* Narrow panels (the default 780px window): icon-only toolbar, no hint. */
+  @container (max-width: 640px) {
+    .mm-btn .txt, .mm-hint { display: none; }
+  }
+
+  /* Node detail card */
+  .mm-card {
+    position: absolute; z-index: 4; top: 58px; right: 12px; width: min(296px, calc(100% - 24px)); max-height: calc(100% - 116px);
+    display: flex; flex-direction: column; gap: 10px; padding: 14px;
+    background: var(--float); border: 1px solid var(--border-md); border-radius: 14px; box-shadow: var(--shadow);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    opacity: 0; transform: translateX(14px); pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.28s var(--ease-out);
+    overflow-y: auto;
+  }
+  .mm-card.show { opacity: 1; transform: none; pointer-events: auto; }
+  .mm-card-top { display: flex; align-items: center; gap: 7px; }
+  .mm-card-crumb { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mm-card-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .mm-card-close { width: 24px; height: 24px; min-width: 0; padding: 0; margin: -4px -4px -4px 0; }
+  .mm-card h3 { font-size: 15px; font-weight: 650; line-height: 1.3; letter-spacing: -0.005em; }
+  .mm-card-note { font-size: 13px; line-height: 1.55; color: var(--text); }
+  .mm-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .mm-chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; color: var(--text-2);
+    background: var(--surface-2); border-radius: var(--r-pill); padding: 2px 9px; font-variant-numeric: tabular-nums;
+  }
+  .mm-chip svg { width: 11px; height: 11px; }
+  .mm-card-actions { display: flex; gap: 6px; margin-top: 2px; }
+  .mm-primary {
+    flex: 1; border: none; background: var(--accent); color: #fff; border-radius: var(--r-sm);
+    padding: 8px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .mm-primary:hover { background: var(--accent-hover); }
+  .mm-primary svg { width: 14px; height: 14px; }
+  .mm-secondary {
+    border: 1px solid var(--border-md); background: transparent; color: var(--text-2); border-radius: var(--r-sm);
+    padding: 8px 11px; font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap;
+  }
+  .mm-secondary:hover { background: var(--surface-2); color: var(--text); }
+
+  /* Generating overlay */
+  .mm-gen {
+    position: absolute; inset: 0; z-index: 6; display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: var(--bg); text-align: center; padding: 24px;
+  }
+  .mm-gen.show { display: flex; }
+  .mm-gen-art { width: 132px; height: 72px; }
+  .mm-gen-art path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; opacity: 0.3; stroke-dasharray: 60; animation: gen-draw 1.6s ease-in-out infinite; }
+  .mm-gen-art path:nth-child(2) { animation-delay: 0.15s; } .mm-gen-art path:nth-child(3) { animation-delay: 0.3s; }
+  .mm-gen-art path:nth-child(4) { animation-delay: 0.45s; } .mm-gen-art path:nth-child(5) { animation-delay: 0.6s; }
+  .mm-gen-art path:nth-child(6) { animation-delay: 0.75s; }
+  .mm-gen-art circle { fill: var(--accent); }
+  @keyframes gen-draw { 0% { stroke-dashoffset: 60; opacity: 0.15; } 50% { stroke-dashoffset: 0; opacity: 0.75; } 100% { stroke-dashoffset: -60; opacity: 0.15; } }
+  .mm-gen-title { font-size: 14px; font-weight: 600; }
+  .mm-gen-step { font-size: 12.5px; color: var(--text-2); min-height: 19px; }
+  .mm-gen-bar { width: 220px; height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+  .mm-gen-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 4px; transition: width 0.5s ease; }
+  .mm-gen-foot { font-size: 11.5px; color: var(--text-3); max-width: 320px; }
+
+  /* Export menu */
+  .mm-menu-wrap { position: relative; }
+  .mm-menu {
+    position: absolute; top: 34px; right: 0; min-width: 196px; padding: 4px; display: none; flex-direction: column;
+    background: var(--bg); border: 1px solid var(--border-md); border-radius: 10px; box-shadow: var(--shadow);
+  }
+  .mm-menu.show { display: flex; }
+  .mm-menu button {
+    border: none; background: transparent; color: var(--text); text-align: left; font-size: 12.5px;
+    padding: 7px 10px; border-radius: 7px; cursor: pointer; display: flex; flex-direction: column; gap: 1px;
+  }
+  .mm-menu button small { font-size: 11px; color: var(--text-3); }
+  .mm-menu button:hover { background: var(--surface-2); }
+
+  /* Chat */
+  .meeting-chat-panel { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .meeting-chat-header { font-size: 12px; font-weight: 600; color: var(--text-2); }
+  .meeting-chat-empty { color: var(--text-3); font-size: 12.5px; line-height: 1.5; padding: 4px 2px 8px; }
+  .meeting-chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
+  .meeting-chat-input {
+    flex: 1; resize: none; border: 1px solid var(--border-md); background: var(--surface); color: var(--text);
+    border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-family: inherit; line-height: 1.4;
+  }
+  .meeting-chat-input:focus { outline: none; border-color: var(--accent); }
+  .meeting-chat-send-btn { border: none; background: var(--accent); color: #fff; border-radius: var(--r-pill); padding: 8px 16px; font-size: 12.5px; font-weight: 600; opacity: 0.5; }
+  .meeting-chat-panel.compact { border-top: none; padding-top: 0; }
+  .meeting-chat-panel.compact .meeting-chat-header, .meeting-chat-panel.compact .meeting-chat-empty { display: none; }
+
+  .toast {
+    position: absolute; left: 50%; bottom: 26px; z-index: 40; transform: translate(-50%, 12px);
+    background: #111827; color: #fff; font-size: 12.5px; padding: 8px 14px; border-radius: 9px;
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.25s var(--ease-out);
+  }
+  :root[data-theme='dark'] .toast { background: #eef0f5; color: #111827; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 720px) { .meeting-sidebar { display: none; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <span><strong>Design prototype</strong> · Mind map tab (T-0004) · sample data, nothing here calls the AI</span>
+  <span class="spacer"></span>
+  <div class="proto-group">Theme
+    <div class="proto-seg" id="themeSeg"><button data-theme="light">Light</button><button data-theme="dark">Dark</button></div>
+  </div>
+  <div class="proto-group">Window
+    <div class="proto-seg" id="sizeSeg"><button data-size="fill" class="active">Large</button><button data-size="compact">Default 780 × 600</button></div>
+  </div>
+  <button class="proto-btn" id="replayGen">Replay first-open loading</button>
+</div>
+
+<div class="stage" id="stage">
+  <div class="window" id="window">
+    <header class="app-header">
+      <div class="wordmark">
+        <div class="wordmark-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+        <h1>Wispra</h1>
+      </div>
+      <nav class="tab-nav">
+        <span>Dictate</span><span class="active">Meeting<span class="tab-beta">BETA</span></span><span>Transcribe</span><span>History</span><span>Learned</span><span>Account</span>
+      </nav>
+    </header>
+
+    <div class="meeting-layout">
+      <aside class="meeting-sidebar">
+        <div class="meeting-new-btn">+ New recording</div>
+        <div class="side-label">Recent</div>
+        <div class="session-row active"><span class="session-title">Q4 Product Planning &amp; Launch Review</span><span class="session-meta">2:38:14</span></div>
+        <div class="session-row"><span class="session-title">Weekly sync — design</span><span class="session-meta">42:07</span></div>
+        <div class="session-row"><span class="session-title">Customer call: Northfield</span><span class="session-meta">1:04:51</span></div>
+        <div class="session-row"><span class="session-title">Lecture 7 — Marketing strategy</span><span class="session-meta">1:52:30</span></div>
+      </aside>
+
+      <div class="meeting-main">
+        <div class="meeting-session-view" id="sessionView">
+          <div class="meeting-session-heading">
+            <h2 id="sessionTitle"></h2>
+            <div class="meeting-session-date" id="sessionDate"></div>
+          </div>
+          <div class="meeting-view-toggle-row">
+            <div class="meeting-view-toggle" id="tabs"></div>
+            <button class="meeting-copy-btn" id="copyBtn">Copy outline</button>
+          </div>
+
+          <!-- Transcript -->
+          <div class="view" data-view="transcript">
+            <div class="from-map" id="fromMap">
+              <span class="dot" id="fromMapDot"></span>
+              <span class="grow">From mind map: <b id="fromMapLabel"></b></span>
+              <button class="mm-secondary" id="backToMap" style="padding:4px 10px">← Back to mind map</button>
+              <button class="mm-btn" id="clearFromMap" aria-label="Clear highlight" style="height:24px;min-width:24px;padding:0">✕</button>
+            </div>
+            <div class="meeting-transcript" id="transcript"></div>
+          </div>
+
+          <!-- Summary -->
+          <div class="view" data-view="summary">
+            <div class="meeting-summary-view">
+              <h3>Overview</h3>
+              <p id="summaryText"></p>
+              <h3>Key decisions</h3>
+              <ul>
+                <li>Three bets for Q4: onboarding redesign, SSO with audit log, mobile offline (read-only first).</li>
+                <li>Calendar sync moves to Q1; only a discovery spike this quarter.</li>
+                <li>New Business tier at $24 per seat; existing Team customers keep their price for 12 months.</li>
+                <li>Launch on November 17, with a go / no-go checkpoint on November 10.</li>
+              </ul>
+              <h3>Action items</h3>
+              <ul>
+                <li>Maya — Q4 roadmap document (Oct 5)</li>
+                <li>Daniel — SSO technical plan (Oct 8)</li>
+                <li>Linh — onboarding prototypes (Oct 12)</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- Mind map -->
+          <div class="view" data-view="mindmap">
+            <div class="mm-panel" id="mmPanel">
+              <div class="mm-canvas" id="mmCanvas"></div>
+
+              <div class="mm-float tl" role="group" aria-label="Levels shown">
+                <span class="label">Levels</span>
+                <button class="mm-btn" data-level="2" title="Centre and main branches">2</button>
+                <button class="mm-btn" data-level="3" title="Main branches and their points">3</button>
+                <button class="mm-btn" data-level="9" title="Expand everything">All</button>
+              </div>
+
+              <div class="mm-float tr">
+                <button class="mm-btn" id="regenBtn" title="Build the map again from the transcript">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+                  <span class="txt">Regenerate</span>
+                </button>
+                <span class="mm-sep"></span>
+                <div class="mm-menu-wrap">
+                  <button class="mm-btn" id="exportBtn" aria-haspopup="menu" title="Export">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                    <span class="txt">Export</span>
+                  </button>
+                  <div class="mm-menu" id="exportMenu" role="menu">
+                    <button id="exportPng" role="menuitem">Download PNG<small>The map as shown, at 2× resolution</small></button>
+                    <button id="exportMd" role="menuitem">Copy Markdown outline<small>The full map as a nested list</small></button>
+                  </div>
+                </div>
+                <span class="mm-sep"></span>
+                <button class="mm-btn" id="fullBtn" title="Full screen (Esc to exit)" aria-label="Full screen">
+                  <svg id="fullIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+                </button>
+              </div>
+
+              <div class="mm-float br" role="group" aria-label="Zoom">
+                <button class="mm-btn" id="zoomOut" title="Zoom out (−)" aria-label="Zoom out">−</button>
+                <button class="mm-btn zoom-label" id="zoomLabel" title="Reset to 100% (0)">100%</button>
+                <button class="mm-btn" id="zoomIn" title="Zoom in (+)" aria-label="Zoom in">+</button>
+                <span class="mm-sep"></span>
+                <button class="mm-btn" id="fitBtn" title="Fit to screen (F)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 12h6"/></svg>
+                  <span class="txt">Fit</span>
+                </button>
+              </div>
+
+              <div class="mm-hint" id="mmHint">Click a numbered circle to open a branch · click a node for details · scroll to zoom · drag to move</div>
+
+              <aside class="mm-card" id="mmCard" aria-live="polite">
+                <div class="mm-card-top">
+                  <span class="mm-card-dot" id="cardDot"></span>
+                  <span class="mm-card-crumb" id="cardCrumb"></span>
+                  <button class="mm-btn mm-card-close" id="cardClose" aria-label="Close">✕</button>
+                </div>
+                <h3 id="cardTitle"></h3>
+                <div class="mm-chips" id="cardChips"></div>
+                <p class="mm-card-note" id="cardNote"></p>
+                <div class="mm-card-actions">
+                  <button class="mm-primary" id="showInTranscript">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+                    Show in transcript
+                  </button>
+                  <button class="mm-secondary" id="cardToggle">Expand</button>
+                </div>
+              </aside>
+
+              <div class="mm-gen" id="mmGen">
+                <svg class="mm-gen-art" viewBox="0 0 132 72">
+                  <path d="M66 36C84 36 84 12 104 12"/><path d="M66 36C84 36 84 36 104 36"/><path d="M66 36C84 36 84 60 104 60"/>
+                  <path d="M66 36C48 36 48 12 28 12"/><path d="M66 36C48 36 48 36 28 36"/><path d="M66 36C48 36 48 60 28 60"/>
+                  <circle cx="66" cy="36" r="6"/>
+                </svg>
+                <div class="mm-gen-title">Building the mind map</div>
+                <div class="mm-gen-step" id="genStep"></div>
+                <div class="mm-gen-bar"><i id="genBar"></i></div>
+                <div class="mm-gen-foot">This runs once. The map is saved with the recording and opens instantly next time.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Other content tabs (unchanged, not part of this prototype) -->
+          <div class="view" data-view="other"><div class="placeholder">This tab is unchanged and not part of the prototype.</div></div>
+
+          <div class="meeting-chat-panel" id="chatPanel">
+            <div class="meeting-chat-header">Ask about this recording</div>
+            <div class="meeting-chat-empty">Ask anything about this recording — e.g. "What did we decide about the budget?" — and the relevant part of the transcript will be highlighted.</div>
+            <div class="meeting-chat-input-row">
+              <textarea class="meeting-chat-input" rows="1" placeholder="Ask a question about this recording…"></textarea>
+              <button class="meeting-chat-send-btn" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<script src="sample-data.js"></script>
+<script src="mindmap.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
