@@ -379,6 +379,7 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
                 </button>
               </div>
               <div style={{ fontSize: '12px', color: formatExpiry(mcpStatus.expiresAt).expired ? 'var(--danger)' : 'var(--text-2)', marginTop: '4px' }}>
+                {mcpStatus.createdAt && `Created ${new Date(mcpStatus.createdAt).toLocaleString()} · `}
                 {formatExpiry(mcpStatus.expiresAt).text}
                 {formatExpiry(mcpStatus.expiresAt).expired && ' — regenerate below to reconnect'}
               </div>
@@ -462,17 +463,17 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
                 )}
               </div>
 
-              <div style={{ display: 'flex', gap: '12px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   onClick={() =>
                     void handleGenerateMcpLink(
-                      `Generate a new link (${EXPIRY_OPTIONS.find((o) => o.value === expiryChoice)?.label.toLowerCase()})? The current one will stop working for any AI assistant already using it.`
+                      `Generate a new link (${EXPIRY_OPTIONS.find((o) => o.value === expiryChoice)?.label.toLowerCase()})?\n\nThe current link will stop working immediately for any AI assistant already connected — you'll need to paste the new one in to reconnect it.`
                     )
                   }
                   disabled={mcpBusy}
-                  style={{ fontSize: '13px', color: 'var(--text-2)', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}
+                  style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
                 >
-                  Regenerate
+                  {mcpBusy ? 'Generating…' : 'Generate new link'}
                 </button>
                 <button
                   onClick={() => void handleRevokeMcpLink()}
