@@ -95,6 +95,10 @@ export const FREE_LIMIT_SECONDS = 30 * 60
 /** Meeting sessions sent per POST /api/sync request — keeps request bodies well under Vercel's limit. */
 export const SYNC_MEETINGS_PER_REQUEST = 20
 export const SYNC_TIMEOUT_MS = 20_000
+/** How often the periodic auto-sync timer fires; pushSync() itself no-ops when sync is off or logged out. */
+export const SYNC_AUTO_INTERVAL_MS = 20 * 60_000
+/** Delay before the first auto-sync attempt after launch, so it doesn't compete with app startup. */
+export const SYNC_STARTUP_DELAY_MS = 10_000
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'
 // Full large-v3, not the "-turbo" distilled variant: turbo drops the decoder from 32 to 4

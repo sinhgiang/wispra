@@ -70,7 +70,7 @@ import {
   showOverlayAt
 } from './windows'
 import { auth } from './auth'
-import { getStatus as getSyncStatus, onStatusChange as onSyncStatusChange, pushSync } from './sync'
+import { getStatus as getSyncStatus, initAutoSync, onStatusChange as onSyncStatusChange, pushSync } from './sync'
 import { getStatus as getMcpLinkStatus, generateLink as generateMcpLink, revokeLink as revokeMcpLink } from './mcpLink'
 
 // macOS: open-url fires when the OS hands us a wispra:// URL (must register before ready)
@@ -191,6 +191,7 @@ async function main(): Promise<void> {
   initUpdater(store.get().autoUpdate)
   store.onChange((s) => setAutoUpdate(s.autoUpdate))
   store.onChange((s) => autoVocab.onSettingsChanged(s))
+  initAutoSync()
 
   checkJustUpdated()
 

@@ -5,7 +5,13 @@ import { auth } from './auth'
 import { history } from './history'
 import { lexicon } from './lexicon'
 import { store } from './store'
-import { SYNC_MEETINGS_PER_REQUEST, SYNC_TIMEOUT_MS, WISPRA_API_BASE } from '@shared/constants'
+import {
+  SYNC_AUTO_INTERVAL_MS,
+  SYNC_MEETINGS_PER_REQUEST,
+  SYNC_STARTUP_DELAY_MS,
+  SYNC_TIMEOUT_MS,
+  WISPRA_API_BASE
+} from '@shared/constants'
 import type { MeetingSession, SyncStatus } from '@shared/types'
 
 interface SyncState {
@@ -171,4 +177,17 @@ export async function pushSync(): Promise<void> {
     syncing = false
     emitStatus()
   }
+}
+
+/**
+ * Starts the background auto-sync timer: one attempt shortly after launch, then every
+ * SYNC_AUTO_INTERVAL_MS after that, for the app's lifetime. pushSync() is the actual
+ * gate (no-ops unless cloudSyncEnabled is on and the user is logged in), so this can
+ * fire unconditionally — flipping the setting on takes effect on the next tick with no
+ * extra wiring. The manual "Sync now" button (IPC.SYNC_NOW) calls pushSync() directly
+ * and runs independently of this timer.
+ */
+export function initAutoSync(): void {
+  setTimeout(() => void pushSync(), SYNC_STARTUP_DELAY_MS)
+  setInterval(() => void pushSync(), SYNC_AUTO_INTERVAL_MS)
 }
