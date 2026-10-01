@@ -253,9 +253,15 @@ export interface MeetingTitleResult {
   summary: string
 }
 
-const MEETING_TITLE_TIMEOUT_MS = 30_000
+// Long-form, needs real time to think through a long transcript section by section —
+// same order of magnitude as the website article's own timeout below.
+const MEETING_TITLE_TIMEOUT_MS = 60_000
 // Very long meetings could blow the model's context window — cap what we send.
 const MAX_TRANSCRIPT_CHARS = 20_000
+// The summary specifically needs to see much more of a long meeting than the short
+// social-post platforms do (a punchy post only needs a gist; a thorough summary needs
+// to witness every topic change) — a separate, larger budget just for that call.
+const SUMMARY_MAX_TRANSCRIPT_CHARS = 60_000
 
 /** Human-readable name for an ISO-639-1 code, for embedding in a prompt sentence. Falls back to the raw code if it's not in the known list. */
 function languageName(code: string): string {
@@ -398,16 +404,22 @@ export async function translateSegment(
   }
 }
 
-const MEETING_TITLE_PROMPT = `You are analyzing a meeting/voice-memo transcript. Read the whole thing and respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:
+const ANTI_FABRICATION_RULE =
+  '- Base everything only on what is actually said in the transcript. NEVER invent facts, numbers, statistics, quotes, or claims that are not present in it — if the transcript lacks specifics, stay general rather than making something up.'
+
+const MEETING_TITLE_PROMPT = `You are a professional note-taker and meeting-minutes writer with 10-15+ years of experience covering long meetings, demo days, lectures, interviews, and voice memos — thorough and precise, never skipping a topic just to keep things short. Read the whole transcript and respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:
 {"title": "...", "summary": "..."}
 
 - "title": a short, specific, memorable title describing what the meeting was actually about — its topic or subject, not generic words like "Meeting" or "Recording". Keep it as tight as possible, ideally under 40 characters (roughly 3-6 words) — it is shown in a narrow sidebar and gets truncated if longer. Do NOT include any date or time in it, that is tracked separately.
-- "summary": a well-structured write-up, like a short report with an opening, a body, and a closing — not one dense paragraph. Use this exact plain-text layout (it is rendered as-is, not as markdown):
-  - One short opening sentence stating what the discussion was about.
-  - A blank line, then the key points as a bulleted list, one point per line, each line starting with "- ".
-  - A blank line, then one short closing sentence (outcome, decision, or next step) if the transcript supports one; omit it if there isn't one.
+- "summary": real meeting minutes, not a quick blurb. Its length and depth MUST scale with how much ground the transcript actually covers — a short few-minute dictation deserves a short summary, but a long, dense recording (a multi-hour meeting, demo day, lecture, or presentation covering many distinct topics or speakers) deserves a genuinely long, detailed write-up that works through EVERY distinct topic/segment/speaker actually raised, not condensed into a handful of generic bullets. Under-summarizing a long, information-dense transcript into a few short lines is a failure — match the summary's size to the source's size. Use this exact plain-text layout (it is rendered as-is, not as markdown, but this lightweight structure is understood and styled):
+  - One opening paragraph (2-4 sentences) stating what the discussion was about and its overall scope.
+  - A blank line, then one section per distinct topic/segment/speaker actually covered, in the order it came up. Each section starts with a one-line heading on its own line prefixed with "## " (e.g. "## Nguyễn Tùng Sơn mở đầu") naming that topic, followed by a blank line, then as many "- " bullet points as the content actually supports (2-8+) capturing the real substance — specific names, numbers, decisions, examples, questions, objections — not vague restatements. Leave a blank line between sections. For a long, dense transcript, use as many sections as the real topic changes warrant (easily 5-15+ for a multi-hour meeting with many subjects) — never merge distinct topics together just to produce fewer, shorter sections.
+  - A blank line, then one closing paragraph (outcome, decisions made, next steps, how it wrapped up) if the transcript supports one; omit it if there isn't one.
+- Every heading you write must be in the same language as the rest of the summary — translate "## " labels into that language too, never leave a heading in English while the body around it is in another language.
+${ANTI_FABRICATION_RULE}
+- Never pad with repetition, filler, or invented detail just to make the summary longer — thoroughness means capturing everything that was actually said, not artificially inflating length.
 - Write both in the SAME language as the transcript.
-- If the transcript is too short or unclear to summarize meaningfully, still produce your best-guess short title and a one-sentence summary (no bullets needed for a one-sentence summary).`
+- If the transcript is too short or unclear to summarize meaningfully, still produce your best-guess short title and a one-sentence summary (no sections needed for a one-sentence summary).`
 
 /**
  * Reads a finished meeting's full transcript and asks the LLM for a short topic
@@ -451,11 +463,14 @@ export async function generateMeetingTitle(
   }
 
   // Long transcripts: the topic is usually established early and wrapped up at the
-  // end, so sample both ends rather than truncating to just the beginning.
+  // end, so sample both ends rather than truncating to just the beginning. Uses its
+  // own larger budget (SUMMARY_MAX_TRANSCRIPT_CHARS) than the per-platform social
+  // content below — a thorough, section-by-section summary needs to actually see
+  // most of a long meeting, not just its opening and closing minutes.
   const content =
-    trimmed.length <= MAX_TRANSCRIPT_CHARS
+    trimmed.length <= SUMMARY_MAX_TRANSCRIPT_CHARS
       ? trimmed
-      : `${trimmed.slice(0, MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-MAX_TRANSCRIPT_CHARS / 2)}`
+      : `${trimmed.slice(0, SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}`
 
   try {
     const response = await fetch(`${base}/chat/completions`, {
@@ -470,12 +485,13 @@ export async function generateMeetingTitle(
         // gpt-oss-120b spends a chunk of this budget on its own hidden reasoning
         // (returned separately in message.reasoning) before it writes the JSON
         // content — too low a cap here can starve the actual output. Bumped from
-        // 1500: a long, dense transcript (e.g. a multi-hour class recording)
-        // pushes the model toward more hidden reasoning and a longer summary,
-        // and 1500 was observed to risk truncating the JSON mid-string, which
-        // silently fails the whole title+summary call (see the JSON.parse
-        // catch below) — bumped with margin, mirroring CONTENT_MAX_TOKENS below.
-        max_tokens: 3000,
+        // 1500 then 3000: the summary prompt now deliberately asks for a long,
+        // section-by-section write-up for dense transcripts (easily 1500-3000+
+        // words for a multi-hour meeting), and smaller caps were observed to
+        // truncate the JSON mid-string, which silently fails the whole
+        // title+summary call (see the JSON.parse catch below) — sized with
+        // margin, same order of magnitude as the website article's budget.
+        max_tokens: 6000,
         temperature: 0.3,
         response_format: { type: 'json_object' }
       }),
@@ -511,9 +527,6 @@ export async function generateMeetingTitle(
 // ── Per-platform publish-ready content (Website / Facebook / Instagram / LinkedIn) ──
 // Generated on demand (the first time the user opens that platform's tab), not
 // automatically after every meeting — see generateMeetingContent below.
-
-const ANTI_FABRICATION_RULE =
-  '- Base everything only on what is actually said in the transcript. NEVER invent facts, numbers, statistics, quotes, or claims that are not present in it — if the transcript lacks specifics, stay general rather than making something up.'
 
 // Longer outputs (esp. the website article) need more time than the title call.
 const CONTENT_TIMEOUT_MS: Record<ContentPlatform, number> = {

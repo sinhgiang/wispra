@@ -254,12 +254,10 @@ function renderInlineBold(text: string, keyPrefix: string): Array<string | React
 }
 
 /**
- * Turns an AI summary (plain text with blank-line-separated paragraphs and
- * "- "/"1. " list lines, produced by the MEETING_TITLE_PROMPT in
- * postprocess.ts) into paragraph/list JSX instead of one unbroken block.
- * Also understands "## Heading" lines (used by the website article body from
- * CONTENT_PROMPTS.website in postprocess.ts) — the plain Summary prompt never
- * produces those, so this is a pure addition, no regression for that tab.
+ * Turns an AI summary (plain text with blank-line-separated paragraphs,
+ * "## Heading" section titles, and "- "/"1. " list lines, produced by the
+ * MEETING_TITLE_PROMPT and CONTENT_PROMPTS.website in postprocess.ts) into
+ * paragraph/heading/list JSX instead of one unbroken block.
  */
 function renderSummaryBlocks(summary: string): ReactElement[] {
   const blocks: ReactElement[] = []
