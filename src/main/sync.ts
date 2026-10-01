@@ -4,9 +4,10 @@ import { join } from 'path'
 import { auth } from './auth'
 import { history } from './history'
 import { lexicon } from './lexicon'
+import { meetingSessions } from './meetingSessions'
 import { store } from './store'
 import {
-  SYNC_AUTO_INTERVAL_MS,
+  SYNC_DEBOUNCE_MS,
   SYNC_MEETINGS_PER_REQUEST,
   SYNC_STARTUP_DELAY_MS,
   SYNC_TIMEOUT_MS,
@@ -179,15 +180,31 @@ export async function pushSync(): Promise<void> {
   }
 }
 
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+/** A dictation, lexicon, or meeting change happened — sync shortly after, once things go quiet. */
+function scheduleSync(): void {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null
+    void pushSync()
+  }, SYNC_DEBOUNCE_MS)
+  debounceTimer.unref()
+}
+
 /**
- * Starts the background auto-sync timer: one attempt shortly after launch, then every
- * SYNC_AUTO_INTERVAL_MS after that, for the app's lifetime. pushSync() is the actual
- * gate (no-ops unless cloudSyncEnabled is on and the user is logged in), so this can
- * fire unconditionally — flipping the setting on takes effect on the next tick with no
- * extra wiring. The manual "Sync now" button (IPC.SYNC_NOW) calls pushSync() directly
- * and runs independently of this timer.
+ * Wires auto-sync to actual data changes instead of a blind clock: a dictation added to
+ * History, a Lexicon edit, or a Meeting update each (re)start a SYNC_DEBOUNCE_MS timer,
+ * so a burst of activity collapses into one push shortly after it settles — an idle day
+ * triggers nothing. A one-time sync SYNC_STARTUP_DELAY_MS after launch covers anything
+ * left over from the last session (e.g. a change whose debounce never got to fire before
+ * quit). pushSync() is the actual gate (no-ops unless cloudSyncEnabled is on and the user
+ * is logged in), so all of this can wire up unconditionally. The manual "Sync now" button
+ * (IPC.SYNC_NOW) calls pushSync() directly and runs independently of this.
  */
 export function initAutoSync(): void {
-  setTimeout(() => void pushSync(), SYNC_STARTUP_DELAY_MS)
-  setInterval(() => void pushSync(), SYNC_AUTO_INTERVAL_MS)
+  setTimeout(() => void pushSync(), SYNC_STARTUP_DELAY_MS).unref()
+  history.onChange(() => scheduleSync())
+  lexicon.onChange(() => scheduleSync())
+  meetingSessions.onMeta(() => scheduleSync())
 }
