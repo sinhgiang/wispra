@@ -5,14 +5,18 @@ import type {
   MeetingChatMessage,
   MeetingContent,
   MeetingLanguageConfig,
+  MeetingMindMap,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary,
   MeetingSpace,
-  MeetingState
+  MeetingState,
+  MindMapProgress
 } from '@shared/types'
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
+import { MindMapView } from './MindMapView'
+import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import './meeting.css'
 
 const LANG_CONFIG_STORAGE_KEY = 'wispra-meeting-lang-config'
@@ -147,8 +151,11 @@ function MeetingChatPanel({
   sending,
   error,
   highlightId,
-  onSelectAnswer
+  onSelectAnswer,
+  compact = false
 }: {
+  /** Only the input row — used on the Mind map tab, where the map needs the room. */
+  compact?: boolean
   messages: MeetingChatMessage[]
   input: string
   onInputChange: (value: string) => void
@@ -165,7 +172,7 @@ function MeetingChatPanel({
     }
   }
   return (
-    <div className="meeting-chat-panel">
+    <div className={compact ? 'meeting-chat-panel compact' : 'meeting-chat-panel'}>
       <div className="meeting-chat-header">Ask about this recording</div>
       <div className="meeting-chat-messages">
         {messages.length === 0 && !sending ? (
@@ -218,15 +225,6 @@ function MeetingChatPanel({
 }
 
 const LEVEL_BARS = 24
-
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000)
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = totalSeconds % 60
-  const pad = (n: number): string => n.toString().padStart(2, '0')
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
-}
 
 /** Wall-clock "HH:MM" label for a segment's ISO startedAt, in the user's own locale/24h-vs-12h preference. */
 function formatClock(iso: string): string {
@@ -301,11 +299,12 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
   return blocks
 }
 
-type PastView = 'transcript' | 'summary' | ContentPlatform
+type PastView = 'transcript' | 'summary' | 'mindmap' | ContentPlatform
 
 const PAST_VIEW_TABS: Array<{ id: PastView; label: string }> = [
   { id: 'transcript', label: 'Transcript' },
   { id: 'summary', label: 'Summary' },
+  { id: 'mindmap', label: 'Mind map' },
   { id: 'website', label: 'Website' },
   { id: 'facebook', label: 'Facebook' },
   { id: 'instagram', label: 'Instagram' },
@@ -338,14 +337,27 @@ function groupIntoParagraphs(segments: MeetingSegment[]): ParagraphBlock[] {
   return blocks
 }
 
+/** A stretch of the transcript picked on the Mind map tab ("Show in transcript"), highlighted the same way as a chat answer's range. */
+interface MapHighlight {
+  startSegmentId: string
+  endSegmentId: string
+  /** The node's label and colour, shown in the "From mind map" bar above the transcript. */
+  label: string
+  color: string
+}
+
 /**
- * Maps a chat answer's startSegmentId/endSegmentId range (see the AI chat panel
- * below and askMeetingChat in postprocess.ts) onto the paragraph block(s) it spans,
- * for transcript highlighting. Returns an empty set — never throws — if the message
- * has no range, or if either id can't be found (e.g. the transcript was truncated
- * before the LLM call, or the model returned a stale/hallucinated id).
+ * Maps a startSegmentId/endSegmentId range — a chat answer's (see the AI chat panel
+ * below and askMeetingChat in postprocess.ts) or a mind map node's (MapHighlight) —
+ * onto the paragraph block(s) it spans, for transcript highlighting. Returns an empty
+ * set — never throws — if there is no range, or if either id can't be found (e.g. the
+ * transcript was truncated before the LLM call, or the model returned a
+ * stale/hallucinated id).
  */
-function resolveHighlightBlockIds(blocks: ParagraphBlock[], message: MeetingChatMessage | undefined): Set<string> {
+function resolveHighlightBlockIds(
+  blocks: ParagraphBlock[],
+  message: { startSegmentId?: string; endSegmentId?: string } | null | undefined
+): Set<string> {
   if (!message?.startSegmentId || !message.endSegmentId) return new Set()
   const startIdx = blocks.findIndex((b) => b.segmentIds.includes(message.startSegmentId!))
   const endIdx = blocks.findIndex((b) => b.segmentIds.includes(message.endSegmentId!))
@@ -382,6 +394,18 @@ export function MeetingPanel(): React.JSX.Element {
   const [pastView, setPastView] = useState<PastView>('transcript')
   /** On-demand-generated ready-to-post content for the session being viewed, cached on the session itself once generated (see setContent in meetingSessions.ts). */
   const [pastContent, setPastContent] = useState<MeetingContent | undefined>(undefined)
+  /** id of the past session whose data (segments, summary, mind map…) is currently loaded — lags viewingPastId by one getMeetingSession() round trip, during which the state above still belongs to the previously viewed session. */
+  const [pastLoadedId, setPastLoadedId] = useState<string | null>(null)
+  /** Mind map of the session being viewed, cached on the session once generated (see setMindMap in meetingSessions.ts). */
+  const [pastMindMap, setPastMindMap] = useState<MeetingMindMap | undefined>(undefined)
+  /** True once the Mind map tab has been opened for the session being viewed — its view then stays mounted (hidden) behind the other tabs so the map keeps its open branches and zoom. */
+  const [mindMapOpened, setMindMapOpened] = useState(false)
+  const [mindMapGenerating, setMindMapGenerating] = useState(false)
+  const [mindMapProgress, setMindMapProgress] = useState<MindMapProgress | null>(null)
+  /** The last mind map generation for the session being viewed failed — stops the open-tab effect from retrying in a loop; "Try again"/Regenerate clear it. */
+  const [mindMapFailed, setMindMapFailed] = useState(false)
+  /** Transcript stretch picked with "Show in transcript" on the Mind map tab. Never set together with chatHighlightId — whichever was chosen last wins. */
+  const [mapHighlight, setMapHighlight] = useState<MapHighlight | null>(null)
   /** Which platform tabs are currently waiting on a generateMeetingContent() call — per-platform (not a single value) so switching between several not-yet-generated tabs in quick succession tracks each one's own in-flight state correctly instead of only the most recently opened tab. */
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
   /** Which of the 3 generated variants is shown for each social platform. */
@@ -625,6 +649,9 @@ export function MeetingPanel(): React.JSX.Element {
         setPastSummary(session.summary ?? '')
         setPastContent(session.content)
         setPastChat(session.chat ?? [])
+        // Same map, new object (this broadcast fires for every session change, e.g. a
+        // chat answer): keep the old reference so the drawn map is not rebuilt.
+        setPastMindMap((prev) => (prev?.generatedAt === session.mindMap?.generatedAt ? prev : session.mindMap))
       }
       // Same, for the live session's own chat — e.g. an answer that just finished
       // while the mic is still recording. This is the single source of truth for
@@ -633,6 +660,9 @@ export function MeetingPanel(): React.JSX.Element {
       if (currentSessionIdRef.current === session.id) {
         setLiveChat(session.chat ?? [])
       }
+    })
+    window.api.onMeetingMindMapProgress((progress) => {
+      if (viewingPastIdRef.current === progress.sessionId) setMindMapProgress(progress)
     })
 
     // Hydrate on mount: a fresh mount (first open, or re-opening this tab after
@@ -686,7 +716,13 @@ export function MeetingPanel(): React.JSX.Element {
     setChatInput('')
     setChatError(null)
     setChatHighlightId(null)
-    void window.api.getMeetingSession(viewingPastId).then((full) => {
+    setMapHighlight(null)
+    setMindMapOpened(false)
+    setMindMapGenerating(false)
+    setMindMapProgress(null)
+    setMindMapFailed(false)
+    const id = viewingPastId
+    void window.api.getMeetingSession(id).then((full) => {
       if (cancelled || !full) return
       setPastSegments(full.segments)
       setPastTitle(full.title)
@@ -695,18 +731,57 @@ export function MeetingPanel(): React.JSX.Element {
       setPastSummary(full.summary ?? '')
       setPastContent(full.content)
       setPastChat(full.chat ?? [])
+      setPastMindMap(full.mindMap)
+      setPastLoadedId(id)
     })
     return () => {
       cancelled = true
     }
   }, [viewingPastId])
 
+  // Asks the main process for the viewed session's mind map — the cached one, a first
+  // build, or (regenerate) a rebuild. A rebuild is written in the language currently
+  // picked under "Website & social posts", so changing that field and pressing
+  // Regenerate re-maps an existing recording in the new language; a first build uses
+  // the choice saved with the recording, like the Website and social tabs. On success
+  // the map also arrives via onMeetingSessionUpdated; both paths keep one reference.
+  const requestMindMap = useCallback(
+    (regenerate: boolean): void => {
+      const id = viewingPastIdRef.current
+      if (id === null) return
+      setMindMapGenerating(true)
+      setMindMapFailed(false)
+      setMindMapProgress(null)
+      void window.api
+        .generateMeetingMindMap(id, regenerate ? { regenerate: true, language: langConfig.website } : undefined)
+        .then((result) => {
+          if (viewingPastIdRef.current !== id) return
+          setMindMapGenerating(false)
+          if (result) setPastMindMap((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
+          else setMindMapFailed(true)
+        })
+    },
+    [langConfig.website]
+  )
+
+  // Build the mind map the first time its tab is opened; later opens find it cached on
+  // the session. Unlike the content tabs below, a failed attempt is remembered
+  // (mindMapFailed) and retried only when the user asks, since a long recording's map
+  // takes several AI calls.
+  useEffect(() => {
+    if (viewingPastId === null || pastView !== 'mindmap') return
+    setMindMapOpened(true)
+    if (pastLoadedId !== viewingPastId) return
+    if (pastMindMap || mindMapGenerating || mindMapFailed || pastSegments.length === 0) return
+    requestMindMap(false)
+  }, [pastView, viewingPastId, pastLoadedId, pastMindMap, mindMapGenerating, mindMapFailed, pastSegments, requestMindMap])
+
   // Generate a platform's content the first time its tab is opened, then cache
   // it in pastContent (also persisted server-side by the IPC handler) so
   // re-opening the tab later doesn't call the LLM again.
   useEffect(() => {
     if (viewingPastId === null) return
-    if (pastView === 'transcript' || pastView === 'summary') return
+    if (pastView === 'transcript' || pastView === 'summary' || pastView === 'mindmap') return
     const platform = pastView
     if (pastContent?.[platform]) return
     if (generatingPlatforms[platform]) return
@@ -740,16 +815,26 @@ export function MeetingPanel(): React.JSX.Element {
   // the live view this can lose to the auto-scroll-to-latest effect above once new
   // speech arrives, which is the right tradeoff — staying caught up with a live
   // recording takes priority over a one-off lookup.
+  // A mind map node's stretch (mapHighlight) can run over many paragraphs, so it is
+  // scrolled to its start rather than centred on its first paragraph.
   useEffect(() => {
-    if (!chatHighlightId) return
+    if (!chatHighlightId && !mapHighlight) return
     const container = viewingPastId !== null ? pastTranscriptRef.current : transcriptRef.current
     const target = container?.querySelector<HTMLElement>('.meeting-paragraph-highlighted')
-    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [chatHighlightId, viewingPastId, pastView])
+    target?.scrollIntoView({ behavior: 'smooth', block: mapHighlight ? 'start' : 'center' })
+  }, [chatHighlightId, mapHighlight, viewingPastId, pastView])
 
   const isRecording = meetingState === 'recording'
   const isPaused = meetingState === 'paused'
   const showingSession = viewingPastId !== null || currentSessionId !== null
+  // The viewed session's mind map — undefined while pastMindMap still belongs to the
+  // session viewed before (see pastLoadedId).
+  const viewedMindMap = pastLoadedId === viewingPastId ? pastMindMap : undefined
+  const pastDurationMs = sessions.find((s) => s.id === viewingPastId)?.durationMs ?? 0
+  const contentLanguageLabel =
+    langConfig.website === 'auto'
+      ? "the transcript's language"
+      : (LANGUAGES.find((l) => l.code === langConfig.website)?.label ?? langConfig.website)
 
   const startNewSession = (): void => {
     setViewingPast(null)
@@ -788,6 +873,13 @@ export function MeetingPanel(): React.JSX.Element {
   const copyCurrentPastView = (): void => {
     if (pastView === 'transcript') return copyTranscript(pastBlocks)
     if (pastView === 'summary') return copySummary()
+    if (pastView === 'mindmap') {
+      if (viewedMindMap) {
+        const tree = buildMindMapTree(viewedMindMap, pastSegments, pastDurationMs)
+        window.api.copyText(mindMapMarkdown(tree, formatSessionDate(pastCreatedAt)))
+      }
+      return
+    }
     if (pastView === 'website') {
       if (pastContent?.website) {
         const { title, metaDescription, body } = pastContent.website
@@ -802,6 +894,7 @@ export function MeetingPanel(): React.JSX.Element {
   const copyLabel: Record<PastView, string> = {
     transcript: 'Copy transcript',
     summary: 'Copy summary',
+    mindmap: 'Copy outline',
     website: 'Copy article',
     facebook: 'Copy post',
     instagram: 'Copy caption',
@@ -814,9 +907,11 @@ export function MeetingPanel(): React.JSX.Element {
       ? false
       : pastView === 'summary'
         ? !pastSummary
-        : pastView === 'website'
-          ? !pastContent?.website
-          : !pastContent?.[pastView]
+        : pastView === 'mindmap'
+          ? !viewedMindMap
+          : pastView === 'website'
+            ? !pastContent?.website
+            : !pastContent?.[pastView]
 
   const startRename = (id: string): void => {
     setMenuPos(null)
@@ -928,7 +1023,10 @@ export function MeetingPanel(): React.JSX.Element {
   const activeChatSessionId = isPastChat ? viewingPastId : currentSessionId
   const setActiveChatMessages = isPastChat ? setPastChat : setLiveChat
   const liveHighlightedBlockIds = resolveHighlightBlockIds(liveBlocks, liveChat.find((m) => m.id === chatHighlightId))
-  const pastHighlightedBlockIds = resolveHighlightBlockIds(pastBlocks, pastChat.find((m) => m.id === chatHighlightId))
+  const pastHighlightedBlockIds = resolveHighlightBlockIds(
+    pastBlocks,
+    mapHighlight ?? pastChat.find((m) => m.id === chatHighlightId)
+  )
 
   // Sends the pending question: appends an optimistic user bubble immediately, then
   // waits for the authoritative answer. The real messages (both the question and the
@@ -948,6 +1046,9 @@ export function MeetingPanel(): React.JSX.Element {
     setChatInput('')
     setChatSending(true)
     setChatError(null)
+    // On the Mind map tab the chat is only its input row (see `compact`), so the
+    // conversation continues on the Transcript tab where the answer can be read.
+    if (isPastChat && pastView === 'mindmap') setPastView('transcript')
     void window.api.sendMeetingChatMessage(sessionId, question).then((result) => {
       setChatSending(false)
       if (!result) {
@@ -956,6 +1057,7 @@ export function MeetingPanel(): React.JSX.Element {
         return
       }
       if (result.startSegmentId && result.endSegmentId) {
+        setMapHighlight(null)
         setChatHighlightId(result.id)
         if (isPastChat) setPastView('transcript')
       }
@@ -966,8 +1068,18 @@ export function MeetingPanel(): React.JSX.Element {
   // clears the highlight), switching to the Transcript tab so the highlight is visible.
   const selectChatAnswer = (message: MeetingChatMessage): void => {
     if (!message.startSegmentId || !message.endSegmentId) return
+    setMapHighlight(null)
     setChatHighlightId((prev) => (prev === message.id ? null : message.id))
     if (isPastChat) setPastView('transcript')
+  }
+
+  // Mind map tab → "Show in transcript": jumps to the Transcript tab with the node's
+  // stretch highlighted, reusing the chat answers' highlight (see MapHighlight).
+  const showMapNodeInTranscript = (node: MindMapTreeNode, color: string): void => {
+    if (!node.startSegmentId || !node.endSegmentId) return
+    setChatHighlightId(null)
+    setMapHighlight({ startSegmentId: node.startSegmentId, endSegmentId: node.endSegmentId, label: node.label, color })
+    setPastView('transcript')
   }
 
   // "All" (selectedSpaceId === null) shows every session, including unfiled ones and
@@ -1209,12 +1321,17 @@ export function MeetingPanel(): React.JSX.Element {
           )}
 
           {viewingPastId !== null ? (
-            <div className="meeting-session-view">
+            <div className={pastView === 'mindmap' ? 'meeting-session-view meeting-session-view--map' : 'meeting-session-view'}>
               <div className="meeting-session-header">
                 <div className="meeting-session-heading">
                   <h2>{pastTitle}</h2>
                   <div className="meeting-session-date">{formatSessionDate(pastCreatedAt)}</div>
                 </div>
+                {/* Sits beside the title rather than in the tab row below: with eight view
+                    tabs the row has no room for it at the default window width. */}
+                <button className="meeting-copy-btn" onClick={copyCurrentPastView} disabled={copyDisabled}>
+                  {copyLabel[pastView]}
+                </button>
               </div>
               <div className="meeting-view-toggle-row">
                 <div className="meeting-view-toggle">
@@ -1228,15 +1345,54 @@ export function MeetingPanel(): React.JSX.Element {
                     </button>
                   ))}
                 </div>
-                <button className="meeting-copy-btn" onClick={copyCurrentPastView} disabled={copyDisabled}>
-                  {copyLabel[pastView]}
-                </button>
               </div>
-              <div className="meeting-ended-note">
-                {pastStatus === 'summarizing' ? 'Recording ended — writing a title…' : 'Recording ended'}
-              </div>
+              {pastView !== 'mindmap' && (
+                <div className="meeting-ended-note">
+                  {pastStatus === 'summarizing' ? 'Recording ended — writing a title…' : 'Recording ended'}
+                </div>
+              )}
               {autoStopNotice && <div className="meeting-resume-error">{autoStopNotice}</div>}
-              {pastView === 'transcript' ? (
+              {pastView === 'transcript' && mapHighlight && (
+                <div className="meeting-from-map">
+                  <span className="meeting-from-map-dot" style={{ background: mapHighlight.color }} />
+                  <span className="meeting-from-map-label">
+                    From mind map: <b>{mapHighlight.label}</b>
+                  </span>
+                  <button type="button" className="meeting-from-map-back" onClick={() => setPastView('mindmap')}>
+                    ← Back to mind map
+                  </button>
+                  <button
+                    type="button"
+                    className="meeting-from-map-clear"
+                    aria-label="Clear highlight"
+                    onClick={() => setMapHighlight(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+              {/* Mounted on first open and then kept (hidden) behind the other tabs, so the
+                  map keeps its open branches and zoom across a "Show in transcript" round trip. */}
+              {mindMapOpened && (
+                <div className="meeting-mindmap-view" style={pastView === 'mindmap' ? undefined : { display: 'none' }}>
+                  <MindMapView
+                    key={viewingPastId}
+                    map={viewedMindMap}
+                    segments={pastSegments}
+                    durationMs={pastDurationMs}
+                    dateLabel={formatSessionDate(pastCreatedAt)}
+                    active={pastView === 'mindmap'}
+                    generating={mindMapGenerating}
+                    progress={mindMapProgress}
+                    failed={mindMapFailed}
+                    regenerateTitle={`Build the map again, written in ${contentLanguageLabel} — the "Website & social posts" language on the New session screen`}
+                    onRetry={() => requestMindMap(false)}
+                    onRegenerate={() => requestMindMap(true)}
+                    onShowInTranscript={showMapNodeInTranscript}
+                  />
+                </div>
+              )}
+              {pastView === 'mindmap' ? null : pastView === 'transcript' ? (
                 <div className="meeting-transcript" ref={pastTranscriptRef}>
                   {pastBlocks.length === 0 ? (
                     <div className="meeting-transcript-empty">No speech was transcribed in this session.</div>
@@ -1331,6 +1487,7 @@ export function MeetingPanel(): React.JSX.Element {
                 </>
               )}
               <MeetingChatPanel
+                compact={pastView === 'mindmap'}
                 messages={pastChat}
                 input={chatInput}
                 onInputChange={setChatInput}

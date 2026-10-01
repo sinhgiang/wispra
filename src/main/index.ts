@@ -16,8 +16,10 @@ import type {
   MeetingContentResult,
   MeetingLanguageConfig,
   McpLinkStatus,
+  MeetingMindMap,
   MeetingSession,
   MeetingState,
+  MindMapProgress,
   Settings,
   StatePayload,
   SyncStatus
@@ -25,6 +27,7 @@ import type {
 import {
   DONE_DISPLAY_MS,
   FREE_LIMIT_SECONDS,
+  LANGUAGES,
   MEETING_SILENCE_AUTO_STOP_MS,
   OVERLAY_SIZE,
   PREVIEW_DELAY_MS,
@@ -50,8 +53,11 @@ import {
   generateMeetingTitle,
   generateMeetingContent,
   translateSegment,
-  askMeetingChat
+  askMeetingChat,
+  resolveChatTarget
 } from './postprocess'
+import { generateMindMap } from './mindMap'
+import { mindMapLanguage } from './mindMapLogic'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -494,6 +500,73 @@ async function answerMeetingChatQuestion(id: string, question: string): Promise<
   }
 }
 
+/** Mind map generations in flight, by session id — re-opening the tab joins the running one instead of starting a second. */
+const mindMapJobs = new Map<string, Promise<MeetingMindMap | null>>()
+
+/**
+ * Builds (or returns the cached) mind map of a stopped session, triggered when the
+ * renderer first opens its Mind map tab, or by Regenerate. Mirrors
+ * generateSessionContent's provider/key resolution; the language the map is written
+ * in is decided by mindMapLanguage(). Returns null on any failure — the session keeps
+ * whatever map it had. Never throws.
+ */
+function generateSessionMindMap(
+  id: string,
+  options?: { regenerate?: boolean; language?: string }
+): Promise<MeetingMindMap | null> {
+  const running = mindMapJobs.get(id)
+  if (running) return running
+  const session = meetingSessions.get(id)
+  if (!session || session.status === 'recording') return Promise.resolve(null)
+  if (session.mindMap && !options?.regenerate) return Promise.resolve(session.mindMap)
+
+  const language = mindMapLanguage(session.languageConfig, options, LANGUAGES.map((l) => l.code))
+  const job = (async (): Promise<MeetingMindMap | null> => {
+    try {
+      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+      const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+      const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
+      if (!target) return null
+      const mindMap = await generateMindMap(session.segments, target, language, (progress) =>
+        broadcast(IPC.MEETING_MIND_MAP_PROGRESS, { sessionId: id, ...progress } satisfies MindMapProgress)
+      )
+      if (!mindMap) return null
+      meetingSessions.setMindMap(id, mindMap)
+      return mindMap
+    } catch (err) {
+      console.error('[meeting] mind map generation failed:', err)
+      return null
+    } finally {
+      mindMapJobs.delete(id)
+    }
+  })()
+  mindMapJobs.set(id, job)
+  return job
+}
+
+/**
+ * Saves the Mind map tab's PNG export where the user chooses. The image is rendered
+ * in the renderer (from the map's own SVG); only the finished bytes come through here.
+ */
+async function saveMindMapPng(png: ArrayBuffer, suggestedName: string): Promise<{ ok: boolean; error?: string }> {
+  const bytes = Buffer.from(png)
+  const isPng = bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  if (!isPng) return { ok: false, error: 'Not a PNG image.' }
+  const name = suggestedName.replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'mind-map'
+  const result = await dialog.showSaveDialog({
+    title: 'Save mind map',
+    defaultPath: `${name}.png`,
+    filters: [{ name: 'PNG', extensions: ['png'] }]
+  })
+  if (result.canceled || !result.filePath) return { ok: false, error: 'Cancelled.' }
+  try {
+    writeFileSync(result.filePath, bytes)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Write failed.' }
+  }
+}
+
 function wireIpc(): void {
   ipcMain.on(IPC.TOGGLE_DICTATION, () => toggleDictation())
   // Silence auto-stop: does NOT set manualStopRequested so continuous mode can restart.
@@ -564,6 +637,13 @@ function wireIpc(): void {
   )
   ipcMain.handle(IPC.MEETING_GENERATE_SUMMARY, (_event, id: string) => regenerateSessionSummary(id))
   ipcMain.handle(IPC.MEETING_CHAT_SEND, (_event, id: string, question: string) => answerMeetingChatQuestion(id, question))
+  ipcMain.handle(
+    IPC.MEETING_GENERATE_MIND_MAP,
+    (_event, id: string, options?: { regenerate?: boolean; language?: string }) => generateSessionMindMap(id, options)
+  )
+  ipcMain.handle(IPC.MEETING_SAVE_MIND_MAP_PNG, (_event, png: ArrayBuffer, suggestedName: string) =>
+    saveMindMapPng(png, String(suggestedName ?? ''))
+  )
   ipcMain.on(
     IPC.MEETING_CHUNK_CAPTURED,
     (

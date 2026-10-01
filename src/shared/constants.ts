@@ -236,6 +236,18 @@ export const MEETING_MIN_VOICED_MS = 300
  * computer audio plays with the user saying nothing.
  */
 export const MEETING_SILENCE_AUTO_STOP_MS = 5 * 60_000
+// ── Meeting mind map (mindMap.ts) ────────────────────────────────────────────
+/** A transcript up to this many characters (as tagged paragraph lines) is mapped in one AI call. */
+export const MIND_MAP_SINGLE_PASS_CHARS = 14_000
+/**
+ * A longer transcript is outlined in parts of about this size, then the outlines are merged in
+ * one more call — unlike the summary's both-ends sampling, no stretch of a long meeting is skipped.
+ */
+export const MIND_MAP_PART_CHARS = 12_000
+/** A recording is never cut into more parts than this; a very long one gets bigger parts instead. */
+export const MIND_MAP_MAX_PARTS = 24
+/** Parts outlined at the same time. */
+export const MIND_MAP_CONCURRENCY = 3
 /** Milliseconds to keep the overlay visible after injection (for done animation). */
 export const DONE_DISPLAY_MS = 1400
 

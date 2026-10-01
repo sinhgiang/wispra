@@ -15,11 +15,13 @@ import type {
   MeetingChatMessage,
   MeetingContentResult,
   MeetingLanguageConfig,
+  MeetingMindMap,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary,
   MeetingSpace,
   MeetingState,
+  MindMapProgress,
   Settings,
   StatePayload,
   StyleProfile,
@@ -227,6 +229,19 @@ const api = {
   // or null on failure — the caller persists nothing and shows a transient error.
   sendMeetingChatMessage: (id: string, question: string): Promise<MeetingChatMessage | null> =>
     ipcRenderer.invoke(IPC.MEETING_CHAT_SEND, id, question),
+  // Builds (or returns the cached) mind map of a stopped session. `regenerate` rebuilds
+  // an existing one, in `language` when given. Resolves null on failure; on success the
+  // map also arrives via onMeetingSessionUpdated.
+  generateMeetingMindMap: (
+    id: string,
+    options?: { regenerate?: boolean; language?: string }
+  ): Promise<MeetingMindMap | null> => ipcRenderer.invoke(IPC.MEETING_GENERATE_MIND_MAP, id, options),
+  // Saves the mind map's PNG export through a Save dialog.
+  saveMindMapPng: (png: ArrayBuffer, suggestedName: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.MEETING_SAVE_MIND_MAP_PNG, png, suggestedName),
+  onMeetingMindMapProgress: (cb: (progress: MindMapProgress) => void): void => {
+    ipcRenderer.on(IPC.MEETING_MIND_MAP_PROGRESS, (_e, progress: MindMapProgress) => cb(progress))
+  },
   onMeetingStateChanged: (cb: (state: MeetingState) => void): void => {
     ipcRenderer.on(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state))
   },

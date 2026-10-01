@@ -46,6 +46,7 @@ processing: main calls Groq API (src/main/transcribe.ts, 30s timeout + 1 retry)
 - No new runtime npm dependencies without a strong reason — main process uses Node built-ins + Electron APIs + `fetch` only.
 - Settings/history are plain JSON files in `app.getPath('userData')` (see `store.ts`, `history.ts`).
 - Auto-learned vocabulary (`autoVocab.ts`) only biases the Whisper prompt via `lexicon.sttTerms`. Never turn it into lexicon entries, replacements, or the AI-cleanup "preserve spelling" list (`llmTerms`): History holds recogniser output, so recurring wrong spellings look right. `wellKnownNames.ts` is a yardstick for spotting mishearings, never vocabulary or text to write.
+- Meeting mind map (`mindMap.ts` makes the AI calls, `mindMapLogic.ts` is the pure parsing/validation): built on first open of the Mind map tab, cached on the session as `mindMap`. A long transcript is outlined in parts and merged — never sample both ends like the summary does. Its text follows the session's "Website & social posts" language (`languageConfig.website`), not the spoken or Summary language. The renderer draws it with plain SVG (`mindMapRenderer.ts`); do not add a diagram library.
 - OS login item goes through `loginItem.ts` only. An unpackaged (dev) run shares the installed app's default registry value name, so it must never sync at startup or on unrelated settings changes; it only writes its own `Wispra (dev)` entry when the user flips "Launch at login".
 
 ## Manual test checklist (run before ending a work session)
