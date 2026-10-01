@@ -122,12 +122,21 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
     if (!mcpStatus?.url) return
     window.api.copyText(mcpStatus.url)
     window.open(CLAUDE_ADD_CONNECTOR_URL, '_blank', 'noreferrer')
-    setMcpCopied(true)
-    setTimeout(() => setMcpCopied(false), 2000)
+    setCopiedTarget('claude')
+    setTimeout(() => setCopiedTarget((t) => (t === 'claude' ? null : t)), 2000)
   }
 
   function copyFor(target: string, text: string): void {
     window.api.copyText(text)
+    setCopiedTarget(target)
+    setTimeout(() => setCopiedTarget((t) => (t === target ? null : t)), 2000)
+  }
+
+  // Copies the link AND opens the assistant's site, so the user lands on the paste
+  // target with the link already on their clipboard — one click, not copy-then-hunt-for-tab.
+  function copyAndOpen(target: string, text: string, openUrl: string): void {
+    window.api.copyText(text)
+    window.open(openUrl, '_blank', 'noreferrer')
     setCopiedTarget(target)
     setTimeout(() => setCopiedTarget((t) => (t === target ? null : t)), 2000)
   }
@@ -330,36 +339,28 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
           {mcpStatus === null && <p className="plan-desc" style={{ opacity: 0.5 }}>Loading…</p>}
 
           {mcpStatus !== null && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontSize: '13px' }}>
-              <label htmlFor="mcp-expiry" style={{ color: 'var(--text-2)' }}>
-                {mcpStatus.url ? 'New link expires in:' : 'Link expires in:'}
-              </label>
-              <select
-                id="mcp-expiry"
-                value={expiryChoice}
-                onChange={(e) => setExpiryChoice(e.target.value)}
-                style={{ fontSize: '13px', padding: '4px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--surface)' }}
-              >
-                {EXPIRY_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {mcpStatus !== null && !mcpStatus.url && (
-            <button className="primary" disabled={mcpBusy} onClick={() => void handleGenerateMcpLink()}>
-              {mcpBusy ? 'Generating…' : 'Generate connection link'}
-            </button>
-          )}
-
-          {mcpStatus !== null && mcpStatus.url && (
             <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontSize: '13px' }}>
+                <label htmlFor="mcp-expiry" style={{ color: 'var(--text-2)' }}>
+                  {mcpStatus.url ? 'New link expires in:' : 'Link expires in:'}
+                </label>
+                <select
+                  id="mcp-expiry"
+                  value={expiryChoice}
+                  onChange={(e) => setExpiryChoice(e.target.value)}
+                  style={{ fontSize: '13px', padding: '4px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--surface)' }}
+                >
+                  {EXPIRY_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <input
                   type="text"
                   readOnly
-                  value={maskMcpUrl(mcpStatus.url)}
+                  value={mcpStatus.url ? maskMcpUrl(mcpStatus.url) : 'No link yet'}
                   style={{
                     flex: 1,
                     fontSize: '12px',
@@ -371,117 +372,52 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
                     letterSpacing: '1px',
                   }}
                 />
-                <button
-                  onClick={handleCopyMcpLink}
-                  style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)' }}
-                >
-                  {mcpCopied ? 'Copied!' : 'Copy'}
-                </button>
+                {mcpStatus.url && (
+                  <button
+                    onClick={handleCopyMcpLink}
+                    style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)' }}
+                  >
+                    {mcpCopied ? 'Copied!' : 'Copy'}
+                  </button>
+                )}
               </div>
+
               <div style={{ fontSize: '12px', color: formatExpiry(mcpStatus.expiresAt).expired ? 'var(--danger)' : 'var(--text-2)', marginTop: '4px' }}>
-                {mcpStatus.createdAt && `Created ${new Date(mcpStatus.createdAt).toLocaleString()} · `}
-                {formatExpiry(mcpStatus.expiresAt).text}
-                {formatExpiry(mcpStatus.expiresAt).expired && ' — regenerate below to reconnect'}
-              </div>
-              <div style={{ marginTop: '10px' }}>
-                <button
-                  onClick={handleConnectClaude}
-                  className="primary"
-                  style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)' }}
-                >
-                  {mcpCopied ? 'Copied — paste it in the tab that just opened' : 'Connect to Claude.ai'}
-                </button>
-              </div>
-
-              <div style={{ marginTop: '4px' }}>
-                <ConnectRow
-                  name="ChatGPT"
-                  description='Settings → Connectors → Add → paste link → choose "No authentication".'
-                  buttonLabel="Copy link"
-                  copiedLabel="Copied!"
-                  copied={copiedTarget === 'chatgpt'}
-                  onClick={() => copyFor('chatgpt', mcpStatus.url!)}
-                />
-                <ConnectRow
-                  name="Grok"
-                  description="Paste as a custom MCP connector URL — no plugin needed."
-                  buttonLabel="Copy link"
-                  copiedLabel="Copied!"
-                  copied={copiedTarget === 'grok'}
-                  onClick={() => copyFor('grok', mcpStatus.url!)}
-                />
-                <ConnectRow
-                  name="Perplexity"
-                  description="Settings → Connectors → Custom connector (Remote) → paste link."
-                  buttonLabel="Copy link"
-                  copiedLabel="Copied!"
-                  copied={copiedTarget === 'perplexity'}
-                  onClick={() => copyFor('perplexity', mcpStatus.url!)}
-                />
-
-                <button
-                  onClick={() => setShowMoreConnect((v) => !v)}
-                  style={{
-                    fontSize: '12px',
-                    color: 'var(--text-2)',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: '8px 0 0',
-                  }}
-                >
-                  {showMoreConnect ? 'Fewer options ▲' : 'More options (Cursor, Claude Code, Codex) ▼'}
-                </button>
-
-                {showMoreConnect && (
-                  <div>
-                    <ConnectRow
-                      name="Cursor"
-                      description="One click installs the Wispra MCP server into Cursor."
-                      buttonLabel="Add to Cursor"
-                      copiedLabel="Opened Cursor!"
-                      copied={copiedTarget === 'cursor'}
-                      onClick={openCursorDeepLink}
-                    />
-                    <ConnectRow
-                      name="Claude Code"
-                      description="Copies a ready-to-run `claude mcp add` command."
-                      buttonLabel="Copy command"
-                      copiedLabel="Copied!"
-                      copied={copiedTarget === 'claude-code'}
-                      onClick={() => copyFor('claude-code', `claude mcp add --transport http wispra ${mcpStatus.url}`)}
-                    />
-                    <ConnectRow
-                      name="Codex"
-                      description="Paste the link into the url field of your MCP config."
-                      buttonLabel="Copy link"
-                      copiedLabel="Copied!"
-                      copied={copiedTarget === 'codex'}
-                      onClick={() => copyFor('codex', mcpStatus.url!)}
-                    />
-                  </div>
+                {mcpStatus.url ? (
+                  <>
+                    {mcpStatus.createdAt && `Created ${new Date(mcpStatus.createdAt).toLocaleString()} · `}
+                    {formatExpiry(mcpStatus.expiresAt).text}
+                    {formatExpiry(mcpStatus.expiresAt).expired && ' — click Change link below to reconnect'}
+                  </>
+                ) : (
+                  'Click "Create link" below. The AI assistant rows appear once you have a link to give them.'
                 )}
               </div>
 
               <div style={{ display: 'flex', gap: '10px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
+                  className="primary"
                   onClick={() =>
                     void handleGenerateMcpLink(
-                      `Generate a new link (${EXPIRY_OPTIONS.find((o) => o.value === expiryChoice)?.label.toLowerCase()})?\n\nThe current link will stop working immediately for any AI assistant already connected — you'll need to paste the new one in to reconnect it.`
+                      mcpStatus.url
+                        ? `Change this link (${EXPIRY_OPTIONS.find((o) => o.value === expiryChoice)?.label.toLowerCase()})?\n\nThe current link will stop working immediately for any AI assistant already connected — you'll need to paste the new one in to reconnect it.`
+                        : undefined
                     )
                   }
                   disabled={mcpBusy}
-                  style={{ fontSize: '13px', padding: '5px 12px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
+                  style={{ fontSize: '13px', padding: '6px 14px', borderRadius: 'var(--r-sm)' }}
                 >
-                  {mcpBusy ? 'Generating…' : 'Generate new link'}
+                  {mcpBusy ? 'Generating…' : mcpStatus.url ? 'Change link' : 'Create link'}
                 </button>
-                <button
-                  onClick={() => void handleRevokeMcpLink()}
-                  disabled={mcpBusy}
-                  style={{ fontSize: '13px', color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}
-                >
-                  Revoke
-                </button>
+                {mcpStatus.url && (
+                  <button
+                    onClick={() => void handleRevokeMcpLink()}
+                    disabled={mcpBusy}
+                    style={{ fontSize: '13px', color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}
+                  >
+                    Revoke
+                  </button>
+                )}
                 {mcpStatus.lastUsedAt && (
                   <span style={{ fontSize: '12px', color: 'var(--text-2)' }}>
                     Last used {new Date(mcpStatus.lastUsedAt).toLocaleString()}
@@ -490,6 +426,86 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
               </div>
               {mcpStatus.lastError && (
                 <p style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '6px' }}>{mcpStatus.lastError}</p>
+              )}
+
+              {mcpStatus.url && (
+                <div style={{ marginTop: '14px' }}>
+                  <ConnectRow
+                    name="Claude.ai"
+                    description="Opens the “Add custom connector” dialog — paste the link that's already copied."
+                    buttonLabel="Connect"
+                    copiedLabel="Opened — paste it in"
+                    copied={copiedTarget === 'claude'}
+                    onClick={handleConnectClaude}
+                  />
+                  <ConnectRow
+                    name="ChatGPT"
+                    description='Opens ChatGPT. Settings → Connectors → Add → paste → choose "No authentication".'
+                    buttonLabel="Connect"
+                    copiedLabel="Opened — paste it in"
+                    copied={copiedTarget === 'chatgpt'}
+                    onClick={() => copyAndOpen('chatgpt', mcpStatus.url!, 'https://chatgpt.com/')}
+                  />
+                  <ConnectRow
+                    name="Grok"
+                    description="Opens Grok. Paste as a custom MCP connector URL — no plugin needed."
+                    buttonLabel="Connect"
+                    copiedLabel="Opened — paste it in"
+                    copied={copiedTarget === 'grok'}
+                    onClick={() => copyAndOpen('grok', mcpStatus.url!, 'https://grok.com/')}
+                  />
+                  <ConnectRow
+                    name="Perplexity"
+                    description="Opens Perplexity. Settings → Connectors → Custom connector (Remote) → paste."
+                    buttonLabel="Connect"
+                    copiedLabel="Opened — paste it in"
+                    copied={copiedTarget === 'perplexity'}
+                    onClick={() => copyAndOpen('perplexity', mcpStatus.url!, 'https://www.perplexity.ai/')}
+                  />
+
+                  <button
+                    onClick={() => setShowMoreConnect((v) => !v)}
+                    style={{
+                      fontSize: '12px',
+                      color: 'var(--text-2)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '8px 0 0',
+                    }}
+                  >
+                    {showMoreConnect ? 'Fewer options ▲' : 'More options (Cursor, Claude Code, Codex) ▼'}
+                  </button>
+
+                  {showMoreConnect && (
+                    <div>
+                      <ConnectRow
+                        name="Cursor"
+                        description="One click installs the Wispra MCP server into Cursor."
+                        buttonLabel="Add to Cursor"
+                        copiedLabel="Opened Cursor!"
+                        copied={copiedTarget === 'cursor'}
+                        onClick={openCursorDeepLink}
+                      />
+                      <ConnectRow
+                        name="Claude Code"
+                        description="Copies a ready-to-run `claude mcp add` command."
+                        buttonLabel="Copy command"
+                        copiedLabel="Copied!"
+                        copied={copiedTarget === 'claude-code'}
+                        onClick={() => copyFor('claude-code', `claude mcp add --transport http wispra ${mcpStatus.url}`)}
+                      />
+                      <ConnectRow
+                        name="Codex"
+                        description="Paste the link into the url field of your MCP config."
+                        buttonLabel="Copy link"
+                        copiedLabel="Copied!"
+                        copied={copiedTarget === 'codex'}
+                        onClick={() => copyFor('codex', mcpStatus.url!)}
+                      />
+                    </div>
+                  )}
+                </div>
               )}
             </>
           )}
