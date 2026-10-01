@@ -169,7 +169,8 @@ const api = {
 
   // --- remote MCP connection (Connect AI assistants card) ---
   getMcpLink: (): Promise<McpLinkStatus> => ipcRenderer.invoke(IPC.MCP_GET_LINK),
-  generateMcpLink: (): Promise<McpLinkStatus> => ipcRenderer.invoke(IPC.MCP_GENERATE_LINK),
+  generateMcpLink: (expiresInDays?: number | null): Promise<McpLinkStatus> =>
+    ipcRenderer.invoke(IPC.MCP_GENERATE_LINK, expiresInDays ?? null),
   revokeMcpLink: (): Promise<McpLinkStatus> => ipcRenderer.invoke(IPC.MCP_REVOKE_LINK),
 
   // --- statistics & export ---

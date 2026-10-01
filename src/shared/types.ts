@@ -286,13 +286,15 @@ export interface SyncStatus {
  * Remote MCP connection link (see src/main/mcpLink.ts) — a secret URL, pasted as-is into
  * ChatGPT/Claude.ai/Grok/etc., that lets that client read this user's synced cloud data.
  * Unlike the reference "shown once" UX, Wispra persists the plaintext URL locally so the
- * user can come back and copy it again — surfaced in Settings > Account.
+ * user can come back and copy it again — surfaced in Settings > Account, masked by default.
  */
 export interface McpLinkStatus {
   /** The full connection URL, or null if never generated (or revoked). */
   url: string | null
   createdAt: string | null
   lastUsedAt: string | null
+  /** When this link stops working, or null if it never expires. Enforced server-side. */
+  expiresAt: string | null
   /** Message from the last failed attempt to reach wispra-web, or null otherwise. */
   lastError: string | null
 }

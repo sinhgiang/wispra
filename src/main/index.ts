@@ -1019,7 +1019,7 @@ function wireIpc(): void {
   // ── Remote MCP connection ────────────────────────────────────────────────
 
   ipcMain.handle(IPC.MCP_GET_LINK, (): Promise<McpLinkStatus> => getMcpLinkStatus())
-  ipcMain.handle(IPC.MCP_GENERATE_LINK, (): Promise<McpLinkStatus> => generateMcpLink())
+  ipcMain.handle(IPC.MCP_GENERATE_LINK, (_e, expiresInDays?: number | null): Promise<McpLinkStatus> => generateMcpLink(expiresInDays))
   ipcMain.handle(IPC.MCP_REVOKE_LINK, (): Promise<McpLinkStatus> => revokeMcpLink())
 
   // Overlay drag — move window by delta while keeping it within work area

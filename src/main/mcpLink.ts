@@ -8,6 +8,7 @@ import type { McpLinkStatus } from '@shared/types'
 interface McpLinkState {
   url?: string
   createdAt?: string
+  expiresAt?: string | null
 }
 
 function stateFilePath(): string {
@@ -31,10 +32,11 @@ function saveState(state: McpLinkState): void {
   }
 }
 
-async function callTokenApi(token: string, method: 'GET' | 'POST' | 'DELETE'): Promise<Response> {
+async function callTokenApi(token: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<Response> {
   return fetch(`${WISPRA_API_BASE}/api/mcp/token`, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(15_000)
   })
 }
@@ -48,50 +50,57 @@ export async function getStatus(): Promise<McpLinkStatus> {
   const state = loadState()
   const token = await auth.getValidToken()
   if (!token || !state.url) {
-    return { url: state.url ?? null, createdAt: state.createdAt ?? null, lastUsedAt: null, lastError: null }
+    return { url: state.url ?? null, createdAt: state.createdAt ?? null, lastUsedAt: null, expiresAt: state.expiresAt ?? null, lastError: null }
   }
 
   try {
     const res = await callTokenApi(token, 'GET')
     if (!res.ok) throw new Error(`Status check failed (${res.status})`)
-    const data = (await res.json()) as { connected: boolean; createdAt: string | null; lastUsedAt: string | null }
+    const data = (await res.json()) as { connected: boolean; createdAt: string | null; lastUsedAt: string | null; expiresAt: string | null }
     if (!data.connected) {
       saveState({})
-      return { url: null, createdAt: null, lastUsedAt: null, lastError: null }
+      return { url: null, createdAt: null, lastUsedAt: null, expiresAt: null, lastError: null }
     }
-    return { url: state.url, createdAt: state.createdAt ?? data.createdAt, lastUsedAt: data.lastUsedAt, lastError: null }
+    return {
+      url: state.url,
+      createdAt: state.createdAt ?? data.createdAt,
+      lastUsedAt: data.lastUsedAt,
+      expiresAt: data.expiresAt,
+      lastError: null
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return { url: state.url, createdAt: state.createdAt ?? null, lastUsedAt: null, lastError: message }
+    return { url: state.url, createdAt: state.createdAt ?? null, lastUsedAt: null, expiresAt: state.expiresAt ?? null, lastError: message }
   }
 }
 
 /**
  * Generates (first time) or rotates (replaces) the connection link. The plaintext token
  * is only ever returned by this call — unlike the reference "shown once" UX, it's persisted
- * to mcp.json so the user can come back and copy it again later.
+ * to mcp.json so the user can come back and copy it again later (the UI masks it visually).
+ * `expiresInDays` is a positive day count, or null/omitted for a link that never expires.
  */
-export async function generateLink(): Promise<McpLinkStatus> {
+export async function generateLink(expiresInDays?: number | null): Promise<McpLinkStatus> {
   const token = await auth.getValidToken()
   if (!token) {
-    return { url: null, createdAt: null, lastUsedAt: null, lastError: 'Sign in required.' }
+    return { url: null, createdAt: null, lastUsedAt: null, expiresAt: null, lastError: 'Sign in required.' }
   }
 
   try {
-    const res = await callTokenApi(token, 'POST')
+    const res = await callTokenApi(token, 'POST', { expiresInDays: expiresInDays ?? null })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new Error(`Link generation failed (${res.status}): ${text.slice(0, 200)}`)
     }
-    const data = (await res.json()) as { token: string }
+    const data = (await res.json()) as { token: string; expiresAt: string | null }
     const createdAt = new Date().toISOString()
     const url = `${WISPRA_API_BASE}/api/mcp/${data.token}`
-    saveState({ url, createdAt })
-    return { url, createdAt, lastUsedAt: null, lastError: null }
+    saveState({ url, createdAt, expiresAt: data.expiresAt })
+    return { url, createdAt, lastUsedAt: null, expiresAt: data.expiresAt, lastError: null }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const state = loadState()
-    return { url: state.url ?? null, createdAt: state.createdAt ?? null, lastUsedAt: null, lastError: message }
+    return { url: state.url ?? null, createdAt: state.createdAt ?? null, lastUsedAt: null, expiresAt: state.expiresAt ?? null, lastError: message }
   }
 }
 
@@ -109,9 +118,15 @@ export async function revokeLink(): Promise<McpLinkStatus> {
     } catch (err) {
       console.error('Failed to revoke MCP link on server:', err)
       const state = loadState()
-      return { url: state.url ?? null, createdAt: state.createdAt ?? null, lastUsedAt: null, lastError: err instanceof Error ? err.message : String(err) }
+      return {
+        url: state.url ?? null,
+        createdAt: state.createdAt ?? null,
+        lastUsedAt: null,
+        expiresAt: state.expiresAt ?? null,
+        lastError: err instanceof Error ? err.message : String(err)
+      }
     }
   }
   saveState({})
-  return { url: null, createdAt: null, lastUsedAt: null, lastError: null }
+  return { url: null, createdAt: null, lastUsedAt: null, expiresAt: null, lastError: null }
 }

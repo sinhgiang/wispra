@@ -123,7 +123,8 @@ export const IPC = {
   // Grok/etc. read this user's synced_* data from wispra-web's /api/mcp/[token] route
   // renderer -> main: resolves the current McpLinkStatus
   MCP_GET_LINK: 'mcp:get-link',
-  // renderer -> main: generate (first time) or rotate (replace) the link; resolves McpLinkStatus
+  // renderer -> main: generate (first time) or rotate (replace) the link; takes an optional
+  // expiresInDays (number | null, null = never expires); resolves McpLinkStatus
   MCP_GENERATE_LINK: 'mcp:generate-link',
   // renderer -> main: revoke the link so it stops working; resolves McpLinkStatus
   MCP_REVOKE_LINK: 'mcp:revoke-link',
