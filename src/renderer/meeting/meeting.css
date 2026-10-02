@@ -1532,6 +1532,48 @@
   transition: width 0.5s ease;
 }
 
+/* The provider's own words for a failure — small, under the message. */
+.mm-overlay-detail {
+  max-width: 420px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* Mind map job marks: a dot on the Mind map tab, a small tag on the session's row. */
+.meeting-map-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.meeting-map-dot.running { animation: meeting-map-pulse 1.1s ease-in-out infinite; }
+.meeting-map-dot.done { background: #16a34a; }
+.meeting-map-dot.stopped { background: #d97706; }
+@keyframes meeting-map-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+.meeting-session-map-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.meeting-session-map-tag .meeting-map-dot { margin-left: 0; }
+.meeting-session-map-tag.done { color: #16a34a; }
+.meeting-session-map-tag.stopped { color: #b45309; }
+
 .mm-overlay-foot {
   font-size: 11.5px;
   color: var(--text-3);

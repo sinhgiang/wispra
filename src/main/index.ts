@@ -19,7 +19,6 @@ import type {
   MeetingMindMap,
   MeetingSession,
   MeetingState,
-  MindMapProgress,
   Settings,
   StatePayload,
   SyncStatus
@@ -56,8 +55,7 @@ import {
   askMeetingChat,
   resolveChatTarget
 } from './postprocess'
-import { generateMindMap } from './mindMap'
-import { mindMapLanguage } from './mindMapLogic'
+import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -133,6 +131,8 @@ async function main(): Promise<void> {
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
   // before wireIpc() below (no IPC could otherwise start a session).
   meetingSessions.recoverOrphaned()
+  // Mind map jobs the last run of the app left unfinished show up as "not finished — Continue".
+  getMindMapJobs().restore()
   // Names Wispra picked up from the user's own History/Meetings help the recogniser (Lexicon.sttTerms)
   // and are not offered again as suggestions. Worked out in the background so the first dictation finds it ready.
   lexicon.setAutoTerms(() => autoVocab.terms())
@@ -500,48 +500,43 @@ async function answerMeetingChatQuestion(id: string, question: string): Promise<
   }
 }
 
-/** Mind map generations in flight, by session id — re-opening the tab joins the running one instead of starting a second. */
-const mindMapJobs = new Map<string, Promise<MeetingMindMap | null>>()
+/**
+ * The mind map jobs (see mindMapJobs.ts): one background job per session, with its
+ * progress kept on disk so a stopped job continues instead of starting over. Created on
+ * first use, once the app's data folder is known.
+ */
+let mindMapJobs: MindMapJobs | null = null
+function getMindMapJobs(): MindMapJobs {
+  mindMapJobs ??= createMindMapJobs({
+    dir: join(app.getPath('userData'), 'mind-map-jobs'),
+    getSession: (id) => meetingSessions.get(id) ?? undefined,
+    // Mirrors generateSessionContent's provider/key resolution.
+    resolveTarget: async () => {
+      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+      const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+      return resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
+    },
+    saveMindMap: (id, mindMap) => meetingSessions.setMindMap(id, mindMap),
+    notify: (status) => broadcast(IPC.MEETING_MIND_MAP_PROGRESS, status),
+    languages: LANGUAGES.map((l) => l.code),
+    // A dictation being transcribed and cleaned up goes first: the job holds its next AI call until it is typed in.
+    busy: () => controller.getState() === 'processing'
+  })
+  return mindMapJobs
+}
 
 /**
  * Builds (or returns the cached) mind map of a stopped session, triggered when the
- * renderer first opens its Mind map tab, or by Regenerate. Mirrors
- * generateSessionContent's provider/key resolution; the language the map is written
- * in is decided by mindMapLanguage(). Returns null on any failure — the session keeps
- * whatever map it had. Never throws.
+ * renderer first opens its Mind map tab, by "Continue"/"Try again", or by Regenerate.
+ * The job runs in the background and reports through MEETING_MIND_MAP_PROGRESS; the
+ * language the map is written in is decided by mindMapLanguage(). Resolves null when
+ * the job stopped — the session keeps whatever map it had. Never throws.
  */
 function generateSessionMindMap(
   id: string,
   options?: { regenerate?: boolean; language?: string }
 ): Promise<MeetingMindMap | null> {
-  const running = mindMapJobs.get(id)
-  if (running) return running
-  const session = meetingSessions.get(id)
-  if (!session || session.status === 'recording') return Promise.resolve(null)
-  if (session.mindMap && !options?.regenerate) return Promise.resolve(session.mindMap)
-
-  const language = mindMapLanguage(session.languageConfig, options, LANGUAGES.map((l) => l.code))
-  const job = (async (): Promise<MeetingMindMap | null> => {
-    try {
-      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
-      const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
-      const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
-      if (!target) return null
-      const mindMap = await generateMindMap(session.segments, target, language, (progress) =>
-        broadcast(IPC.MEETING_MIND_MAP_PROGRESS, { sessionId: id, ...progress } satisfies MindMapProgress)
-      )
-      if (!mindMap) return null
-      meetingSessions.setMindMap(id, mindMap)
-      return mindMap
-    } catch (err) {
-      console.error('[meeting] mind map generation failed:', err)
-      return null
-    } finally {
-      mindMapJobs.delete(id)
-    }
-  })()
-  mindMapJobs.set(id, job)
-  return job
+  return getMindMapJobs().start(id, options)
 }
 
 /**
@@ -605,6 +600,7 @@ function wireIpc(): void {
   ipcMain.handle(IPC.MEETING_GET_SESSION, (_event, id: string) => meetingSessions.get(id))
   ipcMain.handle(IPC.MEETING_DELETE_SESSION, (_event, id: string) => {
     const result = meetingSessions.delete(id)
+    getMindMapJobs().forget(id)
     autoVocab.invalidate(true) // a deleted meeting no longer counts towards what was learned
     return result
   })
@@ -641,6 +637,8 @@ function wireIpc(): void {
     IPC.MEETING_GENERATE_MIND_MAP,
     (_event, id: string, options?: { regenerate?: boolean; language?: string }) => generateSessionMindMap(id, options)
   )
+  ipcMain.handle(IPC.MEETING_GET_MIND_MAP_JOBS, () => getMindMapJobs().statuses())
+  ipcMain.handle(IPC.MEETING_ACK_MIND_MAP, (_event, id: string) => getMindMapJobs().acknowledge(String(id)))
   ipcMain.handle(IPC.MEETING_SAVE_MIND_MAP_PNG, (_event, png: ArrayBuffer, suggestedName: string) =>
     saveMindMapPng(png, String(suggestedName ?? ''))
   )

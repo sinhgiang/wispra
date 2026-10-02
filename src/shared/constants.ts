@@ -248,6 +248,14 @@ export const MIND_MAP_PART_CHARS = 12_000
 export const MIND_MAP_MAX_PARTS = 24
 /** Parts outlined at the same time. */
 export const MIND_MAP_CONCURRENCY = 3
+/** One AI call is given up after this long without an answer (it is then retried once). */
+export const MIND_MAP_CALL_TIMEOUT_MS = 60_000
+/** One part — its retries and its waits for the provider's per-minute limit included — may take this long. */
+export const MIND_MAP_PART_TIME_LIMIT_MS = 6 * 60_000
+/** A whole run stops after this long; the parts done so far are kept and "Continue" goes on from there. */
+export const MIND_MAP_TOTAL_TIME_LIMIT_MS = 30 * 60_000
+/** Longest single wait when the provider says "too many requests" (a per-minute limit clears within a minute). */
+export const MIND_MAP_MAX_RATE_LIMIT_WAIT_MS = 75_000
 /** Milliseconds to keep the overlay visible after injection (for done animation). */
 export const DONE_DISPLAY_MS = 1400
 
