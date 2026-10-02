@@ -88,7 +88,7 @@ async function partA() {
     const kind = system.startsWith('You are assembling') ? 'merge' : part ? 'part' : 'single'
     const refs = [...user.matchAll(/^\[(\d+)\]/gm)].map((m) => Number(m[1]))
     const tokens = Math.ceil((system.length + user.length) / 3)
-    const call = { kind, part: part ? Number(part[1]) : 0, refs, tokens, at: Date.now(), status: 200 }
+    const call = { kind, part: part ? Number(part[1]) : 0, refs, tokens, at: Date.now(), status: 200, jsonMode: !!body.response_format }
     calls.push(call)
     const reply = (status, payload, headers) => {
       call.status = status
@@ -109,6 +109,11 @@ async function partA() {
     }
     if (provider.fail && provider.fail(call)) return reply(500, { error: { message: 'The model is overloaded' } })
     if (provider.refuse && provider.refuse(call)) return reply(402, { error: 'Monthly AI limit reached', code: 'ai_quota_exceeded' })
+    // What Groq answers when the model's output does not pass its JSON mode check.
+    const broken = provider.badJson ? provider.badJson(call) : null
+    if (broken && call.jsonMode) {
+      return reply(400, { error: { message: "Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.", type: 'invalid_request_error', code: 'json_validate_failed', failed_generation: broken.failedGeneration ?? '{"topics": [{"label": "Chủ đề", "note": "Ghi chú bị cắt' } })
+    }
     // Honour the caller's time limit like a real slow connection would.
     await new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, provider.latencyMs)
@@ -121,7 +126,10 @@ async function partA() {
       kind === 'merge'
         ? { title: 'Demo Day', note: 'Tổng quan.', branches: [{ label: 'Tất cả', note: 'Ghi chú.', topics: [...user.matchAll(/^T(\d+)/gm)].map((m) => Number(m[1])) }], decisions: [], actions: [], questions: [] }
         : { title: 'Ghi chú ngắn', topics: [{ label: `Chủ đề ${refs[0]}`, note: 'Ghi chú.', start: refs[0], end: refs[refs.length - 1], points: [] }], decisions: [], actions: [], questions: [] }
-    return reply(200, { choices: [{ message: { content: JSON.stringify(content) } }] })
+    // Without JSON mode a model wraps its JSON in prose, or (plainBroken) still gets it wrong.
+    if (broken && broken.plainBroken) return reply(200, { choices: [{ message: { content: 'Here is the outline: {"topics": [{"label": "Chủ đề", "note": "bị cắt' } }] })
+    const text = call.jsonMode ? JSON.stringify(content) : 'Here is the JSON you asked for:\n```json\n' + JSON.stringify(content, null, 2) + '\n```\nLet me know if you need anything else.'
+    return reply(200, { choices: [{ message: { content: text } }] })
   }
   const quiet = console.error
   console.error = () => {}
@@ -294,6 +302,49 @@ async function partA() {
     map = await jobs.start('long')
     stopped = statuses[statuses.length - 1]
     check('allowance used up part-way: stops with that reason, keeps the finished parts, and does not keep calling', map === null && stopped.reason === 'quota' && stopped.done === 3 && calls.filter((c) => c.status === 402).length <= 3, { reason: stopped.reason, done: stopped.done, refused: calls.filter((c) => c.status === 402).length })
+
+    // ── 10. The AI's answer cannot be read as JSON (Groq: HTTP 400 "Failed to generate JSON") ──
+    const of4 = () => calls.filter((c) => c.part === 4)
+    let seen = 0
+    reset({ badJson: (c) => (c.part === 4 && seen++ === 0 ? {} : null) })
+    result = await runMindMap(longSegments(), target, 'vi')
+    check('HTTP 400 "Failed to generate JSON" on a part in the middle: the part is asked again and the map is completed', !!result.map && covered(result.map, longSegments()) === 152 && of4().map((c) => c.status).join() === '400,200' && ok('part').length === total, { part4: of4().map((c) => `${c.status}${c.jsonMode ? ' json' : ' plain'}`), parts: ok('part').length })
+
+    reset({ badJson: (c) => (c.part === 4 ? {} : null) })
+    result = await runMindMap(longSegments(), target, 'vi')
+    check('JSON mode keeps failing for that part: after two tries it is asked without JSON mode and the JSON is taken out of the text', !!result.map && covered(result.map, longSegments()) === 152 && of4().map((c) => `${c.status}${c.jsonMode ? 'j' : 'p'}`).join() === '400j,400j,200p' && new Set(ok('part').map((c) => c.part)).size === total, { part4: of4().map((c) => `${c.status}${c.jsonMode ? ' json' : ' plain'}`) })
+
+    const usable = JSON.stringify({ topics: [{ label: 'Cứu được', note: 'Ghi chú.', start: 1, end: 1, points: [] }], decisions: [], actions: [], questions: [] })
+    reset({ badJson: (c) => (c.part === 4 ? { failedGeneration: `${usable}\n\nI hope this helps!`.replace('"start":1,"end":1', `"start":${c.refs[0]},"end":${c.refs[c.refs.length - 1]}`) } : null) })
+    result = await runMindMap(longSegments(), target, 'vi')
+    check('…and when the rejected text is usable JSON with something after it, it is used as it is — no extra call', !!result.map && covered(result.map, longSegments()) === 152 && of4().length === 1 && JSON.stringify(result.map).includes('Cứu được'), { part4Calls: of4().length })
+
+    reset({ badJson: (c) => (c.part === 4 && c.refs.length > 12 ? { plainBroken: true } : null) })
+    result = await runMindMap(longSegments(), target, 'vi')
+    const whole = of4().filter((c) => c.refs.length > 12)
+    const halves = of4().filter((c) => c.refs.length <= 12)
+    check('the part stays unreadable in every mode: it is cut in two and both halves go through', !!result.map && covered(result.map, longSegments()) === 152 && whole.length === 3 && halves.length === 2 && halves.every((c) => c.status === 200), { wholeTries: whole.length, halves: halves.map((c) => c.refs.length) })
+
+    // Nothing helps for that part: the job stops, says what happened, and keeps the rest.
+    dir = path.join(TMP, 'jobs-10')
+    ;({ jobs, session, statuses } = makeJobs(dir))
+    let poison = null
+    reset({
+      badJson: (c) => {
+        if (c.part === 4 && poison === null) poison = c.refs[0]
+        return poison !== null && c.refs.includes(poison) ? { plainBroken: true } : null
+      }
+    })
+    map = await jobs.start('long')
+    stopped = statuses[statuses.length - 1]
+    saved = checkpointOf(dir)
+    const keptNow = saved.parts.filter(Boolean).length
+    check('every retry used up (JSON mode, plain mode, halves): the job stops with "the AI returned a broken result" — not "refused", not a key or plan problem', map === null && stopped.state === 'stopped' && stopped.reason === 'bad-answer' && !saved.parts[3], { reason: stopped.reason, detail: stopped.detail, triesOnPart4: of4().length })
+    check('…the finished parts are kept', keptNow >= 3 && stopped.done === keptNow && saved.state === 'stopped', { kept: keptNow, of: saved.total })
+    reset({})
+    map = await jobs.start('long')
+    const after = ok('part').map((c) => c.part).sort((a, b) => a - b)
+    check('…and "Continue" goes on from the part that failed: only the missing parts, then the map', !!map && after.includes(4) && after.length === total - keptNow && after.every((n) => !saved.parts[n - 1]) && covered(map, session.segments) === 152, { redone: after })
   } finally {
     console.error = quiet
     globalThis.fetch = realFetch
@@ -493,6 +544,19 @@ async function partB() {
   await sleep(1200)
   o = await overlay()
   check('past the time limit: stops with a clear message and "Continue" — no endless spinner, no automatic retry', starts.halted === 1 && /taking too long/.test(o.title) && /7 of 9 parts are done and kept/.test(o.step) && o.button === 'Continue' && (await tagOf('halted')) === 'stopped: Mind map not finished', o)
+
+  advance('halted', { state: 'stopped', reason: 'bad-answer', detail: "HTTP 400 — Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.", done: 7 })
+  await sleep(500)
+  o = await overlay()
+  check('the AI\'s answer kept coming back broken: the message says so, says it is not the key or plan, keeps the parts, offers "Continue"', o.title === 'The AI returned a result that could not be used' && /not a problem with your API key or plan/.test(o.step) && !/Check your/.test(o.step) && /7 of 9 parts are done and kept/.test(o.step) && /Failed to generate JSON/.test(o.detail) && o.button === 'Continue', o)
+  advance('halted', { state: 'stopped', reason: 'refused', detail: "HTTP 400 — Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.", done: 2, total: 8 })
+  await sleep(500)
+  o = await overlay()
+  check('a job that 0.6.1 stopped with this error (recorded there as "refused") shows the corrected message too', o.title === 'The AI returned a result that could not be used' && !/Check your/.test(o.step) && /2 of 8 parts are done and kept/.test(o.step), o)
+  advance('halted', { state: 'stopped', reason: 'refused', detail: 'HTTP 401 — Invalid API Key', done: 2, total: 8 })
+  await sleep(500)
+  o = await overlay()
+  check('a real refusal (HTTP 401) still points at the API key', o.title === 'The AI provider refused the request' && /Check your API key or plan/.test(o.step), o)
 
   // ── The app was closed mid-run ──
   await openSession('closed')
