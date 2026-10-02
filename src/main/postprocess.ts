@@ -1,6 +1,7 @@
 import { GROQ_API_BASE, LANGUAGES, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
 import type { ContentPlatform, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
 import type { CorrectionHint } from './lexiconLogic'
+import { aiQuota } from './aiQuota'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -159,7 +160,7 @@ async function processChunk(
       headers['Authorization'] = `Bearer ${apiKey}`
     }
 
-    const response = await fetch(`${base}/chat/completions`, {
+    const response = await aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -221,7 +222,7 @@ export async function summarizeTexts(
     model = provider === 'openai' ? OPENAI_CHAT_MODEL : GROQ_CHAT_MODEL
   }
 
-  const response = await fetch(`${base}/chat/completions`, {
+  const response = await aiQuota.fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -410,7 +411,7 @@ export async function translateSegment(
   const systemPrompt = `Translate the following speech transcript into ${languageName(targetLanguage)}. Return ONLY the translated text — no explanation, no quotes, no preamble. Keep the same tone and meaning; keep proper nouns and technical terms as-is where translating them would be wrong or ambiguous.`
 
   try {
-    const response = await fetch(`${base}/chat/completions`, {
+    const response = await aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
@@ -505,7 +506,7 @@ export async function generateMeetingTitle(
       : `${trimmed.slice(0, SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}`
 
   try {
-    const response = await fetch(`${base}/chat/completions`, {
+    const response = await aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -703,7 +704,7 @@ export async function generateMeetingContent(
       : `${trimmed.slice(0, MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-MAX_TRANSCRIPT_CHARS / 2)}`
 
   try {
-    const response = await fetch(`${base}/chat/completions`, {
+    const response = await aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -915,7 +916,7 @@ export async function askMeetingChat(
   const recentHistory = buildHistoryMessages(history)
 
   try {
-    const response = await fetch(`${base}/chat/completions`, {
+    const response = await aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({

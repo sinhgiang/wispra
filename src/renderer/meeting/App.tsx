@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type {
+  AiQuotaNotice,
   ContentPlatform,
   MeetingAudioSource,
   MeetingChatMessage,
@@ -16,6 +17,7 @@ import type {
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
+import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import './meeting.css'
 
@@ -161,7 +163,7 @@ function MeetingChatPanel({
   onInputChange: (value: string) => void
   onSend: () => void
   sending: boolean
-  error: string | null
+  error: ReactNode
   highlightId: string | null
   onSelectAnswer: (message: MeetingChatMessage) => void
 }): ReactElement {
@@ -206,7 +208,7 @@ function MeetingChatPanel({
           </div>
         )}
       </div>
-      {error && <div className="meeting-chat-error">{error}</div>}
+      {typeof error === 'string' ? <div className="meeting-chat-error">{error}</div> : error}
       <div className="meeting-chat-input-row">
         <textarea
           className="meeting-chat-input"
@@ -298,6 +300,12 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
   flushList()
   return blocks
 }
+
+/** How an AI call failed: Wispra Cloud's monthly AI allowance is used up ('quota'), or anything else ('error'). */
+type FailureKind = 'error' | 'quota'
+
+/** Value of the chat error state when the last question failed because the allowance is used up. */
+const CHAT_ERROR_QUOTA = '\u0000ai-quota'
 
 type PastView = 'transcript' | 'summary' | 'mindmap' | ContentPlatform
 
@@ -403,14 +411,30 @@ export function MeetingPanel(): React.JSX.Element {
   const [mindMapGenerating, setMindMapGenerating] = useState(false)
   const [mindMapProgress, setMindMapProgress] = useState<MindMapProgress | null>(null)
   /** The last mind map generation for the session being viewed failed — stops the open-tab effect from retrying in a loop; "Try again"/Regenerate clear it. */
-  const [mindMapFailed, setMindMapFailed] = useState(false)
+  const [mindMapFailed, setMindMapFailed] = useState<FailureKind | false>(false)
   /** Transcript stretch picked with "Show in transcript" on the Mind map tab. Never set together with chatHighlightId — whichever was chosen last wins. */
   const [mapHighlight, setMapHighlight] = useState<MapHighlight | null>(null)
   /** Which platform tabs are currently waiting on a generateMeetingContent() call — per-platform (not a single value) so switching between several not-yet-generated tabs in quick succession tracks each one's own in-flight state correctly instead of only the most recently opened tab. */
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
   /** Which platform tabs' last generateMeetingContent() call failed for the session being viewed. A failed tab is not generated again by itself — the effect below would otherwise call the LLM in a loop for as long as the tab stays open — only when the user presses "Try again" (retryContent). */
-  const [failedPlatforms, setFailedPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
-  /** Which of the 3 generated variants is shown for each social platform. */
+  const [failedPlatforms, setFailedPlatforms] = useState<Partial<Record<ContentPlatform, FailureKind>>>({})
+  /**
+   * Wispra Cloud's "this month's AI allowance is used up" notice (see AiQuotaNotice),
+   * pushed by the main process the moment the server says so. A failure that follows
+   * such a notice is shown as that (reset date, what to do) instead of the generic
+   * "check your connection" text. Null for users on their own key — it never applies.
+   */
+  const [aiQuota, setAiQuota] = useState<AiQuotaNotice | null>(null)
+  // Read by the async handlers below right when a call fails, before React re-renders.
+  const aiQuotaRef = useRef<AiQuotaNotice | null>(null)
+  /** Pro checkout link for the notice's "upgrade" option — fetched once a notice arrives. */
+  const [subscribeUrl, setSubscribeUrl] = useState<string | null>(null)
+  // Why a call that started at `startedAt` failed: the allowance notice arrives from the
+  // main process before the failed call's own answer does, so a notice at least as new
+  // as the call means "allowance used up"; anything else is an ordinary failure.
+  const failureKind = (startedAt: number): FailureKind =>
+    aiQuotaRef.current !== null && aiQuotaRef.current.seenAt >= startedAt ? 'quota' : 'error'
+  const quotaMessage = aiQuota ? <AiQuotaMessage notice={aiQuota} subscribeUrl={subscribeUrl} /> : null  /** Which of the 3 generated variants is shown for each social platform. */
   const [variantIndex, setVariantIndex] = useState<Record<'facebook' | 'instagram' | 'linkedin' | 'twitter', number>>({
     facebook: 0,
     instagram: 0,
@@ -472,6 +496,11 @@ export function MeetingPanel(): React.JSX.Element {
   const [chatInput, setChatInput] = useState('')
   const [chatSending, setChatSending] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
+  // The chat's error line: the allowance message when that is why the last question failed.
+  const chatErrorView: ReactNode =
+    chatError === CHAT_ERROR_QUOTA
+      ? (quotaMessage ?? "This month's AI allowance is used up. Try again after it resets.")
+      : chatError
   /** id of the assistant chat message currently driving the transcript highlight, if any — set automatically when a fresh answer names a range, or by clicking "Show in transcript" on any past answer. */
   const [chatHighlightId, setChatHighlightId] = useState<string | null>(null)
 
@@ -666,6 +695,13 @@ export function MeetingPanel(): React.JSX.Element {
     window.api.onMeetingMindMapProgress((progress) => {
       if (viewingPastIdRef.current === progress.sessionId) setMindMapProgress(progress)
     })
+    const applyAiQuota = (notice: AiQuotaNotice | null): void => {
+      aiQuotaRef.current = notice
+      setAiQuota(notice)
+      if (notice) void window.api.getAccountInfo().then((info) => setSubscribeUrl(info?.subscribeUrl ?? null))
+    }
+    window.api.onAiQuotaChanged(applyAiQuota)
+    void window.api.getAiQuota().then(applyAiQuota)
 
     // Hydrate on mount: a fresh mount (first open, or re-opening this tab after
     // switching away mid-meeting) otherwise has no idea a recording is already
@@ -755,13 +791,14 @@ export function MeetingPanel(): React.JSX.Element {
       setMindMapGenerating(true)
       setMindMapFailed(false)
       setMindMapProgress(null)
+      const startedAt = Date.now()
       void window.api
         .generateMeetingMindMap(id, regenerate ? { regenerate: true, language: langConfig.website } : undefined)
         .then((result) => {
           if (viewingPastIdRef.current !== id) return
           setMindMapGenerating(false)
           if (result) setPastMindMap((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
-          else setMindMapFailed(true)
+          else setMindMapFailed(failureKind(startedAt))
         })
     },
     [langConfig.website]
@@ -794,13 +831,14 @@ export function MeetingPanel(): React.JSX.Element {
     if (generatingPlatforms[platform] || failedPlatforms[platform]) return
     const id = viewingPastId
     setGeneratingPlatforms((prev) => ({ ...prev, [platform]: true }))
+    const startedAt = Date.now()
     void window.api.generateMeetingContent(id, platform).then((result) => {
       // A different session is on screen by now: its own state was reset when it
       // opened, and this late answer must not touch it.
       if (viewingPastIdRef.current !== id) return
       setGeneratingPlatforms((prev) => ({ ...prev, [platform]: false }))
       if (!result) {
-        setFailedPlatforms((prev) => ({ ...prev, [platform]: true }))
+        setFailedPlatforms((prev) => ({ ...prev, [platform]: failureKind(startedAt) }))
         return
       }
       setPastContent((prev) => {
@@ -818,7 +856,7 @@ export function MeetingPanel(): React.JSX.Element {
   // "Try again" on a platform tab whose generation failed: clearing the failure lets
   // the effect above make exactly one new attempt.
   const retryContent = (platform: ContentPlatform): void => {
-    setFailedPlatforms((prev) => ({ ...prev, [platform]: false }))
+    setFailedPlatforms((prev) => ({ ...prev, [platform]: undefined }))
   }
 
   // Keep the transcript scrolled to the latest paragraph as it streams in.
@@ -1065,6 +1103,7 @@ export function MeetingPanel(): React.JSX.Element {
     setChatInput('')
     setChatSending(true)
     setChatError(null)
+    const startedAt = Date.now()
     // On the Mind map tab the chat is only its input row (see `compact`), so the
     // conversation continues on the Transcript tab where the answer can be read.
     if (isPastChat && pastView === 'mindmap') setPastView('transcript')
@@ -1072,7 +1111,14 @@ export function MeetingPanel(): React.JSX.Element {
       setChatSending(false)
       if (!result) {
         setActiveChatMessages((prev) => prev.filter((m) => m.id !== optimisticId))
-        setChatError('Could not get an answer — check your connection/API key, then try again.')
+        // Nothing was saved, so the question goes back into the box to be sent again
+        // later (unless the user has already started typing something else).
+        setChatInput((current) => current || question)
+        setChatError(
+          failureKind(startedAt) === 'quota'
+            ? CHAT_ERROR_QUOTA
+            : 'Could not get an answer — check your connection/API key, then try again.'
+        )
         return
       }
       if (result.startSegmentId && result.endSegmentId) {
@@ -1403,7 +1449,8 @@ export function MeetingPanel(): React.JSX.Element {
                     active={pastView === 'mindmap'}
                     generating={mindMapGenerating}
                     progress={mindMapProgress}
-                    failed={mindMapFailed}
+                    failure={mindMapFailed || null}
+                    quotaMessage={quotaMessage}
                     regenerateTitle={`Build the map again, written in ${contentLanguageLabel} — the "Website & social posts" language on the New session screen`}
                     onRetry={() => requestMindMap(false)}
                     onRegenerate={() => requestMindMap(true)}
@@ -1444,6 +1491,8 @@ export function MeetingPanel(): React.JSX.Element {
                           ? 'Summarizing…'
                           : 'No summary available for this session.'}
                       </div>
+                      {/* The allowance ran out (now, or when the recording ended): say why there is no summary. */}
+                      {pastStatus !== 'summarizing' && !summaryGenerating && quotaMessage}
                       {pastStatus !== 'summarizing' && (
                         <button className="meeting-retry-btn" onClick={retrySummary} disabled={summaryGenerating}>
                           {summaryGenerating ? 'Generating…' : 'Try again'}
@@ -1471,7 +1520,11 @@ export function MeetingPanel(): React.JSX.Element {
                     <div className="meeting-transcript-empty">
                       {failedPlatforms.website ? (
                         <>
-                          <div>Could not generate a blog post — check your connection/API key, then try again.</div>
+                          {failedPlatforms.website === 'quota' && quotaMessage ? (
+                            quotaMessage
+                          ) : (
+                            <div>Could not generate a blog post — check your connection/API key, then try again.</div>
+                          )}
                           <button className="meeting-retry-btn" onClick={() => retryContent('website')}>
                             Try again
                           </button>
@@ -1506,7 +1559,11 @@ export function MeetingPanel(): React.JSX.Element {
                       <div className="meeting-transcript-empty">
                         {failedPlatforms[pastView] ? (
                           <>
-                            <div>Could not generate posts — check your connection/API key, then try again.</div>
+                            {failedPlatforms[pastView] === 'quota' && quotaMessage ? (
+                              quotaMessage
+                            ) : (
+                              <div>Could not generate posts — check your connection/API key, then try again.</div>
+                            )}
                             <button className="meeting-retry-btn" onClick={() => retryContent(pastView)}>
                               Try again
                             </button>
@@ -1526,7 +1583,7 @@ export function MeetingPanel(): React.JSX.Element {
                 onInputChange={setChatInput}
                 onSend={sendActiveChatMessage}
                 sending={chatSending && isPastChat}
-                error={isPastChat ? chatError : null}
+                error={isPastChat ? chatErrorView : null}
                 highlightId={chatHighlightId}
                 onSelectAnswer={selectChatAnswer}
               />
@@ -1612,7 +1669,7 @@ export function MeetingPanel(): React.JSX.Element {
                 onInputChange={setChatInput}
                 onSend={sendActiveChatMessage}
                 sending={chatSending && !isPastChat}
-                error={!isPastChat ? chatError : null}
+                error={!isPastChat ? chatErrorView : null}
                 highlightId={chatHighlightId}
                 onSelectAnswer={selectChatAnswer}
               />

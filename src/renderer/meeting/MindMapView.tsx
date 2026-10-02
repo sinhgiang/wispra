@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type { MeetingMindMap, MeetingSegment, MindMapProgress } from '@shared/types'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import { createMindMap, mindMapNodeColor, type MindMapController, type MindMapLayoutNode } from './mindMapRenderer'
@@ -54,7 +54,8 @@ export function MindMapView({
   active,
   generating,
   progress,
-  failed,
+  failure,
+  quotaMessage,
   regenerateTitle,
   onRetry,
   onRegenerate,
@@ -68,8 +69,10 @@ export function MindMapView({
   active: boolean
   generating: boolean
   progress: MindMapProgress | null
-  /** The last generation attempt failed (there may still be an earlier map to show). */
-  failed: boolean
+  /** How the last generation attempt failed, if it did (there may still be an earlier map to show). */
+  failure: 'error' | 'quota' | null
+  /** What to show when it failed because Wispra Cloud's monthly AI allowance is used up. */
+  quotaMessage: ReactNode
   regenerateTitle: string
   onRetry: () => void
   onRegenerate: () => void
@@ -105,8 +108,13 @@ export function MindMapView({
 
   // A failed Regenerate leaves the earlier map on screen, so it has to say so.
   useEffect(() => {
-    if (failed && map) setToast('Could not rebuild the mind map — the previous one is kept')
-  }, [failed, map])
+    if (!failure || !map) return
+    setToast(
+      failure === 'quota'
+        ? "This month's AI allowance is used up — the previous mind map is kept"
+        : 'Could not rebuild the mind map — the previous one is kept'
+    )
+  }, [failure, map])
 
   useEffect(() => {
     const query = window.matchMedia(DARK_QUERY)
@@ -445,7 +453,21 @@ export function MindMapView({
         <div className="mm-overlay">
           {segments.length === 0 ? (
             <div className="mm-overlay-step">No speech was transcribed in this session.</div>
-          ) : failed ? (
+          ) : failure === 'quota' && quotaMessage ? (
+            <>
+              <div className="mm-overlay-title">The mind map was not built</div>
+              {quotaMessage}
+              {progress && progress.total > 1 && (
+                // A long recording is outlined part by part; the allowance ran out on the way.
+                <div className="mm-overlay-step">
+                  It stopped after {progress.done} of {progress.total} parts. No partial map is kept.
+                </div>
+              )}
+              <button type="button" className="meeting-retry-btn" onClick={onRetry}>
+                Try again
+              </button>
+            </>
+          ) : failure ? (
             <>
               <div className="mm-overlay-title">Could not build the mind map</div>
               <div className="mm-overlay-step">Check your connection/API key, then try again.</div>
