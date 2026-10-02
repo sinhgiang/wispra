@@ -148,7 +148,7 @@ export function splitIntoParts(lines: TranscriptLine[], partChars: number, maxPa
   return parts
 }
 
-function cleanText(value: unknown, maxChars: number): string {
+export function cleanText(value: unknown, maxChars: number): string {
   if (typeof value !== 'string') return ''
   // Models slip markdown emphasis, list markers and double-escaped newlines into JSON
   // strings despite instructions.

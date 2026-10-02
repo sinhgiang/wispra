@@ -63,10 +63,10 @@
   // `at` = the paragraph (1-based) where the action is stated; clicking the action jumps there.
   const ACTIONS = [
     { text: 'Viết lại trang đăng ký, tập trung vào kết quả đầu ra', owner: 'Linh', due: 'thứ Sáu tuần này', at: 13 },
-    { text: 'Liên hệ hai học viên cũ cho buổi chia sẻ trực tiếp', owner: 'Linh', due: 'trước 21/10', at: 13 },
-    { text: 'Gộp ba bản tài liệu cài đặt thành một bản', owner: 'Sơn', due: '25/10', at: 14 },
+    { text: 'Liên hệ hai học viên cũ cho buổi chia sẻ trực tiếp', owner: 'Linh', due: 'trước 21/10', at: 11 },
+    { text: 'Gộp ba bản tài liệu cài đặt thành một bản', owner: 'Sơn', due: '25/10', at: 8 },
     { text: 'Cập nhật lịch sáu buổi và buổi hỏi đáp Chủ nhật lên trang khoá học', owner: 'Người nói 3', due: 'trong tuần này', at: 14 },
-    { text: 'Lên chi tiết kế hoạch quảng cáo, dồn ngân sách vào tuần ba và tuần bốn', owner: 'Người nói 3', due: null, at: 14 },
+    { text: 'Lên chi tiết kế hoạch quảng cáo, dồn ngân sách vào tuần ba và tuần bốn', owner: 'Người nói 3', due: null, at: 12 },
     { text: 'Nhắn lại 22 người đã đăng ký mà chưa chuyển khoản', owner: 'Linh', due: 'sau khi có trang mới', at: 15 },
     { text: 'Quyết định có giảm giá cho người đăng ký sớm hay không', owner: null, due: 'tuần sau', at: 13 },
     { text: 'Họp lại 15 phút để xem số liệu', owner: 'Cả nhóm', due: 'thứ Năm tuần sau', at: 16 }

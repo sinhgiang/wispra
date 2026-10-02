@@ -13,6 +13,7 @@ System-wide voice dictation desktop app (Windows + macOS). Press the global hotk
 - `npm run typecheck` — TypeScript check for all processes
 - `npm run build` — bundle main/preload/renderer
 - `npm run check:content-retry` — automated check (builds, then runs the Meeting tab in Electron with stub IPC, no API key): a failing Website/social content tab calls the generator once, and "Try again" once more
+- `npm run check:transcript-columns` — automated check (same setup, plus the outline functions against a fake AI): the Transcript tab's four columns — topics, action items, speaker names, the By topic / List switch, narrow windows, dark theme
 - `npm run build:win` — build Windows NSIS installer
 - `npm run build:mac` — build macOS DMG (requires a Mac)
 - `node scripts/generate-icons.js` — regenerate PNG icons in `resources/`
@@ -48,6 +49,7 @@ processing: main calls Groq API (src/main/transcribe.ts, 30s timeout + 1 retry)
 - Settings/history are plain JSON files in `app.getPath('userData')` (see `store.ts`, `history.ts`).
 - Auto-learned vocabulary (`autoVocab.ts`) only biases the Whisper prompt via `lexicon.sttTerms`. Never turn it into lexicon entries, replacements, or the AI-cleanup "preserve spelling" list (`llmTerms`): History holds recogniser output, so recurring wrong spellings look right. `wellKnownNames.ts` is a yardstick for spotting mishearings, never vocabulary or text to write.
 - Meeting mind map (`mindMap.ts` makes the AI calls, `mindMapLogic.ts` is the pure parsing/validation): built on first open of the Mind map tab, cached on the session as `mindMap`. A long transcript is outlined in parts and merged — never sample both ends like the summary does. Its text follows the session's "Website & social posts" language (`languageConfig.website`), not the spoken or Summary language. The renderer draws it with plain SVG (`mindMapRenderer.ts`); do not add a diagram library.
+- Transcript outline (`outline.ts` makes the AI calls, `outlineLogic.ts` is the pure parsing): the topics, action items and speaker names behind the Transcript tab's four columns (`TranscriptColumns.tsx`). Built right after Stop (or on first open of an older session), cached on the session as `outline`, written in the session's "Summary" language. Topics always cover the whole transcript; action items are only what the recording states — a topic without one stays empty, never prompt the model to fill it. Speaker names come only from what is said (self-introduction), from the user's edits (`speakerNames`), or from "Both"-mode audio levels (`voice.ts`: You / Others) — no voice recognition, no voiceprints.
 - OS login item goes through `loginItem.ts` only. An unpackaged (dev) run shares the installed app's default registry value name, so it must never sync at startup or on unrelated settings changes; it only writes its own `Wispra (dev)` entry when the user flips "Launch at login".
 
 ## Manual test checklist (run before ending a work session)

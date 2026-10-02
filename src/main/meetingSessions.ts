@@ -8,6 +8,7 @@ import type {
   MeetingContent,
   MeetingLanguageConfig,
   MeetingMindMap,
+  MeetingOutline,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary
@@ -77,7 +78,7 @@ class MeetingSessions {
    * first, so segments[] always stays in correct recording order.
    */
   enqueueChunk(
-    chunk: { startMs: number; endMs: number; startedAt: string },
+    chunk: { startMs: number; endMs: number; startedAt: string; voice?: 'me' | 'others' },
     transcribeFn: () => Promise<string | null>
   ): void {
     const session = this.current
@@ -102,7 +103,12 @@ class MeetingSessions {
       if (prev) {
         const prevEndWallMs = Date.parse(prev.startedAt) + (prev.endMs - prev.startMs)
         const gapMs = Date.parse(chunk.startedAt) - prevEndWallMs
-        isNewParagraph = gapMs >= PARAGRAPH_GAP_MS || charsSinceLastParagraph(session.segments) >= PARAGRAPH_MAX_CHARS
+        isNewParagraph =
+          gapMs >= PARAGRAPH_GAP_MS ||
+          charsSinceLastParagraph(session.segments) >= PARAGRAPH_MAX_CHARS ||
+          // The other side of the call started (or stopped) talking: a new paragraph, so a
+          // paragraph never mixes the user's words with someone else's.
+          (chunk.voice !== undefined && prev.voice !== undefined && chunk.voice !== prev.voice)
       }
 
       const segment: MeetingSegment = {
@@ -113,6 +119,7 @@ class MeetingSessions {
         startedAt: chunk.startedAt,
         isNewParagraph
       }
+      if (chunk.voice) segment.voice = chunk.voice
       session.segments.push(segment)
       this.persist(session)
       for (const fn of this.listeners) fn(segment, session.id)
@@ -334,6 +341,28 @@ class MeetingSessions {
     const session = this.get(id)
     if (!session) return
     session.mindMap = mindMap
+    this.persist(session)
+    for (const fn of this.metaListeners) fn(session)
+  }
+
+  /**
+   * Saves a session's transcript outline (see generateOutline in outline.ts) and
+   * notifies listeners. Replaces any earlier one. No-ops if the session was deleted in
+   * the meantime.
+   */
+  setOutline(id: string, outline: MeetingOutline): void {
+    const session = this.get(id)
+    if (!session) return
+    session.outline = outline
+    this.persist(session)
+    for (const fn of this.metaListeners) fn(session)
+  }
+
+  /** Merges speaker names the user typed into the session (see MeetingSession.speakerNames). */
+  setSpeakerNames(id: string, names: Record<string, string>): void {
+    const session = this.get(id)
+    if (!session) return
+    session.speakerNames = { ...session.speakerNames, ...names }
     this.persist(session)
     for (const fn of this.metaListeners) fn(session)
   }

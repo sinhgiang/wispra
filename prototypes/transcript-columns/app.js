@@ -29,6 +29,14 @@
     const how = sp.source === 'self' ? `Named from ${sp.quote} at ${sp.at}` : sp.source === 'introduced' ? `Named from ${sp.quote} at ${sp.at}` : 'Voice not named in the recording'
     return `<span class="speaker${sp.source ? '' : ' unnamed'}" style="--hue:${sp.hue}" title="${escapeHtml(how)}"><i></i><span>${escapeHtml(sp.name)}</span></span>`
   }
+  // Action items in the order they come up; the same buttons are used by topic and in the list.
+  const actions = [...ACTIONS].sort((a, b) => a.at - b.at)
+  function actionButton(a, i) {
+    const p = PARAGRAPHS[a.at - 1]
+    const meta = [a.owner, a.due].filter(Boolean).join(' · ')
+    return `<button class="act" data-act="${i}" data-p="${p.id}" title="Jump to ${fmt(p.startMs)} in the transcript"><span class="act-time">${fmt(p.startMs)}</span><span class="act-body"><span class="act-text">${escapeHtml(a.text)}</span>${meta ? `<span class="act-meta">${escapeHtml(meta)}</span>` : ''}</span></button>`
+  }
+
   $('sections').innerHTML = TOPICS.map((topic) => {
     const rows = PARAGRAPHS.slice(topic.from - 1, topic.to)
     const end = topic.to < PARAGRAPHS.length ? PARAGRAPHS[topic.to].startMs : SESSION.durationMs
@@ -42,23 +50,41 @@
     return (
       `<section class="tx-cols sec" style="--hue:${topic.hue}">` +
       `<div class="sec-topic" style="grid-column:2;grid-row:1 / span ${rows.length}"><div class="sec-topic-inner"><h3>${escapeHtml(topic.title)}</h3><span class="range">${fmt(rows[0].startMs)} – ${fmt(end)}</span></div></div>` +
+      // By topic: this topic's action items; an empty cell when it has none (nothing is made up).
+      (() => {
+        const own = actions.map((a, i) => ({ a, i })).filter(({ a }) => a.at >= topic.from && a.at <= topic.to)
+        return `<div class="sec-actions${own.length ? '' : ' empty'}" style="grid-column:4;grid-row:1 / span ${rows.length}"><div class="sec-actions-inner">${own.map(({ a, i }) => actionButton(a, i)).join('')}</div></div>`
+      })() +
       cells +
       `</section>`
     )
   }).join('')
 
   // ── Column 4: action items, in the order they come up; each jumps to its paragraph ──
-  const actions = [...ACTIONS].sort((a, b) => a.at - b.at)
   $('actCount').textContent = String(actions.length)
   $('actCountToggle').textContent = String(actions.length)
-  $('actList').innerHTML =
-    actions
-      .map((a, i) => {
-        const p = PARAGRAPHS[a.at - 1]
-        const meta = [a.owner, a.due].filter(Boolean).join(' · ')
-        return `<button class="act" data-act="${i}" data-p="${p.id}" title="Jump to ${fmt(p.startMs)} in the transcript"><span class="act-time">${fmt(p.startMs)}</span><span class="act-body"><span class="act-text">${escapeHtml(a.text)}</span>${meta ? `<span class="act-meta">${escapeHtml(meta)}</span>` : ''}</span></button>`
-      })
-      .join('') + '<div class="act-hint">Click an action to jump to where it was said.</div>'
+  document.querySelectorAll('[data-count]').forEach((el) => (el.textContent = String(actions.length)))
+  $('actList').innerHTML = actions.map(actionButton).join('') + '<div class="act-hint">Click an action to jump to where it was said.</div>'
+
+  // By topic / List switch — remembered, like the app does.
+  const VIEW_KEY = 'wispra-prototype-actions-view'
+  function setView(view) {
+    $('tx').classList.toggle('by-topic', view === 'topic')
+    $('tx').classList.remove('actions-open')
+    document.querySelectorAll('.view-switch button').forEach((b) => b.classList.toggle('active', b.dataset.view === view))
+    try {
+      localStorage.setItem(VIEW_KEY, view)
+    } catch {}
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.view-switch button')
+    if (b) setView(b.dataset.view)
+  })
+  let savedView = 'topic'
+  try {
+    savedView = localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'topic'
+  } catch {}
+  setView(savedView)
 
   // ── Jump + highlight ──────────────────────────────────────────────────
   const scroller = $('txScroll')
@@ -69,19 +95,20 @@
     activeAct = null
   }
   function jumpTo(button) {
-    const same = activeAct === button
+    const same = !!activeAct && activeAct.dataset.act === button.dataset.act
     clearHighlight()
     $('tx').classList.remove('actions-open')
     if (same) return // clicking the active action again clears the highlight
     activeAct = button
-    button.classList.add('active')
+    // The same action shows both next to its topic and in the list.
+    document.querySelectorAll(`.act[data-act="${button.dataset.act}"]`).forEach((b) => b.classList.add('active'))
     const cells = document.querySelectorAll(`#sections [data-p="${button.dataset.p}"]`)
     cells.forEach((el) => el.classList.add('hl'))
     const text = [...cells].find((el) => el.classList.contains('p-text'))
     const top = text.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
     scroller.scrollTo({ top: Math.max(0, top - 32 - 40), behavior: 'smooth' })
   }
-  $('actList').addEventListener('click', (e) => {
+  $('tx').addEventListener('click', (e) => {
     const button = e.target.closest('.act')
     if (button) jumpTo(button)
   })

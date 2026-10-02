@@ -42,10 +42,10 @@ const MAX_RATE_LIMIT_WAIT_MS = 20_000
 /** Times one call waits out a rate limit (HTTP 429) before giving up. */
 const MAX_RATE_LIMIT_WAITS = 3
 
-const TRANSCRIPT_FORMAT =
+export const TRANSCRIPT_FORMAT =
   'The transcript is given as one tagged line per paragraph: "[ref] (h:mm:ss) text" — ref is that paragraph\'s reference number.'
 
-const JSON_ONLY = 'Respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:'
+export const JSON_ONLY = 'Respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:'
 
 const ITEM_RULES = `- Every "label" is 2-6 words, specific, and carries the fact when there is one ("Revenue up 18%", not "Revenue"). Every "note" is one or two sentences with the concrete detail behind the label: names, numbers, reasons.
 - "start"/"end": the ref numbers (shown in brackets) of the first and last paragraph the item is about — the same number twice for a single paragraph. Use only refs that appear in the transcript.
@@ -108,7 +108,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * cut-off JSON) and waits out a rate limit; a refused request (bad key, bad input) is
  * not retried. Returns the parsed object, or null — never throws.
  */
-async function callJson(
+export async function callJson(
   target: ChatTarget,
   system: string,
   user: string,
@@ -165,7 +165,7 @@ async function callJson(
 }
 
 /** Runs `task` over `items` with at most `limit` in flight, keeping results in order. */
-async function mapLimited<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapLimited<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length)
   let next = 0
   const worker = async (): Promise<void> => {

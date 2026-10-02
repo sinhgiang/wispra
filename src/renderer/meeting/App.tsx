@@ -6,16 +6,19 @@ import type {
   MeetingContent,
   MeetingLanguageConfig,
   MeetingMindMap,
+  MeetingOutline,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary,
   MeetingSpace,
   MeetingState,
-  MindMapProgress
+  MindMapProgress,
+  OutlineProgress
 } from '@shared/types'
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
+import { TranscriptColumns, type ActionsView } from './TranscriptColumns'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import './meeting.css'
 
@@ -58,6 +61,17 @@ function loadLangConfig(): MeetingLanguageConfig {
 /** Sets one language across all 5 generated-content platforms at once (Website/Facebook/Instagram/LinkedIn/X) — they're edited as a single field in the UI to cut down on picker clutter, per user request. */
 function withContentLanguage(prev: MeetingLanguageConfig, value: string): MeetingLanguageConfig {
   return { ...prev, website: value, facebook: value, instagram: value, linkedin: value, twitter: value }
+}
+
+const ACTIONS_VIEW_STORAGE_KEY = 'wispra-transcript-actions-view'
+
+/** Restores how the Transcript tab arranges action items (by topic, or one list). By topic unless the user chose the list. */
+function loadActionsView(): ActionsView {
+  try {
+    return localStorage.getItem(ACTIONS_VIEW_STORAGE_KEY) === 'list' ? 'list' : 'topic'
+  } catch {
+    return 'topic'
+  }
 }
 
 const AUDIO_SOURCE_STORAGE_KEY = 'wispra-meeting-audio-source'
@@ -299,6 +313,9 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
   return blocks
 }
 
+/** Shown while a session's own paragraphs are still loading (a stable reference, so nothing re-renders for it). */
+const NO_BLOCKS: ParagraphBlock[] = []
+
 type PastView = 'transcript' | 'summary' | 'mindmap' | ContentPlatform
 
 const PAST_VIEW_TABS: Array<{ id: PastView; label: string }> = [
@@ -318,6 +335,8 @@ interface ParagraphBlock {
   /** Milliseconds along the session's active (non-paused) timeline — lets the user match a paragraph back to a position in a source recording/video. */
   startMs: number
   text: string
+  /** "Both"-mode recordings: who the audio levels say was talking in this paragraph (see MeetingSegment.voice). A paragraph never mixes the two — a change of voice starts a new one. */
+  voice?: 'me' | 'others'
   /** ids of every segment merged into this block — lets a chat answer's segment-id range (see MeetingChatMessage in shared/types.ts) resolve onto the paragraph block(s) it falls within, for transcript highlighting (see resolveHighlightBlockIds). */
   segmentIds: string[]
 }
@@ -328,7 +347,7 @@ function groupIntoParagraphs(segments: MeetingSegment[]): ParagraphBlock[] {
   for (const seg of segments) {
     const last = blocks[blocks.length - 1]
     if (seg.isNewParagraph || !last) {
-      blocks.push({ id: seg.id, startedAt: seg.startedAt, startMs: seg.startMs, text: seg.text, segmentIds: [seg.id] })
+      blocks.push({ id: seg.id, startedAt: seg.startedAt, startMs: seg.startMs, text: seg.text, segmentIds: [seg.id], voice: seg.voice })
     } else {
       last.text += ' ' + seg.text
       last.segmentIds.push(seg.id)
@@ -404,6 +423,18 @@ export function MeetingPanel(): React.JSX.Element {
   const [mindMapProgress, setMindMapProgress] = useState<MindMapProgress | null>(null)
   /** The last mind map generation for the session being viewed failed — stops the open-tab effect from retrying in a loop; "Try again"/Regenerate clear it. */
   const [mindMapFailed, setMindMapFailed] = useState(false)
+  /** Topics, action items and speaker names of the session being viewed (see MeetingOutline) — what the Transcript tab's columns are built from. */
+  const [pastOutline, setPastOutline] = useState<MeetingOutline | undefined>(undefined)
+  const [outlineGenerating, setOutlineGenerating] = useState(false)
+  const [outlineProgress, setOutlineProgress] = useState<OutlineProgress | null>(null)
+  /** The last outline generation for the session being viewed failed — stops the effect below from retrying by itself; "Try again" clears it. */
+  const [outlineFailed, setOutlineFailed] = useState(false)
+  /** Speaker names the user typed for the session being viewed, by paragraph id. */
+  const [pastSpeakerNames, setPastSpeakerNames] = useState<Record<string, string>>({})
+  /** Action item clicked in the Transcript tab: its paragraph is highlighted. Never set together with the chat's or the mind map's highlight. */
+  const [actionHighlight, setActionHighlight] = useState<{ key: string; startSegmentId: string; endSegmentId: string } | null>(null)
+  /** Action items next to their topic, or as one list — remembered across sessions (see loadActionsView). */
+  const [actionsView, setActionsView] = useState<ActionsView>(loadActionsView)
   /** Transcript stretch picked with "Show in transcript" on the Mind map tab. Never set together with chatHighlightId — whichever was chosen last wins. */
   const [mapHighlight, setMapHighlight] = useState<MapHighlight | null>(null)
   /** Which platform tabs are currently waiting on a generateMeetingContent() call — per-platform (not a single value) so switching between several not-yet-generated tabs in quick succession tracks each one's own in-flight state correctly instead of only the most recently opened tab. */
@@ -528,7 +559,8 @@ export function MeetingPanel(): React.JSX.Element {
         startMs: chunk.startMs,
         endMs: chunk.endMs,
         startedAt: chunk.startedAt,
-        mimeType: chunk.mimeType
+        mimeType: chunk.mimeType,
+        voice: chunk.voice
       })
     })
   }, [])
@@ -654,6 +686,8 @@ export function MeetingPanel(): React.JSX.Element {
         // Same map, new object (this broadcast fires for every session change, e.g. a
         // chat answer): keep the old reference so the drawn map is not rebuilt.
         setPastMindMap((prev) => (prev?.generatedAt === session.mindMap?.generatedAt ? prev : session.mindMap))
+        setPastOutline((prev) => (prev?.generatedAt === session.outline?.generatedAt ? prev : session.outline))
+        setPastSpeakerNames(session.speakerNames ?? {})
       }
       // Same, for the live session's own chat — e.g. an answer that just finished
       // while the mic is still recording. This is the single source of truth for
@@ -665,6 +699,9 @@ export function MeetingPanel(): React.JSX.Element {
     })
     window.api.onMeetingMindMapProgress((progress) => {
       if (viewingPastIdRef.current === progress.sessionId) setMindMapProgress(progress)
+    })
+    window.api.onMeetingOutlineProgress((progress) => {
+      if (viewingPastIdRef.current === progress.sessionId) setOutlineProgress(progress)
     })
 
     // Hydrate on mount: a fresh mount (first open, or re-opening this tab after
@@ -724,6 +761,10 @@ export function MeetingPanel(): React.JSX.Element {
     setMindMapGenerating(false)
     setMindMapProgress(null)
     setMindMapFailed(false)
+    setActionHighlight(null)
+    setOutlineGenerating(false)
+    setOutlineProgress(null)
+    setOutlineFailed(false)
     const id = viewingPastId
     void window.api.getMeetingSession(id).then((full) => {
       if (cancelled || !full) return
@@ -735,12 +776,51 @@ export function MeetingPanel(): React.JSX.Element {
       setPastContent(full.content)
       setPastChat(full.chat ?? [])
       setPastMindMap(full.mindMap)
+      setPastOutline(full.outline)
+      setPastSpeakerNames(full.speakerNames ?? {})
       setPastLoadedId(id)
     })
     return () => {
       cancelled = true
     }
   }, [viewingPastId])
+
+  // Asks the main process for the viewed session's transcript outline — the cached one,
+  // the one being built right after Stop (the call joins it), a first build for an
+  // older session, or (regenerate) a rebuild. On success the outline also arrives via
+  // onMeetingSessionUpdated; both paths keep one reference.
+  const requestOutline = useCallback((regenerate: boolean): void => {
+    const id = viewingPastIdRef.current
+    if (id === null) return
+    setOutlineGenerating(true)
+    setOutlineFailed(false)
+    setOutlineProgress(null)
+    void window.api.generateMeetingOutline(id, regenerate ? { regenerate: true } : undefined).then((result) => {
+      if (viewingPastIdRef.current !== id) return
+      setOutlineGenerating(false)
+      if (result) setPastOutline((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
+      else setOutlineFailed(true)
+    })
+  }, [])
+
+  // The Transcript tab's topics and action items: sessions recorded from now on get
+  // them right after Stop; an older session gets them the first time it is opened.
+  // One attempt per opening — a failure is remembered (outlineFailed) and only "Try
+  // again" makes another call.
+  useEffect(() => {
+    if (viewingPastId === null || pastView !== 'transcript') return
+    if (pastLoadedId !== viewingPastId) return
+    if (pastOutline || outlineGenerating || outlineFailed || pastSegments.length === 0) return
+    requestOutline(false)
+  }, [pastView, viewingPastId, pastLoadedId, pastOutline, outlineGenerating, outlineFailed, pastSegments, requestOutline])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIONS_VIEW_STORAGE_KEY, actionsView)
+    } catch {
+      // Best-effort — a full/blocked localStorage just means the choice resets next launch.
+    }
+  }, [actionsView])
 
   // Asks the main process for the viewed session's mind map — the cached one, a first
   // build, or (regenerate) a rebuild. A rebuild is written in the language currently
@@ -837,11 +917,14 @@ export function MeetingPanel(): React.JSX.Element {
   // A mind map node's stretch (mapHighlight) can run over many paragraphs, so it is
   // scrolled to its start rather than centred on its first paragraph.
   useEffect(() => {
-    if (!chatHighlightId && !mapHighlight) return
+    if (!chatHighlightId && !mapHighlight && !actionHighlight) return
+    // Right after switching sessions the paragraphs on hand are still the previous
+    // session's; scrolling to a highlight among them would leave the new one scrolled.
+    if (viewingPastId !== null && pastLoadedId !== viewingPastId) return
     const container = viewingPastId !== null ? pastTranscriptRef.current : transcriptRef.current
-    const target = container?.querySelector<HTMLElement>('.meeting-paragraph-highlighted')
-    target?.scrollIntoView({ behavior: 'smooth', block: mapHighlight ? 'start' : 'center' })
-  }, [chatHighlightId, mapHighlight, viewingPastId, pastView])
+    const target = container?.querySelector<HTMLElement>('.meeting-paragraph-highlighted, .txc-text.txc-hl')
+    target?.scrollIntoView({ behavior: 'smooth', block: mapHighlight || actionHighlight ? 'start' : 'center' })
+  }, [chatHighlightId, mapHighlight, actionHighlight, viewingPastId, pastLoadedId, pastView])
 
   const isRecording = meetingState === 'recording'
   const isPaused = meetingState === 'paused'
@@ -849,6 +932,7 @@ export function MeetingPanel(): React.JSX.Element {
   // The viewed session's mind map — undefined while pastMindMap still belongs to the
   // session viewed before (see pastLoadedId).
   const viewedMindMap = pastLoadedId === viewingPastId ? pastMindMap : undefined
+  const viewedOutline = pastLoadedId === viewingPastId ? pastOutline : undefined
   const pastDurationMs = sessions.find((s) => s.id === viewingPastId)?.durationMs ?? 0
   const contentLanguageLabel =
     langConfig.website === 'auto'
@@ -1044,7 +1128,7 @@ export function MeetingPanel(): React.JSX.Element {
   const liveHighlightedBlockIds = resolveHighlightBlockIds(liveBlocks, liveChat.find((m) => m.id === chatHighlightId))
   const pastHighlightedBlockIds = resolveHighlightBlockIds(
     pastBlocks,
-    mapHighlight ?? pastChat.find((m) => m.id === chatHighlightId)
+    actionHighlight ?? mapHighlight ?? pastChat.find((m) => m.id === chatHighlightId)
   )
 
   // Sends the pending question: appends an optimistic user bubble immediately, then
@@ -1077,6 +1161,7 @@ export function MeetingPanel(): React.JSX.Element {
       }
       if (result.startSegmentId && result.endSegmentId) {
         setMapHighlight(null)
+        setActionHighlight(null)
         setChatHighlightId(result.id)
         if (isPastChat) setPastView('transcript')
       }
@@ -1088,6 +1173,7 @@ export function MeetingPanel(): React.JSX.Element {
   const selectChatAnswer = (message: MeetingChatMessage): void => {
     if (!message.startSegmentId || !message.endSegmentId) return
     setMapHighlight(null)
+    setActionHighlight(null)
     setChatHighlightId((prev) => (prev === message.id ? null : message.id))
     if (isPastChat) setPastView('transcript')
   }
@@ -1097,8 +1183,26 @@ export function MeetingPanel(): React.JSX.Element {
   const showMapNodeInTranscript = (node: MindMapTreeNode, color: string): void => {
     if (!node.startSegmentId || !node.endSegmentId) return
     setChatHighlightId(null)
+    setActionHighlight(null)
     setMapHighlight({ startSegmentId: node.startSegmentId, endSegmentId: node.endSegmentId, label: node.label, color })
     setPastView('transcript')
+  }
+
+  // Transcript tab → click on an action item: highlights the paragraph it was said in
+  // (the scroll effect above brings it into view); clicking the same one again clears it.
+  const toggleActionHighlight = (action: { key: string; startSegmentId: string; endSegmentId: string }): void => {
+    setChatHighlightId(null)
+    setMapHighlight(null)
+    setActionHighlight((prev) => (prev?.key === action.key ? null : action))
+  }
+
+  // Transcript tab → speaker label edited. Shown at once; the main process stores it on
+  // the session and echoes it back through onMeetingSessionUpdated.
+  const renameSpeaker = (ids: string[], name: string): void => {
+    if (viewingPastId === null || ids.length === 0) return
+    const patch = Object.fromEntries(ids.map((id) => [id, name]))
+    setPastSpeakerNames((prev) => ({ ...prev, ...patch }))
+    void window.api.setMeetingSpeakerNames(viewingPastId, patch)
   }
 
   // "All" (selectedSpaceId === null) shows every session, including unfiled ones and
@@ -1340,7 +1444,15 @@ export function MeetingPanel(): React.JSX.Element {
           )}
 
           {viewingPastId !== null ? (
-            <div className={pastView === 'mindmap' ? 'meeting-session-view meeting-session-view--map' : 'meeting-session-view'}>
+            <div
+              className={
+                pastView === 'mindmap'
+                  ? 'meeting-session-view meeting-session-view--map'
+                  : pastView === 'transcript'
+                    ? 'meeting-session-view meeting-session-view--wide'
+                    : 'meeting-session-view'
+              }
+            >
               <div className="meeting-session-header">
                 <div className="meeting-session-heading">
                   <h2>{pastTitle}</h2>
@@ -1412,27 +1524,28 @@ export function MeetingPanel(): React.JSX.Element {
                 </div>
               )}
               {pastView === 'mindmap' ? null : pastView === 'transcript' ? (
-                <div className="meeting-transcript" ref={pastTranscriptRef}>
-                  {pastBlocks.length === 0 ? (
-                    <div className="meeting-transcript-empty">No speech was transcribed in this session.</div>
-                  ) : (
-                    pastBlocks.map((b) => (
-                      <div
-                        key={b.id}
-                        data-block-id={b.id}
-                        className={
-                          pastHighlightedBlockIds.has(b.id) ? 'meeting-paragraph meeting-paragraph-highlighted' : 'meeting-paragraph'
-                        }
-                      >
-                        <span className="meeting-paragraph-time">
-                          <span className="meeting-paragraph-elapsed">{formatElapsed(b.startMs)}</span>
-                          <span className="meeting-paragraph-clock">{formatClock(b.startedAt)}</span>
-                        </span>
-                        <p>{b.text}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
+                <TranscriptColumns
+                  // A fresh view per session, so one session's scroll position, open name editor or open
+                  // action panel never carries over to the next.
+                  key={viewingPastId}
+                  loading={pastLoadedId !== viewingPastId}
+                  blocks={pastLoadedId === viewingPastId ? pastBlocks : NO_BLOCKS}
+                  outline={viewedOutline}
+                  speakerNames={pastSpeakerNames}
+                  durationMs={pastDurationMs}
+                  highlighted={pastHighlightedBlockIds}
+                  activeActionKey={actionHighlight?.key ?? null}
+                  actionsView={actionsView}
+                  generating={outlineGenerating}
+                  progress={outlineProgress}
+                  failed={outlineFailed}
+                  scrollRef={pastTranscriptRef}
+                  onActionsViewChange={setActionsView}
+                  onAction={toggleActionHighlight}
+                  onRetry={() => requestOutline(false)}
+                  onRegenerate={() => requestOutline(true)}
+                  onRenameSpeaker={renameSpeaker}
+                />
               ) : pastView === 'summary' ? (
                 <div className="meeting-summary-view">
                   {pastSummary ? (

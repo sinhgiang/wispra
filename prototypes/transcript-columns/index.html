@@ -194,11 +194,29 @@
   .act-hint { font-size: 11px; color: var(--text-3); padding: 4px 4px 0; }
   .tx-actions-toggle, .tx-actions-close { display: none; }
 
+  /* By topic (the default): each topic's action items sit in a fourth column next to it;
+     a topic without any keeps an empty cell. "List" brings back the one-list panel. */
+  .tx.by-topic .tx-cols { grid-template-columns: var(--col-time) var(--col-topic) 1fr var(--col-act); }
+  .tx.by-topic .tx-actions { display: none; }
+  .tx:not(.by-topic) .sec-actions, .tx:not(.by-topic) .head-actions { display: none; }
+  .sec-actions-inner { position: sticky; top: 46px; display: flex; flex-direction: column; gap: 6px; }
+  .head-actions { display: flex; align-items: center; gap: 8px; }
+  .view-switch { display: inline-flex; background: var(--surface-2); border-radius: var(--r-pill); padding: 2px; }
+  .view-switch button { border: none; background: transparent; color: var(--text-2); font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill); cursor: pointer; }
+  .view-switch button.active { background: var(--bg); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+  .head-folded { display: none; }
+
   /* ── Medium width: the topic becomes a heading row above its paragraphs ── */
   @container (max-width: 979px) {
     .tx { --col-act: 236px; }
     .tx-cols { grid-template-columns: var(--col-time) 1fr; }
     .tx-head .col-topic { display: none; }
+    .tx.by-topic .tx-cols { grid-template-columns: var(--col-time) 1fr; }
+    .tx-head .head-actions.col { display: none; }
+    .tx.by-topic .head-folded { display: flex; }
+    .sec-actions { grid-column: 1 / -1 !important; grid-row: auto !important; }
+    .sec-actions.empty { display: none; }
+    .sec-actions-inner { position: static; max-width: 560px; }
     .sec-topic { grid-column: 1 / -1 !important; grid-row: auto !important; }
     .sec-topic-inner { position: static; flex-direction: row; align-items: baseline; gap: 10px; flex-wrap: wrap; }
     .sec .p-time, .sec .p-text { grid-column: auto !important; grid-row: auto !important; }
@@ -210,6 +228,7 @@
       box-shadow: var(--shadow); transform: translateX(105%); transition: transform 0.26s var(--ease-out);
     }
     .tx.actions-open .tx-actions { transform: none; }
+    .tx.by-topic .tx-actions-toggle { display: none; }
     .tx-actions-toggle {
       display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
       border: 1px solid var(--border-md); background: var(--bg); color: var(--text); border-radius: var(--r-pill);
@@ -293,14 +312,16 @@
                 <span class="col-topic">Topic</span>
                 <span class="grow">
                   <span>Transcript</span>
+                  <span class="head-actions head-folded">Action items <span class="act-count" data-count></span><span class="view-switch"><button data-view="topic">By topic</button><button data-view="list">List</button></span></span>
                   <button class="tx-actions-toggle" id="actionsToggle" aria-controls="actionsPanel">Action items <span class="act-count" id="actCountToggle"></span></button>
                 </span>
+                <span class="head-actions col">Action items <span class="act-count" data-count></span><span class="view-switch"><button data-view="topic">By topic</button><button data-view="list">List</button></span></span>
               </div>
               <div id="sections"></div>
             </div>
             <aside class="tx-actions" id="actionsPanel" aria-label="Action items">
               <div class="tx-head">
-                <span>Action items <span class="act-count" id="actCount"></span></span>
+                <span class="head-actions" style="display:flex">Action items <span class="act-count" id="actCount"></span><span class="view-switch"><button data-view="topic">By topic</button><button data-view="list">List</button></span></span>
                 <button class="tx-actions-close" id="actionsClose" aria-label="Close action items">✕</button>
               </div>
               <div class="act-list" id="actList"></div>

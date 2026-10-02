@@ -1,5 +1,6 @@
 import type { MeetingAudioSource } from '@shared/types'
 import { ChunkCutter } from './chunkCutter'
+import { rmsOf, voiceOf } from './voice'
 
 export interface MeetingChunk {
   blob: Blob
@@ -9,6 +10,8 @@ export interface MeetingChunk {
   endMs: number
   /** ISO wall-clock timestamp when this chunk's audio started recording. */
   startedAt: string
+  /** "Both" mode only: whether the microphone ('me') or the computer's audio ('others') clearly dominated this chunk. */
+  voice?: 'me' | 'others'
 }
 
 /**
@@ -53,7 +56,7 @@ export class MeetingRecorder {
   private intervalId: ReturnType<typeof setInterval> | null = null
   private cutter: ChunkCutter | null = null
   /** The in-flight segment's speech flag; replaced by beginSegment(), and captured by that segment's own onstop so a late-firing stop can't read the next segment's flag. */
-  private segment: { hadSpeech: boolean } | null = null
+  private segment: { hadSpeech: boolean; micEnergy: number; systemEnergy: number } | null = null
   private sessionStartedAt = 0
   /** Total milliseconds spent paused so far (completed pauses only). */
   private pausedAccumMs = 0
@@ -72,6 +75,12 @@ export class MeetingRecorder {
   private sourceStreams: MediaStream[] = []
   /** AudioContext used only to mix mic+system into one stream in 'both' mode — separate from the one monitorLevel() creates for the analyser. */
   private mixContext: AudioContext | null = null
+  /**
+   * 'both' mode only: one analyser per source, tapped before the two are mixed, so each
+   * chunk can be labelled as the user's voice or the other side's (see voice.ts). Purely
+   * a measurement — nothing downstream of the mix depends on these.
+   */
+  private legs: { mic: AnalyserNode; system: AnalyserNode } | null = null
 
   get isActive(): boolean {
     return this.running
@@ -169,6 +178,7 @@ export class MeetingRecorder {
     const oldStream = this.stream
     const oldSourceStreams = this.sourceStreams
     const oldMixContext = this.mixContext
+    const oldLegs = this.legs
     const oldRecorder = this.active
     const oldAudioContext = this.audioContext
     const oldIntervalId = this.intervalId
@@ -182,6 +192,7 @@ export class MeetingRecorder {
       // old capture (and stop()/pause() cleanup later) stay fully consistent.
       this.audioSource = previousSource
       this.sourceStreams = oldSourceStreams
+      this.legs = oldLegs
       throw err
     }
 
@@ -205,6 +216,7 @@ export class MeetingRecorder {
   /** Acquires whichever stream(s) `this.audioSource` calls for, always resetting `sourceStreams` first so a failed/retried acquisition never leaks a stale reference. */
   private async acquireStream(): Promise<MediaStream> {
     this.sourceStreams = []
+    this.legs = null
     if (this.audioSource === 'system') return this.acquireSystemStream()
     if (this.audioSource === 'both') return this.acquireMixedStream()
     return this.acquireMicStream()
@@ -285,6 +297,14 @@ export class MeetingRecorder {
       systemGain.gain.value = 2.5
       this.mixContext.createMediaStreamSource(mic).connect(micGain).connect(dest)
       this.mixContext.createMediaStreamSource(system).connect(systemGain).connect(dest)
+      // Measured after the gains above, i.e. at the loudness each source has in the mix.
+      const micAnalyser = this.mixContext.createAnalyser()
+      const systemAnalyser = this.mixContext.createAnalyser()
+      micAnalyser.fftSize = 256
+      systemAnalyser.fftSize = 256
+      micGain.connect(micAnalyser)
+      systemGain.connect(systemAnalyser)
+      this.legs = { mic: micAnalyser, system: systemAnalyser }
       return dest.stream
     } catch (err) {
       mic.getTracks().forEach((t) => t.stop())
@@ -317,6 +337,7 @@ export class MeetingRecorder {
     // where this.stream IS the one entry in sourceStreams).
     this.sourceStreams.forEach((s) => s.getTracks().forEach((t) => t.stop()))
     this.sourceStreams = []
+    this.legs = null
     void this.mixContext?.close()
     this.mixContext = null
     void this.audioContext?.close()
@@ -328,7 +349,7 @@ export class MeetingRecorder {
     const startedAt = new Date().toISOString()
     const rec = new MediaRecorder(this.stream, this.mimeType ? { mimeType: this.mimeType } : {})
     const chunks: Blob[] = []
-    const segment = { hadSpeech: false }
+    const segment = { hadSpeech: false, micEnergy: 0, systemEnergy: 0 }
     this.segment = segment
     rec.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data)
@@ -341,7 +362,7 @@ export class MeetingRecorder {
       if (!segment.hadSpeech) return
       const blob = new Blob(chunks, { type: rec.mimeType || this.mimeType || 'audio/webm' })
       const endMs = this.activeMs()
-      this.onChunk?.({ blob, mimeType: blob.type, startMs, endMs, startedAt })
+      this.onChunk?.({ blob, mimeType: blob.type, startMs, endMs, startedAt, voice: voiceOf(segment.micEnergy, segment.systemEnergy) })
     }
     rec.start()
     this.active = rec
@@ -363,9 +384,19 @@ export class MeetingRecorder {
     analyser.fftSize = 256
     source.connect(analyser)
     const data = new Uint8Array(analyser.frequencyBinCount)
+    const legData = new Uint8Array(analyser.frequencyBinCount)
 
     const tick = (): void => {
       if (!this.running || !this.cutter) return
+      // 'both' mode: add this tick's energy of each source to the segment in flight.
+      if (this.legs && this.segment) {
+        this.legs.mic.getByteTimeDomainData(legData)
+        const mic = rmsOf(legData)
+        this.legs.system.getByteTimeDomainData(legData)
+        const system = rmsOf(legData)
+        this.segment.micEnergy += mic * mic
+        this.segment.systemEnergy += system * system
+      }
       analyser.getByteTimeDomainData(data)
       let sum = 0
       for (let i = 0; i < data.length; i++) {

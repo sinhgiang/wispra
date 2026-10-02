@@ -369,6 +369,12 @@ export interface MeetingSegment {
   /** True if this segment starts a new paragraph (word-count threshold or detected topic shift). */
   isNewParagraph: boolean
   topicLabel?: string
+  /**
+   * Who was talking, as far as the audio levels tell: 'me' = the microphone was clearly
+   * louder, 'others' = the computer's audio was. Only set for audio recorded in "Both"
+   * mode, and only when one side clearly dominated (see voiceOf in meeting/voice.ts).
+   */
+  voice?: 'me' | 'others'
 }
 
 export interface MeetingSession {
@@ -392,6 +398,10 @@ export interface MeetingSession {
   spaceId?: string
   /** Q&A chat with AI about this session's own transcript (see askMeetingChat in postprocess.ts) — works both while still recording and after Stop. Undefined = no chat yet, same "treated as absent" pattern as languageConfig/content. */
   chat?: MeetingChatMessage[]
+  /** Topics, action items and speaker names for the Transcript tab's columns (see generateOutline in outline.ts), built right after Stop or the first time the session is opened, and cached here. Undefined until generated. */
+  outline?: MeetingOutline
+  /** Speaker names the user typed, by paragraph (the id of the paragraph's first segment). Wins over the outline's names; an empty string means "no name here". */
+  speakerNames?: Record<string, string>
   /** AI-generated mind map of the whole recording (see generateMindMap in mindMap.ts), built the first time the Mind map tab is opened and cached here. Undefined until generated. */
   mindMap?: MeetingMindMap
 }
@@ -439,6 +449,24 @@ export interface MeetingMindMap {
   generatedAt: string
 }
 
+/**
+ * What the Transcript tab's columns are built from, besides the transcript itself. All
+ * ranges are inclusive segment-id ranges, like MindMapNode's. Titles and action texts
+ * are written in `language`, which follows the session's "Summary" language choice.
+ */
+export interface MeetingOutline {
+  /** Sections of the transcript, in order, contiguous and covering all of it. */
+  topics: Array<{ title: string; startSegmentId: string; endSegmentId: string }>
+  /** Tasks stated in the recording, each pointing at the paragraph where it is said. Empty when there are none. */
+  actions: Array<{ text: string; owner?: string; due?: string; startSegmentId: string; endSegmentId: string }>
+  /** Who speaks where — only where the transcript itself says so (a self-introduction, or being introduced). */
+  speakers: Array<{ name: string; startSegmentId: string; endSegmentId: string }>
+  /** ISO-639-1 code the outline was written in, or "auto" (same language as the transcript). */
+  language: string
+  /** ISO timestamp. */
+  generatedAt: string
+}
+
 /** Progress of one mind map generation: a long recording is outlined part by part, then the parts are merged. */
 export interface MindMapProgress {
   sessionId: string
@@ -447,6 +475,9 @@ export interface MindMapProgress {
   done: number
   total: number
 }
+
+/** Progress of one transcript outline generation — same shape as the mind map's. */
+export type OutlineProgress = MindMapProgress
 
 /**
  * One question/answer exchange in a session's chat with AI about its own transcript
