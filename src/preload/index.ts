@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
+  AiQuotaNotice,
   ApiKeyTestResult,
   AutoTerm,
   ContentPlatform,
@@ -154,6 +155,11 @@ const api = {
   loginWithGoogle: (): Promise<void> => ipcRenderer.invoke(IPC.AUTH_LOGIN),
   logout: (): Promise<void> => ipcRenderer.invoke(IPC.AUTH_LOGOUT),
   getAccountInfo: (): Promise<AccountInfo | null> => ipcRenderer.invoke(IPC.GET_ACCOUNT_INFO),
+  // Wispra Cloud's monthly AI text allowance: the latest "used up" notice, or null.
+  getAiQuota: (): Promise<AiQuotaNotice | null> => ipcRenderer.invoke(IPC.GET_AI_QUOTA),
+  onAiQuotaChanged: (cb: (notice: AiQuotaNotice | null) => void): void => {
+    ipcRenderer.on(IPC.AI_QUOTA_CHANGED, (_e, notice: AiQuotaNotice | null) => cb(notice))
+  },
   onAuthStateChanged: (cb: (state: { email: string } | null) => void): void => {
     ipcRenderer.on(IPC.AUTH_STATE, (_e, state: { email: string } | null) => cb(state))
   },
