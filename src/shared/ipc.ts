@@ -110,6 +110,11 @@ export const IPC = {
   AUTH_LOGOUT: 'auth:logout',
   AUTH_STATE: 'auth:state',
   GET_ACCOUNT_INFO: 'auth:account-info',
+  // Wispra Cloud's monthly AI text allowance (see src/main/aiQuota.ts)
+  // renderer -> main: resolves the current AiQuotaNotice, or null
+  GET_AI_QUOTA: 'ai-quota:get',
+  // main -> renderers: the allowance was just found used up (AiQuotaNotice), or is available again (null)
+  AI_QUOTA_CHANGED: 'ai-quota:changed',
 
   // cloud sync — opt-in push of History/Meetings/Lexicon to Supabase (see src/main/sync.ts)
   // renderer -> main: trigger an immediate sync; resolves once the attempt finishes (success or failure)
@@ -193,8 +198,14 @@ export const IPC = {
   // rebuilds a map that already exists, in `language` when given. Resolves the
   // MeetingMindMap, or null on failure (the previous map, if any, is kept).
   MEETING_GENERATE_MIND_MAP: 'meeting:generate-mind-map',
-  // main -> settings renderer: how far a mind map generation is (MindMapProgress)
+  // main -> settings renderer: a mind map job started, moved on, stopped or finished
+  // (MindMapJobStatus) — sent for every session, whatever the window is showing
   MEETING_MIND_MAP_PROGRESS: 'meeting:mind-map-progress',
+  // renderer -> main: every mind map job that is running, stopped part-way or finished
+  // but not yet looked at (MindMapJobStatus[]) — asked when the Meeting page mounts
+  MEETING_GET_MIND_MAP_JOBS: 'meeting:get-mind-map-jobs',
+  // renderer -> main: the user has seen this session's finished map; forget its "done" status
+  MEETING_ACK_MIND_MAP: 'meeting:ack-mind-map',
   // renderer -> main: save the mind map's PNG export (bytes + suggested file name) through
   // a Save dialog; resolves { ok, error? }
   MEETING_SAVE_MIND_MAP_PNG: 'meeting:save-mind-map-png',

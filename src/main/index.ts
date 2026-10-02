@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
+  AiQuotaNotice,
   ApiKeyTestResult,
   ContentPlatform,
   FileTranscribeResult,
@@ -20,7 +21,6 @@ import type {
   MeetingOutline,
   MeetingSession,
   MeetingState,
-  MindMapProgress,
   OutlineProgress,
   Settings,
   StatePayload,
@@ -60,8 +60,8 @@ import {
 } from './postprocess'
 import { generateOutline } from './outline'
 import { outlineLanguage } from './outlineLogic'
-import { generateMindMap } from './mindMap'
-import { mindMapLanguage } from './mindMapLogic'
+import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
+import { aiQuota } from './aiQuota'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -137,6 +137,8 @@ async function main(): Promise<void> {
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
   // before wireIpc() below (no IPC could otherwise start a session).
   meetingSessions.recoverOrphaned()
+  // Mind map jobs the last run of the app left unfinished show up as "not finished — Continue".
+  getMindMapJobs().restore()
   // Names Wispra picked up from the user's own History/Meetings help the recogniser (Lexicon.sttTerms)
   // and are not offered again as suggestions. Worked out in the background so the first dictation finds it ready.
   lexicon.setAutoTerms(() => autoVocab.terms())
@@ -507,48 +509,44 @@ async function answerMeetingChatQuestion(id: string, question: string): Promise<
   }
 }
 
-/** Mind map generations in flight, by session id — re-opening the tab joins the running one instead of starting a second. */
-const mindMapJobs = new Map<string, Promise<MeetingMindMap | null>>()
+/**
+ * The mind map jobs (see mindMapJobs.ts): one background job per session, with its
+ * progress kept on disk so a stopped job continues instead of starting over. Created on
+ * first use, once the app's data folder is known.
+ */
+let mindMapJobs: MindMapJobs | null = null
+function getMindMapJobs(): MindMapJobs {
+  mindMapJobs ??= createMindMapJobs({
+    dir: join(app.getPath('userData'), 'mind-map-jobs'),
+    getSession: (id) => meetingSessions.get(id) ?? undefined,
+    // Mirrors generateSessionContent's provider/key resolution.
+    resolveTarget: async () => {
+      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+      const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+      return resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
+    },
+    saveMindMap: (id, mindMap) => meetingSessions.setMindMap(id, mindMap),
+    notify: (status) => broadcast(IPC.MEETING_MIND_MAP_PROGRESS, status),
+    languages: LANGUAGES.map((l) => l.code),
+    quotaExceededSince: (since) => aiQuota.exceededSince(since),
+    // A dictation being transcribed and cleaned up goes first: the job holds its next AI call until it is typed in.
+    busy: () => controller.getState() === 'processing'
+  })
+  return mindMapJobs
+}
 
 /**
  * Builds (or returns the cached) mind map of a stopped session, triggered when the
- * renderer first opens its Mind map tab, or by Regenerate. Mirrors
- * generateSessionContent's provider/key resolution; the language the map is written
- * in is decided by mindMapLanguage(). Returns null on any failure — the session keeps
- * whatever map it had. Never throws.
+ * renderer first opens its Mind map tab, by "Continue"/"Try again", or by Regenerate.
+ * The job runs in the background and reports through MEETING_MIND_MAP_PROGRESS; the
+ * language the map is written in is decided by mindMapLanguage(). Resolves null when
+ * the job stopped — the session keeps whatever map it had. Never throws.
  */
 function generateSessionMindMap(
   id: string,
   options?: { regenerate?: boolean; language?: string }
 ): Promise<MeetingMindMap | null> {
-  const running = mindMapJobs.get(id)
-  if (running) return running
-  const session = meetingSessions.get(id)
-  if (!session || session.status === 'recording') return Promise.resolve(null)
-  if (session.mindMap && !options?.regenerate) return Promise.resolve(session.mindMap)
-
-  const language = mindMapLanguage(session.languageConfig, options, LANGUAGES.map((l) => l.code))
-  const job = (async (): Promise<MeetingMindMap | null> => {
-    try {
-      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
-      const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
-      const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
-      if (!target) return null
-      const mindMap = await generateMindMap(session.segments, target, language, (progress) =>
-        broadcast(IPC.MEETING_MIND_MAP_PROGRESS, { sessionId: id, ...progress } satisfies MindMapProgress)
-      )
-      if (!mindMap) return null
-      meetingSessions.setMindMap(id, mindMap)
-      return mindMap
-    } catch (err) {
-      console.error('[meeting] mind map generation failed:', err)
-      return null
-    } finally {
-      mindMapJobs.delete(id)
-    }
-  })()
-  mindMapJobs.set(id, job)
-  return job
+  return getMindMapJobs().start(id, options)
 }
 
 /** Outline generations in flight, by session id — the renderer opening the session joins the one started after Stop. */
@@ -668,6 +666,7 @@ function wireIpc(): void {
   ipcMain.handle(IPC.MEETING_GET_SESSION, (_event, id: string) => meetingSessions.get(id))
   ipcMain.handle(IPC.MEETING_DELETE_SESSION, (_event, id: string) => {
     const result = meetingSessions.delete(id)
+    getMindMapJobs().forget(id)
     autoVocab.invalidate(true) // a deleted meeting no longer counts towards what was learned
     return result
   })
@@ -708,6 +707,8 @@ function wireIpc(): void {
     generateSessionOutline(id, options)
   )
   ipcMain.handle(IPC.MEETING_SET_SPEAKER_NAMES, (_event, id: string, names: unknown) => setSessionSpeakerNames(id, names))
+  ipcMain.handle(IPC.MEETING_GET_MIND_MAP_JOBS, () => getMindMapJobs().statuses())
+  ipcMain.handle(IPC.MEETING_ACK_MIND_MAP, (_event, id: string) => getMindMapJobs().acknowledge(String(id)))
   ipcMain.handle(IPC.MEETING_SAVE_MIND_MAP_PNG, (_event, png: ArrayBuffer, suggestedName: string) =>
     saveMindMapPng(png, String(suggestedName ?? ''))
   )
@@ -885,13 +886,21 @@ function wireIpc(): void {
           }
         }
 
-        text = await postProcess(
-          text, provider, groqApiKey, openaiApiKey,
-          effectiveMode, lexicon.llmTerms(vocabulary, appRelevance), localBaseUrl, localLlmModel, appContextHint,
-          proxyToken, lexicon.hintsFor(text),
-          // The user's own writing conventions + a few of their hand-fixed dictations as examples.
-          style.blockFor(text, { app: appName, mode: effectiveMode?.id })
-        )
+        // Wispra Cloud's monthly AI allowance used up: the text is typed exactly as
+        // dictated (postProcess already returns its input on any failure, so nothing the
+        // user said is lost), without spending a request on a cleanup that cannot run.
+        const cleanupStartedAt = Date.now()
+        const cleanupPaused = provider === 'proxy' && aiQuota.shouldSkipCleanup()
+        if (!cleanupPaused) {
+          text = await postProcess(
+            text, provider, groqApiKey, openaiApiKey,
+            effectiveMode, lexicon.llmTerms(vocabulary, appRelevance), localBaseUrl, localLlmModel, appContextHint,
+            proxyToken, lexicon.hintsFor(text),
+            // The user's own writing conventions + a few of their hand-fixed dictations as examples.
+            style.blockFor(text, { app: appName, mode: effectiveMode?.id })
+          )
+        }
+        if (cleanupPaused || aiQuota.exceededSince(cleanupStartedAt)) announceCleanupPaused()
       }
 
       // 4. Preview before paste — show notification then wait.
@@ -1117,6 +1126,7 @@ function wireIpc(): void {
 
   ipcMain.handle(IPC.AUTH_LOGOUT, () => {
     auth.logout()
+    aiQuota.clear()
     // Reset to BYOK provider (will show onboarding if no key)
     const settings = store.get()
     if (settings.provider === 'proxy') {
@@ -1139,8 +1149,17 @@ function wireIpc(): void {
       if (!response.ok) {
         return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
       }
-      const data = (await response.json()) as { plan: string; usageSeconds: number; limitSeconds: number | null; subscribeUrl: string | null }
-      return {
+      const data = (await response.json()) as {
+        plan: string
+        usageSeconds: number
+        limitSeconds: number | null
+        subscribeUrl: string | null
+        // Sent only by servers that meter AI text; older ones leave these out.
+        aiTokensUsed?: unknown
+        aiTokensLimit?: unknown
+        aiTokensResetAt?: unknown
+      }
+      const info: AccountInfo = {
         email: state.email,
         avatarUrl: state.avatarUrl,
         plan: data.plan === 'pro' ? 'pro' : 'free',
@@ -1148,9 +1167,26 @@ function wireIpc(): void {
         limitSeconds: data.limitSeconds,
         subscribeUrl: data.subscribeUrl ?? null,
       }
+      if (typeof data.aiTokensUsed === 'number' && typeof data.aiTokensLimit === 'number' && data.aiTokensLimit > 0) {
+        info.aiTokensUsed = data.aiTokensUsed
+        info.aiTokensLimit = data.aiTokensLimit
+        if (typeof data.aiTokensResetAt === 'string') info.aiTokensResetAt = data.aiTokensResetAt
+        // The server now reports allowance left (upgrade, or a new month): drop a stale notice.
+        if (data.aiTokensUsed < data.aiTokensLimit) aiQuota.clear()
+      }
+      return info
     } catch {
       return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
     }
+  })
+
+  // ── Wispra Cloud AI text allowance ─────────────────────────────────────────
+
+  ipcMain.handle(IPC.GET_AI_QUOTA, (): AiQuotaNotice | null => aiQuota.current())
+  aiQuota.onChange((notice) => broadcast(IPC.AI_QUOTA_CHANGED, notice))
+  // The allowance belongs to the Cloud account; with any other provider it does not apply.
+  store.onChange((s) => {
+    if (s.provider !== 'proxy') aiQuota.clear()
   })
 
   // ── Cloud sync ─────────────────────────────────────────────────────────────
@@ -1211,6 +1247,21 @@ function checkJustUpdated(): void {
   } catch {
     try { unlinkSync(flagPath) } catch { /* ignore */ }
   }
+}
+
+/**
+ * Tells the user, once per quota period per app run, that dictation cleanup is paused
+ * because this month's Wispra Cloud AI allowance is used up. A silent notification —
+ * never a dialog — so it cannot get in the way of the text being typed.
+ */
+function announceCleanupPaused(): void {
+  const notice = aiQuota.claimDictationNotice()
+  if (!notice) return
+  const resets = new Date(notice.resetAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })
+  notify(
+    'Wispra — AI cleanup paused',
+    `You've used this month's AI allowance. Your words are still typed, just without cleanup. It resets on ${resets}.`
+  )
 }
 
 function notify(title: string, body: string): void {

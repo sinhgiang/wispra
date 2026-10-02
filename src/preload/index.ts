@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
+  AiQuotaNotice,
   ApiKeyTestResult,
   AutoTerm,
   ContentPlatform,
@@ -22,7 +23,7 @@ import type {
   MeetingSessionSummary,
   MeetingSpace,
   MeetingState,
-  MindMapProgress,
+  MindMapJobStatus,
   OutlineProgress,
   Settings,
   StatePayload,
@@ -156,6 +157,11 @@ const api = {
   loginWithGoogle: (): Promise<void> => ipcRenderer.invoke(IPC.AUTH_LOGIN),
   logout: (): Promise<void> => ipcRenderer.invoke(IPC.AUTH_LOGOUT),
   getAccountInfo: (): Promise<AccountInfo | null> => ipcRenderer.invoke(IPC.GET_ACCOUNT_INFO),
+  // Wispra Cloud's monthly AI text allowance: the latest "used up" notice, or null.
+  getAiQuota: (): Promise<AiQuotaNotice | null> => ipcRenderer.invoke(IPC.GET_AI_QUOTA),
+  onAiQuotaChanged: (cb: (notice: AiQuotaNotice | null) => void): void => {
+    ipcRenderer.on(IPC.AI_QUOTA_CHANGED, (_e, notice: AiQuotaNotice | null) => cb(notice))
+  },
   onAuthStateChanged: (cb: (state: { email: string } | null) => void): void => {
     ipcRenderer.on(IPC.AUTH_STATE, (_e, state: { email: string } | null) => cb(state))
   },
@@ -252,8 +258,11 @@ const api = {
   // Saves the mind map's PNG export through a Save dialog.
   saveMindMapPng: (png: ArrayBuffer, suggestedName: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.MEETING_SAVE_MIND_MAP_PNG, png, suggestedName),
-  onMeetingMindMapProgress: (cb: (progress: MindMapProgress) => void): void => {
-    ipcRenderer.on(IPC.MEETING_MIND_MAP_PROGRESS, (_e, progress: MindMapProgress) => cb(progress))
+  // Mind map jobs run in the main process and outlive the tab: these report them.
+  getMeetingMindMapJobs: (): Promise<MindMapJobStatus[]> => ipcRenderer.invoke(IPC.MEETING_GET_MIND_MAP_JOBS),
+  ackMeetingMindMap: (id: string): Promise<void> => ipcRenderer.invoke(IPC.MEETING_ACK_MIND_MAP, id),
+  onMeetingMindMapProgress: (cb: (status: MindMapJobStatus) => void): void => {
+    ipcRenderer.on(IPC.MEETING_MIND_MAP_PROGRESS, (_e, status: MindMapJobStatus) => cb(status))
   },
   onMeetingStateChanged: (cb: (state: MeetingState) => void): void => {
     ipcRenderer.on(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state))

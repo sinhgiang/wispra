@@ -253,6 +253,28 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
             </p>
           )}
 
+          {/* AI text allowance (cleanup, summaries, content tabs, chat, mind map) — only
+              when the server reports it; older servers do not send these fields. */}
+          {typeof accountInfo.aiTokensUsed === 'number' && typeof accountInfo.aiTokensLimit === 'number' && accountInfo.aiTokensLimit > 0 && (
+            <div className="usage-bar-wrap">
+              <div className="usage-bar-track">
+                <div
+                  className="usage-bar-fill"
+                  style={{
+                    width: `${Math.min(100, (accountInfo.aiTokensUsed / accountInfo.aiTokensLimit) * 100)}%`,
+                    background: accountInfo.aiTokensUsed >= accountInfo.aiTokensLimit ? 'var(--danger)' : 'var(--accent)',
+                  }}
+                />
+              </div>
+              <span className="usage-bar-label">
+                AI text: {accountInfo.aiTokensUsed.toLocaleString()} / {accountInfo.aiTokensLimit.toLocaleString()} tokens used this month
+                {accountInfo.aiTokensResetAt && !Number.isNaN(Date.parse(accountInfo.aiTokensResetAt))
+                  ? ` · resets ${new Date(accountInfo.aiTokensResetAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}`
+                  : ''}
+              </span>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             {accountInfo.plan === 'free' && accountInfo.subscribeUrl && (
               <a

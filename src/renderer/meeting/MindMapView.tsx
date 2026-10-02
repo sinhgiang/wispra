@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import type { MeetingMindMap, MeetingSegment, MindMapProgress } from '@shared/types'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import type { MeetingMindMap, MeetingSegment, MindMapJobStatus } from '@shared/types'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import { createMindMap, mindMapNodeColor, type MindMapController, type MindMapLayoutNode } from './mindMapRenderer'
 
@@ -28,16 +28,50 @@ function minutesLabel(ms: number): string {
   return min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`
 }
 
-function progressText(progress: MindMapProgress | null): string {
-  if (!progress || progress.total <= 1) return 'Reading the transcript…'
-  if (progress.phase === 'merge') return 'Merging the parts into one map…'
-  return `Outlining part ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
+function progressText(progress: MindMapJobStatus | null): string {
+  if (!progress || progress.total === 0) return 'Reading the transcript…'
+  const waiting = progress.waitingUntil !== undefined && progress.waitingUntil > Date.now()
+  if (progress.total === 1) return waiting ? "Waiting for the AI provider's per-minute limit…" : 'Building the map from the transcript…'
+  if (progress.phase === 'merge') return waiting ? "All parts done — waiting for the AI provider's per-minute limit…" : 'All parts done — putting them together into one map…'
+  const parts = `${progress.done} of ${progress.total} parts done`
+  return waiting ? `${parts} — waiting for the AI provider's per-minute limit…` : `${parts} — outlining the next…`
 }
 
-function progressPercent(progress: MindMapProgress | null): number {
+function progressPercent(progress: MindMapJobStatus | null): number {
   if (!progress || progress.total <= 1) return 12
   // One extra step for the merge call that follows the parts.
   return Math.max(6, Math.round((progress.done / (progress.total + 1)) * 100))
+}
+
+/** What to tell the user about a job that stopped without a map, and what its button does. */
+function stoppedText(job: MindMapJobStatus): { title: string; text: string; action: string } {
+  const kept = job.total > 1 && job.done > 0
+  const keptText = kept ? ` ${job.done} of ${job.total} parts are done and kept — it goes on from there.` : ''
+  const action = kept ? 'Continue' : 'Try again'
+  switch (job.reason) {
+    case 'interrupted':
+      return { title: 'The mind map was not finished', text: `Wispra was closed while it was being built.${keptText}`, action }
+    case 'time-limit':
+      return { title: 'Stopped — this was taking too long', text: `Building the map went past its time limit.${keptText}`, action }
+    case 'rate-limit':
+      return {
+        title: "Stopped by the AI provider's per-minute limit",
+        text: `Your AI key only allows a small amount per minute, and the provider kept asking to wait.${keptText} Give it a minute first.`,
+        action
+      }
+    case 'timeout':
+      return { title: 'The AI did not answer in time', text: `The AI provider took too long to answer.${keptText}`, action }
+    case 'offline':
+      return { title: 'Could not reach the AI', text: `Check your internet connection.${keptText}`, action }
+    case 'no-key':
+      return { title: 'No AI access', text: 'Add your API key, or sign in on the Account tab, then try again.', action }
+    case 'quota':
+      return { title: 'The mind map was not built', text: `This month's AI allowance is used up.${keptText}`, action }
+    case 'refused':
+      return { title: 'The AI provider refused the request', text: `Check your API key or plan.${keptText}`, action }
+    default:
+      return { title: 'Could not build the mind map', text: `Check your connection/API key, then try again.${keptText}`, action }
+  }
 }
 
 /**
@@ -54,7 +88,8 @@ export function MindMapView({
   active,
   generating,
   progress,
-  failed,
+  stopped,
+  quotaMessage,
   regenerateTitle,
   onRetry,
   onRegenerate,
@@ -67,9 +102,12 @@ export function MindMapView({
   dateLabel: string
   active: boolean
   generating: boolean
-  progress: MindMapProgress | null
-  /** The last generation attempt failed (there may still be an earlier map to show). */
-  failed: boolean
+  /** The session's job while it runs — it runs in the main process, so this can be a job started before this view existed. */
+  progress: MindMapJobStatus | null
+  /** The job stopped without a map (there may still be an earlier map to show). */
+  stopped: MindMapJobStatus | null
+  /** What to show when it stopped because Wispra Cloud's monthly AI allowance is used up. */
+  quotaMessage: ReactNode
   regenerateTitle: string
   onRetry: () => void
   onRegenerate: () => void
@@ -105,8 +143,22 @@ export function MindMapView({
 
   // A failed Regenerate leaves the earlier map on screen, so it has to say so.
   useEffect(() => {
-    if (failed && map) setToast('Could not rebuild the mind map — the previous one is kept')
-  }, [failed, map])
+    if (!stopped || !map) return
+    setToast(
+      stopped.reason === 'quota'
+        ? "This month's AI allowance is used up — the previous mind map is kept"
+        : 'Could not rebuild the mind map — the previous one is kept'
+    )
+  }, [stopped, map])
+
+  // While the run waits for the provider's limit, redraw when the wait is over.
+  const [, setWaitTick] = useState(0)
+  useEffect(() => {
+    const until = generating ? progress?.waitingUntil : undefined
+    if (until === undefined || until <= Date.now()) return
+    const id = setTimeout(() => setWaitTick((n) => n + 1), until - Date.now() + 50)
+    return () => clearTimeout(id)
+  }, [generating, progress?.waitingUntil])
 
   useEffect(() => {
     const query = window.matchMedia(DARK_QUERY)
@@ -438,19 +490,35 @@ export function MindMapView({
             <i style={{ width: `${progressPercent(progress)}%` }} />
           </div>
           <div className="mm-overlay-foot">
-            This runs once. The map is saved with the recording and opens instantly next time.
+            This keeps running in the background — you can leave this tab, open another recording or dictate. The map is saved
+            with the recording when it is done.
           </div>
         </div>
       ) : !map ? (
         <div className="mm-overlay">
           {segments.length === 0 ? (
             <div className="mm-overlay-step">No speech was transcribed in this session.</div>
-          ) : failed ? (
+          ) : stopped?.reason === 'quota' && quotaMessage ? (
             <>
-              <div className="mm-overlay-title">Could not build the mind map</div>
-              <div className="mm-overlay-step">Check your connection/API key, then try again.</div>
+              <div className="mm-overlay-title">The mind map was not built</div>
+              {quotaMessage}
+              {stopped.total > 1 && (
+                // A long recording is outlined part by part; the allowance ran out on the way.
+                <div className="mm-overlay-step">
+                  It stopped after {stopped.done} of {stopped.total} parts. They are kept — it goes on from there.
+                </div>
+              )}
               <button type="button" className="meeting-retry-btn" onClick={onRetry}>
-                Try again
+                {stopped.total > 1 && stopped.done > 0 ? 'Continue' : 'Try again'}
+              </button>
+            </>
+          ) : stopped ? (
+            <>
+              <div className="mm-overlay-title">{stoppedText(stopped).title}</div>
+              <div className="mm-overlay-step">{stoppedText(stopped).text}</div>
+              {stopped.detail && <div className="mm-overlay-detail">{stopped.detail}</div>}
+              <button type="button" className="meeting-retry-btn" onClick={onRetry}>
+                {stoppedText(stopped).action}
               </button>
             </>
           ) : null}

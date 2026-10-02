@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type {
+  AiQuotaNotice,
   ContentPlatform,
   MeetingAudioSource,
   MeetingChatMessage,
@@ -18,6 +19,8 @@ import type {
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
+import type { MindMapJobStatus } from '@shared/types'
+import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import { TranscriptColumns, type ActionsView } from './TranscriptColumns'
 import './meeting.css'
@@ -175,7 +178,7 @@ function MeetingChatPanel({
   onInputChange: (value: string) => void
   onSend: () => void
   sending: boolean
-  error: string | null
+  error: ReactNode
   highlightId: string | null
   onSelectAnswer: (message: MeetingChatMessage) => void
 }): ReactElement {
@@ -220,7 +223,7 @@ function MeetingChatPanel({
           </div>
         )}
       </div>
-      {error && <div className="meeting-chat-error">{error}</div>}
+      {typeof error === 'string' ? <div className="meeting-chat-error">{error}</div> : error}
       <div className="meeting-chat-input-row">
         <textarea
           className="meeting-chat-input"
@@ -312,6 +315,21 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
   flushList()
   return blocks
 }
+
+/** One line saying where a session's mind map job is — the tooltip of its marks in the session list and on the tab. */
+function mindMapJobLabel(job: MindMapJobStatus): string {
+  if (job.state === 'done') return 'The mind map is ready'
+  if (job.state === 'stopped') {
+    return job.total > 1 ? `The mind map is not finished (${job.done} of ${job.total} parts done) — open the Mind map tab to continue` : 'The mind map is not finished — open the Mind map tab to try again'
+  }
+  if (job.phase === 'merge') return 'Building the mind map — putting the parts together'
+  return job.total > 1 ? `Building the mind map — ${job.done} of ${job.total} parts done` : 'Building the mind map'
+}
+/** How an AI call failed: Wispra Cloud's monthly AI allowance is used up ('quota'), or anything else ('error'). */
+type FailureKind = 'error' | 'quota'
+
+/** Value of the chat error state when the last question failed because the allowance is used up. */
+const CHAT_ERROR_QUOTA = '\u0000ai-quota'
 
 type PastView = 'transcript' | 'summary' | 'mindmap' | ContentPlatform
 
@@ -431,17 +449,39 @@ export function MeetingPanel(): React.JSX.Element {
   const [pastMindMap, setPastMindMap] = useState<MeetingMindMap | undefined>(undefined)
   /** True once the Mind map tab has been opened for the session being viewed — its view then stays mounted (hidden) behind the other tabs so the map keeps its open branches and zoom. */
   const [mindMapOpened, setMindMapOpened] = useState(false)
-  const [mindMapGenerating, setMindMapGenerating] = useState(false)
-  const [mindMapProgress, setMindMapProgress] = useState<MindMapProgress | null>(null)
-  /** The last mind map generation for the session being viewed failed — stops the open-tab effect from retrying in a loop; "Try again"/Regenerate clear it. */
-  const [mindMapFailed, setMindMapFailed] = useState(false)
+  /**
+   * Mind map jobs by session id: running, stopped part-way, or finished but not yet
+   * looked at. The jobs run in the main process (mindMapJobs.ts) whatever this page
+   * shows — this only mirrors them, so leaving the tab, the session or the page never
+   * stops or restarts one. A stopped job also keeps the open-tab effect from retrying in
+   * a loop; "Continue"/"Try again"/Regenerate start it again.
+   */
+  const [mindMapJobs, setMindMapJobs] = useState<Record<string, MindMapJobStatus>>({})
+  /** False until the jobs were fetched after mount — before that the open-tab effect cannot know whether one is already running. */
+  const [mindMapJobsLoaded, setMindMapJobsLoaded] = useState(false)
   /** Transcript stretch picked with "Show in transcript" on the Mind map tab. Never set together with chatHighlightId — whichever was chosen last wins. */
   const [mapHighlight, setMapHighlight] = useState<MapHighlight | null>(null)
   /** Which platform tabs are currently waiting on a generateMeetingContent() call — per-platform (not a single value) so switching between several not-yet-generated tabs in quick succession tracks each one's own in-flight state correctly instead of only the most recently opened tab. */
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
   /** Which platform tabs' last generateMeetingContent() call failed for the session being viewed. A failed tab is not generated again by itself — the effect below would otherwise call the LLM in a loop for as long as the tab stays open — only when the user presses "Try again" (retryContent). */
-  const [failedPlatforms, setFailedPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
-  /** Which of the 3 generated variants is shown for each social platform. */
+  const [failedPlatforms, setFailedPlatforms] = useState<Partial<Record<ContentPlatform, FailureKind>>>({})
+  /**
+   * Wispra Cloud's "this month's AI allowance is used up" notice (see AiQuotaNotice),
+   * pushed by the main process the moment the server says so. A failure that follows
+   * such a notice is shown as that (reset date, what to do) instead of the generic
+   * "check your connection" text. Null for users on their own key — it never applies.
+   */
+  const [aiQuota, setAiQuota] = useState<AiQuotaNotice | null>(null)
+  // Read by the async handlers below right when a call fails, before React re-renders.
+  const aiQuotaRef = useRef<AiQuotaNotice | null>(null)
+  /** Pro checkout link for the notice's "upgrade" option — fetched once a notice arrives. */
+  const [subscribeUrl, setSubscribeUrl] = useState<string | null>(null)
+  // Why a call that started at `startedAt` failed: the allowance notice arrives from the
+  // main process before the failed call's own answer does, so a notice at least as new
+  // as the call means "allowance used up"; anything else is an ordinary failure.
+  const failureKind = (startedAt: number): FailureKind =>
+    aiQuotaRef.current !== null && aiQuotaRef.current.seenAt >= startedAt ? 'quota' : 'error'
+  const quotaMessage = aiQuota ? <AiQuotaMessage notice={aiQuota} subscribeUrl={subscribeUrl} /> : null  /** Which of the 3 generated variants is shown for each social platform. */
   const [variantIndex, setVariantIndex] = useState<Record<'facebook' | 'instagram' | 'linkedin' | 'twitter', number>>({
     facebook: 0,
     instagram: 0,
@@ -503,6 +543,11 @@ export function MeetingPanel(): React.JSX.Element {
   const [chatInput, setChatInput] = useState('')
   const [chatSending, setChatSending] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
+  // The chat's error line: the allowance message when that is why the last question failed.
+  const chatErrorView: ReactNode =
+    chatError === CHAT_ERROR_QUOTA
+      ? (quotaMessage ?? "This month's AI allowance is used up. Try again after it resets.")
+      : chatError
   /** id of the assistant chat message currently driving the transcript highlight, if any — set automatically when a fresh answer names a range, or by clicking "Show in transcript" on any past answer. */
   const [chatHighlightId, setChatHighlightId] = useState<string | null>(null)
 
@@ -701,8 +746,20 @@ export function MeetingPanel(): React.JSX.Element {
       if (viewingPastIdRef.current === progress.sessionId) setOutlineProgress(progress)
     })
     window.api.onMeetingMindMapProgress((progress) => {
-      if (viewingPastIdRef.current === progress.sessionId) setMindMapProgress(progress)
+      setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
     })
+    // Jobs that were already running (or stopped, or finished unseen) before this page mounted.
+    void window.api.getMeetingMindMapJobs().then((jobs) => {
+      setMindMapJobs((prev) => ({ ...Object.fromEntries((jobs ?? []).map((job) => [job.sessionId, job])), ...prev }))
+      setMindMapJobsLoaded(true)
+    })
+    const applyAiQuota = (notice: AiQuotaNotice | null): void => {
+      aiQuotaRef.current = notice
+      setAiQuota(notice)
+      if (notice) void window.api.getAccountInfo().then((info) => setSubscribeUrl(info?.subscribeUrl ?? null))
+    }
+    window.api.onAiQuotaChanged(applyAiQuota)
+    void window.api.getAiQuota().then(applyAiQuota)
 
     // Hydrate on mount: a fresh mount (first open, or re-opening this tab after
     // switching away mid-meeting) otherwise has no idea a recording is already
@@ -758,9 +815,6 @@ export function MeetingPanel(): React.JSX.Element {
     setChatHighlightId(null)
     setMapHighlight(null)
     setMindMapOpened(false)
-    setMindMapGenerating(false)
-    setMindMapProgress(null)
-    setMindMapFailed(false)
     setActionHighlight(null)
     setOutlineGenerating(false)
     setOutlineProgress(null)
@@ -829,7 +883,10 @@ export function MeetingPanel(): React.JSX.Element {
   }, [actionsView])
 
   // Asks the main process for the viewed session's mind map — the cached one, a first
-  // build, or (regenerate) a rebuild. A rebuild is written in the language currently
+  // build, the rest of a build that stopped part-way, or (regenerate) a rebuild. The
+  // build is a background job there: its progress and its end arrive as job statuses
+  // (mindMapJobs), for whichever session, whether or not this page is still showing it.
+  // A rebuild is written in the language currently
   // picked under "Website & social posts", so changing that field and pressing
   // Regenerate re-maps an existing recording in the new language; a first build uses
   // the choice saved with the recording, like the Website and social tabs. On success
@@ -838,32 +895,54 @@ export function MeetingPanel(): React.JSX.Element {
     (regenerate: boolean): void => {
       const id = viewingPastIdRef.current
       if (id === null) return
-      setMindMapGenerating(true)
-      setMindMapFailed(false)
-      setMindMapProgress(null)
+      // Shown at once; the job's own status replaces it a moment later.
+      setMindMapJobs((prev) => ({
+        ...prev,
+        [id]: { sessionId: id, state: 'running', phase: 'outline', done: prev[id]?.done ?? 0, total: prev[id]?.total ?? 0, startedAt: new Date().toISOString() }
+      }))
+      const startedAt = Date.now()
       void window.api
         .generateMeetingMindMap(id, regenerate ? { regenerate: true, language: langConfig.website } : undefined)
         .then((result) => {
-          if (viewingPastIdRef.current !== id) return
-          setMindMapGenerating(false)
-          if (result) setPastMindMap((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
-          else setMindMapFailed(true)
+          if (result) {
+            if (viewingPastIdRef.current === id) setPastMindMap((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
+            // Normally the job has already said "done"; never leave the placeholder above spinning.
+            setMindMapJobs((prev) => {
+              if (prev[id]?.state !== 'running') return prev
+              const { [id]: _finished, ...rest } = prev
+              return rest
+            })
+            return
+          }
+          // The job says why it stopped; this only covers a request that never became a job.
+          setMindMapJobs((prev) => (prev[id]?.state === 'running' ? { ...prev, [id]: { ...prev[id], state: 'stopped', reason: failureKind(startedAt) === 'quota' ? 'quota' : 'failed' } } : prev))
         })
     },
     [langConfig.website]
   )
 
   // Build the mind map the first time its tab is opened; later opens find it cached on
-  // the session. Unlike the content tabs below, a failed attempt is remembered
-  // (mindMapFailed) and retried only when the user asks, since a long recording's map
-  // takes several AI calls.
+  // the session. A session that already has a job — running, or stopped part-way — is
+  // left alone: a running one is simply shown, a stopped one goes on only when the user
+  // asks, since a long recording's map takes several AI calls.
   useEffect(() => {
     if (viewingPastId === null || pastView !== 'mindmap') return
     setMindMapOpened(true)
-    if (pastLoadedId !== viewingPastId) return
-    if (pastMindMap || mindMapGenerating || mindMapFailed || pastSegments.length === 0) return
+    if (pastLoadedId !== viewingPastId || !mindMapJobsLoaded) return
+    if (pastMindMap || mindMapJobs[viewingPastId] || pastSegments.length === 0) return
     requestMindMap(false)
-  }, [pastView, viewingPastId, pastLoadedId, pastMindMap, mindMapGenerating, mindMapFailed, pastSegments, requestMindMap])
+  }, [pastView, viewingPastId, pastLoadedId, pastMindMap, mindMapJobs, mindMapJobsLoaded, pastSegments, requestMindMap])
+
+  // The finished map is on screen: its "ready" mark has done its job.
+  useEffect(() => {
+    if (viewingPastId === null || pastView !== 'mindmap' || mindMapJobs[viewingPastId]?.state !== 'done') return
+    const id = viewingPastId
+    void window.api.ackMeetingMindMap(id)
+    setMindMapJobs((prev) => {
+      const { [id]: _seen, ...rest } = prev
+      return rest
+    })
+  }, [pastView, viewingPastId, mindMapJobs])
 
   // Generate a platform's content the first time its tab is opened, then cache
   // it in pastContent (also persisted server-side by the IPC handler) so
@@ -880,13 +959,14 @@ export function MeetingPanel(): React.JSX.Element {
     if (generatingPlatforms[platform] || failedPlatforms[platform]) return
     const id = viewingPastId
     setGeneratingPlatforms((prev) => ({ ...prev, [platform]: true }))
+    const startedAt = Date.now()
     void window.api.generateMeetingContent(id, platform).then((result) => {
       // A different session is on screen by now: its own state was reset when it
       // opened, and this late answer must not touch it.
       if (viewingPastIdRef.current !== id) return
       setGeneratingPlatforms((prev) => ({ ...prev, [platform]: false }))
       if (!result) {
-        setFailedPlatforms((prev) => ({ ...prev, [platform]: true }))
+        setFailedPlatforms((prev) => ({ ...prev, [platform]: failureKind(startedAt) }))
         return
       }
       setPastContent((prev) => {
@@ -904,7 +984,7 @@ export function MeetingPanel(): React.JSX.Element {
   // "Try again" on a platform tab whose generation failed: clearing the failure lets
   // the effect above make exactly one new attempt.
   const retryContent = (platform: ContentPlatform): void => {
-    setFailedPlatforms((prev) => ({ ...prev, [platform]: false }))
+    setFailedPlatforms((prev) => ({ ...prev, [platform]: undefined }))
   }
 
   // Keep the transcript scrolled to the latest paragraph as it streams in.
@@ -939,6 +1019,7 @@ export function MeetingPanel(): React.JSX.Element {
   // session viewed before (see pastLoadedId).
   const viewedMindMap = pastLoadedId === viewingPastId ? pastMindMap : undefined
   const viewedOutline = pastLoadedId === viewingPastId ? pastOutline : undefined
+  const viewedMapJob = viewingPastId !== null ? mindMapJobs[viewingPastId] : undefined
   const pastDurationMs = sessions.find((s) => s.id === viewingPastId)?.durationMs ?? 0
   const contentLanguageLabel =
     langConfig.website === 'auto'
@@ -1155,6 +1236,7 @@ export function MeetingPanel(): React.JSX.Element {
     setChatInput('')
     setChatSending(true)
     setChatError(null)
+    const startedAt = Date.now()
     // On the Mind map tab the chat is only its input row (see `compact`), so the
     // conversation continues on the Transcript tab where the answer can be read.
     if (isPastChat && pastView === 'mindmap') setPastView('transcript')
@@ -1162,7 +1244,14 @@ export function MeetingPanel(): React.JSX.Element {
       setChatSending(false)
       if (!result) {
         setActiveChatMessages((prev) => prev.filter((m) => m.id !== optimisticId))
-        setChatError('Could not get an answer — check your connection/API key, then try again.')
+        // Nothing was saved, so the question goes back into the box to be sent again
+        // later (unless the user has already started typing something else).
+        setChatInput((current) => current || question)
+        setChatError(
+          failureKind(startedAt) === 'quota'
+            ? CHAT_ERROR_QUOTA
+            : 'Could not get an answer — check your connection/API key, then try again.'
+        )
         return
       }
       if (result.startSegmentId && result.endSegmentId) {
@@ -1381,6 +1470,18 @@ export function MeetingPanel(): React.JSX.Element {
                         {s.status === 'recording' && <span className="meeting-session-dot" />}
                         {s.status === 'summarizing' ? 'Summarizing…' : formatElapsed(s.durationMs)}
                       </span>
+                      {mindMapJobs[s.id] && (
+                        <span className={`meeting-session-map-tag ${mindMapJobs[s.id].state}`} title={mindMapJobLabel(mindMapJobs[s.id])}>
+                          <span className={`meeting-map-dot ${mindMapJobs[s.id].state}`} />
+                          {mindMapJobs[s.id].state === 'running'
+                            ? mindMapJobs[s.id].total > 1
+                              ? `Mind map ${mindMapJobs[s.id].done}/${mindMapJobs[s.id].total}`
+                              : 'Mind map…'
+                            : mindMapJobs[s.id].state === 'done'
+                              ? 'Mind map ready'
+                              : 'Mind map not finished'}
+                        </span>
+                      )}
                       {sessionSpace && (
                         <span className="meeting-session-space-tag" title={`In space: ${sessionSpace.name}`}>
                           <FolderIcon size={10} />
@@ -1476,6 +1577,9 @@ export function MeetingPanel(): React.JSX.Element {
                       onClick={() => setPastView(tab.id)}
                     >
                       {tab.label}
+                      {tab.id === 'mindmap' && viewedMapJob && (
+                        <span className={`meeting-map-dot ${viewedMapJob.state}`} title={mindMapJobLabel(viewedMapJob)} />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -1516,9 +1620,10 @@ export function MeetingPanel(): React.JSX.Element {
                     durationMs={pastDurationMs}
                     dateLabel={formatSessionDate(pastCreatedAt)}
                     active={pastView === 'mindmap'}
-                    generating={mindMapGenerating}
-                    progress={mindMapProgress}
-                    failed={mindMapFailed}
+                    generating={viewedMapJob?.state === 'running'}
+                    progress={viewedMapJob ?? null}
+                    stopped={viewedMapJob?.state === 'stopped' ? viewedMapJob : null}
+                    quotaMessage={quotaMessage}
                     regenerateTitle={`Build the map again, written in ${contentLanguageLabel} — the "Website & social posts" language on the New session screen`}
                     onRetry={() => requestMindMap(false)}
                     onRegenerate={() => requestMindMap(true)}
@@ -1560,6 +1665,8 @@ export function MeetingPanel(): React.JSX.Element {
                           ? 'Summarizing…'
                           : 'No summary available for this session.'}
                       </div>
+                      {/* The allowance ran out (now, or when the recording ended): say why there is no summary. */}
+                      {pastStatus !== 'summarizing' && !summaryGenerating && quotaMessage}
                       {pastStatus !== 'summarizing' && (
                         <button className="meeting-retry-btn" onClick={retrySummary} disabled={summaryGenerating}>
                           {summaryGenerating ? 'Generating…' : 'Try again'}
@@ -1587,7 +1694,11 @@ export function MeetingPanel(): React.JSX.Element {
                     <div className="meeting-transcript-empty">
                       {failedPlatforms.website ? (
                         <>
-                          <div>Could not generate a blog post — check your connection/API key, then try again.</div>
+                          {failedPlatforms.website === 'quota' && quotaMessage ? (
+                            quotaMessage
+                          ) : (
+                            <div>Could not generate a blog post — check your connection/API key, then try again.</div>
+                          )}
                           <button className="meeting-retry-btn" onClick={() => retryContent('website')}>
                             Try again
                           </button>
@@ -1622,7 +1733,11 @@ export function MeetingPanel(): React.JSX.Element {
                       <div className="meeting-transcript-empty">
                         {failedPlatforms[pastView] ? (
                           <>
-                            <div>Could not generate posts — check your connection/API key, then try again.</div>
+                            {failedPlatforms[pastView] === 'quota' && quotaMessage ? (
+                              quotaMessage
+                            ) : (
+                              <div>Could not generate posts — check your connection/API key, then try again.</div>
+                            )}
                             <button className="meeting-retry-btn" onClick={() => retryContent(pastView)}>
                               Try again
                             </button>
@@ -1642,7 +1757,7 @@ export function MeetingPanel(): React.JSX.Element {
                 onInputChange={setChatInput}
                 onSend={sendActiveChatMessage}
                 sending={chatSending && isPastChat}
-                error={isPastChat ? chatError : null}
+                error={isPastChat ? chatErrorView : null}
                 highlightId={chatHighlightId}
                 onSelectAnswer={selectChatAnswer}
               />
@@ -1728,7 +1843,7 @@ export function MeetingPanel(): React.JSX.Element {
                 onInputChange={setChatInput}
                 onSend={sendActiveChatMessage}
                 sending={chatSending && !isPastChat}
-                error={!isPastChat ? chatError : null}
+                error={!isPastChat ? chatErrorView : null}
                 highlightId={chatHighlightId}
                 onSelectAnswer={selectChatAnswer}
               />

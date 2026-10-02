@@ -270,6 +270,28 @@ export interface AccountInfo {
   subscribeUrl: string | null
   /** Google profile photo URL. */
   avatarUrl?: string
+  /**
+   * This month's AI text allowance (dictation cleanup, summaries, content tabs, chat, mind
+   * map) as the server reports it. Absent when the server does not send it yet.
+   */
+  aiTokensUsed?: number
+  aiTokensLimit?: number
+  /** ISO timestamp of the next reset. */
+  aiTokensResetAt?: string
+}
+
+/**
+ * The server said this month's Wispra Cloud AI text allowance is used up (HTTP 402,
+ * code "ai_quota_exceeded" — see src/main/aiQuota.ts). Only ever set for Cloud users.
+ */
+export interface AiQuotaNotice {
+  plan: 'free' | 'pro'
+  limitTokens: number
+  usedTokens: number
+  /** ISO timestamp when the allowance resets. */
+  resetAt: string
+  /** When the app got this answer (ms since epoch) — lets a caller tell "my call just failed for this reason" from an older notice. */
+  seenAt: number
 }
 
 /** Cloud sync state (see src/main/sync.ts) — surfaced in Settings > Account. */
@@ -474,6 +496,37 @@ export interface MindMapProgress {
   /** Parts outlined so far / parts in total. */
   done: number
   total: number
+  /** Set while the run is holding back for the AI provider's per-minute limit: when it goes on (ms since epoch). */
+  waitingUntil?: number
+}
+
+/**
+ * Why a mind map job stopped without a map:
+ * - interrupted: the app was closed while it ran
+ * - time-limit: the whole run took longer than MIND_MAP_TOTAL_TIME_LIMIT_MS
+ * - rate-limit: one part spent its whole time budget waiting for the provider's per-minute limit
+ * - timeout: the provider did not answer in time
+ * - offline: the provider could not be reached
+ * - no-key: no API key / not signed in
+ * - refused: the provider rejected the request (bad key, no access)
+ * - quota: Wispra Cloud's monthly AI allowance is used up (see aiQuota.ts)
+ * - failed: anything else (server error, unusable answer)
+ */
+export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'timeout' | 'offline' | 'no-key' | 'refused' | 'quota' | 'failed'
+
+/**
+ * A session's mind map job as the renderer sees it (see mindMapJobs.ts). The job runs in
+ * the main process whatever the window shows; "stopped" keeps the parts already
+ * outlined, so starting it again continues instead of starting over; "done" stays until
+ * the user has opened the finished map.
+ */
+export interface MindMapJobStatus extends MindMapProgress {
+  state: 'running' | 'stopped' | 'done'
+  reason?: MindMapStopReason
+  /** The provider's own words for the failure (short, may be empty). */
+  detail?: string
+  /** ISO timestamp of when this attempt started. */
+  startedAt: string
 }
 
 /** Progress of one transcript outline generation — same shape as the mind map's. */
