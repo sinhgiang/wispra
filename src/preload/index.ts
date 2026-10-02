@@ -22,7 +22,7 @@ import type {
   MeetingSessionSummary,
   MeetingSpace,
   MeetingState,
-  MindMapProgress,
+  MindMapJobStatus,
   Settings,
   StatePayload,
   StyleProfile,
@@ -245,8 +245,11 @@ const api = {
   // Saves the mind map's PNG export through a Save dialog.
   saveMindMapPng: (png: ArrayBuffer, suggestedName: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.MEETING_SAVE_MIND_MAP_PNG, png, suggestedName),
-  onMeetingMindMapProgress: (cb: (progress: MindMapProgress) => void): void => {
-    ipcRenderer.on(IPC.MEETING_MIND_MAP_PROGRESS, (_e, progress: MindMapProgress) => cb(progress))
+  // Mind map jobs run in the main process and outlive the tab: these report them.
+  getMeetingMindMapJobs: (): Promise<MindMapJobStatus[]> => ipcRenderer.invoke(IPC.MEETING_GET_MIND_MAP_JOBS),
+  ackMeetingMindMap: (id: string): Promise<void> => ipcRenderer.invoke(IPC.MEETING_ACK_MIND_MAP, id),
+  onMeetingMindMapProgress: (cb: (status: MindMapJobStatus) => void): void => {
+    ipcRenderer.on(IPC.MEETING_MIND_MAP_PROGRESS, (_e, status: MindMapJobStatus) => cb(status))
   },
   onMeetingStateChanged: (cb: (state: MeetingState) => void): void => {
     ipcRenderer.on(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state))

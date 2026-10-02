@@ -1,6 +1,12 @@
+import { createHash } from 'crypto'
+import type { MindMapStopReason } from '@shared/types'
 import {
+  MIND_MAP_CALL_TIMEOUT_MS,
   MIND_MAP_CONCURRENCY,
   MIND_MAP_MAX_PARTS,
+  MIND_MAP_MAX_RATE_LIMIT_WAIT_MS,
+  MIND_MAP_PART_TIME_LIMIT_MS,
+  MIND_MAP_TOTAL_TIME_LIMIT_MS,
   MIND_MAP_PART_CHARS,
   MIND_MAP_SINGLE_PASS_CHARS
 } from '@shared/constants'
@@ -30,8 +36,11 @@ import {
 // is mapped directly; a longer one is outlined part by part and the outlines are merged
 // in one more call, so a multi-hour meeting keeps its middle (the summary and content
 // prompts in postprocess.ts only sample both ends of a long transcript).
+//
+// A run is a background job (mindMapJobs.ts): it can take many minutes on a provider
+// with a low per-minute limit, so it paces itself to that limit, hands each finished
+// part to the caller to keep, and has a time limit per part and in total.
 
-const CALL_TIMEOUT_MS = 60_000
 // gpt-oss-120b spends part of the budget on hidden reasoning before it writes the JSON
 // (see generateMeetingTitle in postprocess.ts) — sized with margin so the JSON is never cut.
 const SINGLE_MAX_TOKENS = 6000
@@ -43,10 +52,10 @@ const MAX_RATE_LIMIT_WAIT_MS = 20_000
 /** Times one call waits out a rate limit (HTTP 429) before giving up. */
 const MAX_RATE_LIMIT_WAITS = 3
 
-const TRANSCRIPT_FORMAT =
+export const TRANSCRIPT_FORMAT =
   'The transcript is given as one tagged line per paragraph: "[ref] (h:mm:ss) text" — ref is that paragraph\'s reference number.'
 
-const JSON_ONLY = 'Respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:'
+export const JSON_ONLY = 'Respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:'
 
 const ITEM_RULES = `- Every "label" is 2-6 words, specific, and carries the fact when there is one ("Revenue up 18%", not "Revenue"). Every "note" is one or two sentences with the concrete detail behind the label: names, numbers, reasons.
 - "start"/"end": the ref numbers (shown in brackets) of the first and last paragraph the item is about — the same number twice for a single paragraph. Use only refs that appear in the transcript.
@@ -104,18 +113,72 @@ function languageRule(language: string, source: 'transcript' | 'lists'): string 
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** Why a JSON call gave up. */
+export interface JsonCallFailure {
+  kind: 'rate-limit' | 'too-large' | 'timeout' | 'offline' | 'server' | 'refused' | 'bad-answer' | 'deadline'
+  status?: number
+  /** The provider's own message, shortened. */
+  detail?: string
+}
+
+/** What a long-running caller hands to callJson so the call fits into its run. */
+export interface JsonCallControl {
+  /** Give up at this time (ms since epoch), whatever the call is doing. */
+  deadline: number
+  /** Awaited before every request; resolves when the request may be sent. */
+  gate?: () => Promise<void>
+  /** The provider asked to wait this long (HTTP 429) — the caller holds its other calls back too. */
+  onRateLimit?: (waitMs: number) => void
+  /** Why the call returned null. */
+  onFailure?: (failure: JsonCallFailure) => void
+}
+
+const TOO_LARGE = /too large|reduce (?:your|the) (?:message|prompt)|context[_ ]length|maximum context/i
+
+/** The message inside a provider's error body ({"error": {"message": "…"}} or {"error": "…"}), shortened. */
+function errorDetail(body: string): string {
+  let text = body
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown }
+    const error = parsed?.error
+    // The Wispra Cloud proxy passes the provider's body on as a string inside "error".
+    if (typeof error === 'string') return errorDetail(error)
+    const message = (error as { message?: unknown } | undefined)?.message
+    if (typeof message === 'string') text = message
+  } catch {
+    /* not JSON — use the text as it is */
+  }
+  return text.replace(/\s+/g, ' ').trim().slice(0, 240)
+}
+
 /**
  * One JSON-mode chat call. Retries once on a failure that can pass (timeout, 5xx,
  * cut-off JSON) and waits out a rate limit; a refused request (bad key, bad input) is
  * not retried. Returns the parsed object, or null — never throws.
+ *
+ * With `control` (a background run) a rate limit is waited out for as long as the
+ * provider asks, as many times as it takes — until control.deadline; without it, a few
+ * short waits and then null, as before.
  */
-async function callJson(
+export async function callJson(
   target: ChatTarget,
   system: string,
   user: string,
   maxTokens: number,
-  what: string
+  what: string,
+  control?: JsonCallControl
 ): Promise<Record<string, unknown> | null> {
+  let failure: JsonCallFailure = { kind: 'bad-answer' }
+  const giveUp = (): null => {
+    control?.onFailure?.(failure)
+    return null
+  }
+  const outOfTime = (): boolean => !!control && Date.now() >= control.deadline
+  await control?.gate?.()
+  if (outOfTime()) {
+    failure = { kind: 'deadline' }
+    return giveUp()
+  }
   let rateLimitWaits = 0
   for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
     try {
@@ -132,41 +195,74 @@ async function callJson(
           temperature: 0.3,
           response_format: { type: 'json_object' }
         }),
-        signal: AbortSignal.timeout(CALL_TIMEOUT_MS)
+        signal: AbortSignal.timeout(
+          control ? Math.max(1000, Math.min(MIND_MAP_CALL_TIMEOUT_MS, control.deadline - Date.now())) : MIND_MAP_CALL_TIMEOUT_MS
+        )
       })
       if (!response.ok) {
-        console.error(`[meeting] mind map ${what}: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
+        const body = await response.text().catch(() => '')
+        console.error(`[meeting] mind map ${what}: HTTP ${response.status} — ${body.slice(0, 500)}`)
+        const detail = errorDetail(body)
+        // A request bigger than the provider's per-minute allowance (or the model's
+        // context) can never pass, however long we wait: the caller cuts the part in two.
+        if (response.status === 413 || ((response.status === 429 || response.status === 400) && TOO_LARGE.test(body))) {
+          failure = { kind: 'too-large', status: response.status, detail }
+          return giveUp()
+        }
         if (response.status === 429) {
+          failure = { kind: 'rate-limit', status: 429, detail }
           // Several parts are outlined at once, so a per-minute limit is easy to hit on a
           // long recording: wait as told and try again, without using up the retry above.
-          if (rateLimitWaits++ >= MAX_RATE_LIMIT_WAITS) return null
           const retryAfter = Number(response.headers.get('retry-after'))
-          await sleep(Math.min(MAX_RATE_LIMIT_WAIT_MS, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 5000))
+          const asked = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 5000
+          if (control) {
+            const wait = Math.min(MIND_MAP_MAX_RATE_LIMIT_WAIT_MS, asked)
+            if (Date.now() + wait >= control.deadline) return giveUp()
+            control.onRateLimit?.(wait)
+            await sleep(wait)
+            await control.gate?.()
+          } else {
+            if (rateLimitWaits++ >= MAX_RATE_LIMIT_WAITS) return giveUp()
+            await sleep(Math.min(MAX_RATE_LIMIT_WAIT_MS, asked))
+          }
           attempt--
           continue
         }
-        if (response.status >= 500) continue
-        return null
+        if (response.status >= 500) {
+          failure = { kind: 'server', status: response.status, detail }
+          continue
+        }
+        failure = { kind: 'refused', status: response.status, detail }
+        return giveUp()
       }
       const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
       const raw = data.choices?.[0]?.message?.content?.trim()
       if (!raw) {
         console.error(`[meeting] mind map ${what}: empty response content`)
+        failure = { kind: 'bad-answer', detail: 'The AI returned an empty answer.' }
         continue
       }
       const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+      failure = { kind: 'bad-answer', detail: 'The AI answer was not valid JSON.' }
       const parsed: unknown = JSON.parse(cleaned)
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
       console.error(`[meeting] mind map ${what}: response was not a JSON object`)
     } catch (err) {
       console.error(`[meeting] mind map ${what} failed:`, err)
+      const name = (err as { name?: string } | null)?.name
+      if (name === 'TimeoutError' || name === 'AbortError') failure = { kind: 'timeout' }
+      else if (!(err instanceof SyntaxError)) failure = { kind: 'offline', detail: String((err as Error)?.message ?? err).slice(0, 240) }
+    }
+    if (outOfTime()) {
+      failure = failure.kind === 'rate-limit' ? failure : { ...failure, kind: failure.kind === 'timeout' ? 'timeout' : 'deadline' }
+      return giveUp()
     }
   }
-  return null
+  return giveUp()
 }
 
 /** Runs `task` over `items` with at most `limit` in flight, keeping results in order. */
-async function mapLimited<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapLimited<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length)
   let next = 0
   const worker = async (): Promise<void> => {
@@ -181,73 +277,205 @@ async function mapLimited<T, R>(items: T[], limit: number, task: (item: T, index
 
 const transcriptOf = (lines: TranscriptLine[]): string => lines.map(formatLine).join('\n')
 
+/** Time limits of one run; the defaults are the constants, a test passes smaller ones. */
+export interface MindMapLimits {
+  partMs: number
+  totalMs: number
+}
+
+/** Why a run ended without a map — see MindMapStopReason for what each means to the user. */
+export interface MindMapRunFailure {
+  reason: Exclude<MindMapStopReason, 'interrupted' | 'no-key'>
+  detail?: string
+}
+
+export interface MindMapRunOptions {
+  onProgress?: (progress: Omit<MindMapProgress, 'sessionId'>) => void
+  /**
+   * Part outlines kept from an earlier, unfinished run of the same transcript: reused
+   * when `signature` still matches this run's, so only the missing parts are outlined.
+   */
+  resume?: { signature: string; parts: Array<Outline | null> }
+  /** The run's signature and number of parts, once known — before any AI call. */
+  onPlan?: (signature: string, total: number) => void
+  /** A part was outlined: the caller keeps it, so a later run can pick up from here. */
+  onPartDone?: (index: number, outline: Outline) => void
+  /** Awaited before every AI call, on top of the run's own pacing (e.g. "not while a dictation is being processed"). */
+  gate?: () => Promise<void>
+  limits?: Partial<MindMapLimits>
+}
+
+export type MindMapRunResult = { map: MeetingMindMap; failure?: undefined } | { map: null; failure: MindMapRunFailure }
+
+function toRunFailure(failure: JsonCallFailure | null, totalDeadline: number): MindMapRunFailure {
+  const detail = failure?.detail || undefined
+  if (Date.now() >= totalDeadline) return { reason: 'time-limit', detail }
+  switch (failure?.kind) {
+    case 'rate-limit':
+      return { reason: 'rate-limit', detail }
+    case 'timeout':
+    case 'deadline':
+      return { reason: 'timeout', detail }
+    case 'offline':
+      return { reason: 'offline', detail }
+    case 'refused':
+      return { reason: 'refused', detail: [failure.status && `HTTP ${failure.status}`, detail].filter(Boolean).join(' — ') || undefined }
+    case 'too-large':
+      return { reason: 'refused', detail: detail ?? 'The request is too large for this AI provider.' }
+    default:
+      return { reason: 'failed', detail: [failure?.status && `HTTP ${failure.status}`, detail].filter(Boolean).join(' — ') || undefined }
+  }
+}
+
+/** Identifies a transcript, its split into parts and the language — part outlines are only reused when all three are the same. */
+function runSignature(parts: TranscriptLine[][], language: string): string {
+  const shape = parts.map((part) => `${part[0].ref}+${part.length}:${linesLength(part)}`).join(',')
+  return createHash('sha1').update(`${language}|${shape}`).digest('hex')
+}
+
 /**
  * Builds the mind map of a finished session's transcript in `language` ("auto" = same
- * as the transcript). Returns null on any failure (offline, bad key/token, a part that
- * could not be outlined, an answer with no topics) so the caller keeps whatever map the
- * session already had and the renderer can offer "Try again" — never throws, and never
- * returns a map with a stretch of the recording silently missing.
+ * as the transcript). Never throws, and never returns a map with a stretch of the
+ * recording silently missing: it is the whole map, or a failure saying why.
+ *
+ * A long transcript is outlined part by part, MIND_MAP_CONCURRENCY at a time. When the
+ * provider answers "too many requests", every call of the run holds back for as long as
+ * it asks and the run goes on one part at a time — a key with a small per-minute
+ * allowance gets through a long recording slowly instead of failing. A part too big for
+ * that allowance is cut in two. Each part has a time budget (waits included) and so has
+ * the run; finished parts are reported through onPartDone, and a later run given them
+ * back (`resume`) only does what is missing.
  */
-export async function generateMindMap(
+export async function runMindMap(
   segments: MeetingSegment[],
   target: ChatTarget,
   language: string,
-  onProgress?: (progress: Omit<MindMapProgress, 'sessionId'>) => void
-): Promise<MeetingMindMap | null> {
+  options: MindMapRunOptions = {}
+): Promise<MindMapRunResult> {
   const lines = buildTranscriptLines(segments)
-  if (lines.length === 0) return null
+  if (lines.length === 0) return { map: null, failure: { reason: 'failed', detail: 'The recording has no transcript.' } }
+  const limits: MindMapLimits = { partMs: MIND_MAP_PART_TIME_LIMIT_MS, totalMs: MIND_MAP_TOTAL_TIME_LIMIT_MS, ...options.limits }
+  const totalDeadline = Date.now() + limits.totalMs
+
+  // Pacing shared by every call of this run.
+  let pauseUntil = 0
+  let oneAtATime = false
+  let lastFailure: JsonCallFailure | null = null
+  let progress: Omit<MindMapProgress, 'sessionId'> = { phase: 'outline', done: 0, total: 1 }
+  const report = (patch: Partial<Omit<MindMapProgress, 'sessionId'>>): void => {
+    progress = { ...progress, ...patch }
+    if (progress.waitingUntil === undefined) delete progress.waitingUntil
+    options.onProgress?.({ ...progress })
+  }
+  const gate = async (): Promise<void> => {
+    await options.gate?.()
+    while (Date.now() < pauseUntil && Date.now() < totalDeadline) await sleep(Math.min(250, pauseUntil - Date.now()))
+    if (progress.waitingUntil !== undefined && Date.now() >= pauseUntil) report({ waitingUntil: undefined })
+  }
+  const controlFor = (deadline: number): JsonCallControl => ({
+    deadline: Math.min(deadline, totalDeadline),
+    gate,
+    onRateLimit: (waitMs) => {
+      oneAtATime = true
+      pauseUntil = Math.max(pauseUntil, Date.now() + waitMs)
+      report({ waitingUntil: pauseUntil })
+    },
+    onFailure: (failure) => {
+      lastFailure = failure
+    }
+  })
+  const fail = (): MindMapRunResult => ({ map: null, failure: toRunFailure(lastFailure, totalDeadline) })
 
   if (linesLength(lines) <= MIND_MAP_SINGLE_PASS_CHARS) {
-    onProgress?.({ phase: 'outline', done: 0, total: 1 })
+    report({ phase: 'outline', done: 0, total: 1 })
     const raw = await callJson(
       target,
       `${SINGLE_PROMPT}\n${languageRule(language, 'transcript')}`,
       transcriptOf(lines),
       SINGLE_MAX_TOKENS,
-      'outline'
+      'outline',
+      controlFor(Date.now() + limits.partMs)
     )
-    if (!raw) return null
+    if (!raw) return fail()
     const outline = parseOutline(raw, lines, 2)
     if (outline.topics.length === 0) {
       console.error('[meeting] mind map outline: response JSON had no topics')
-      return null
+      return { map: null, failure: { reason: 'failed', detail: 'The AI answer had no topics.' } }
     }
-    return assembleMindMap({
-      title: cleanTitle(raw.title) || outline.topics[0].label,
-      note: cleanNote(raw.note),
-      branches: outline.topics,
-      decisions: outline.decisions,
-      actions: outline.actions,
-      questions: outline.questions,
-      labels: resolveBranchLabels(language, raw.branchLabels),
-      lines,
-      language,
-      generatedAt: new Date().toISOString()
-    })
+    return {
+      map: assembleMindMap({
+        title: cleanTitle(raw.title) || outline.topics[0].label,
+        note: cleanNote(raw.note),
+        branches: outline.topics,
+        decisions: outline.decisions,
+        actions: outline.actions,
+        questions: outline.questions,
+        labels: resolveBranchLabels(language, raw.branchLabels),
+        lines,
+        language,
+        generatedAt: new Date().toISOString()
+      })
+    }
   }
 
   const parts = splitIntoParts(lines, MIND_MAP_PART_CHARS, MIND_MAP_MAX_PARTS)
-  let done = 0
-  // One part that cannot be outlined fails the whole map, so the parts still waiting are skipped.
-  let failed = false
-  onProgress?.({ phase: 'outline', done, total: parts.length })
-  const outlines = await mapLimited(parts, MIND_MAP_CONCURRENCY, async (part, index): Promise<Outline | null> => {
-    if (failed) return null
+  const signature = runSignature(parts, language)
+  options.onPlan?.(signature, parts.length)
+  const kept = options.resume && options.resume.signature === signature ? options.resume.parts : []
+  const outlines: Array<Outline | null> = parts.map((_, index) => kept[index] ?? null)
+  let done = outlines.filter(Boolean).length
+  report({ phase: 'outline', done, total: parts.length })
+
+  /** Outlines one stretch of the transcript; a stretch the provider calls too large is cut in two (twice at most). */
+  const outlineLines = async (part: TranscriptLine[], label: string, deadline: number, depth: number): Promise<Outline | null> => {
     const raw = await callJson(
       target,
       `${PART_PROMPT}\n${languageRule(language, 'transcript')}`,
-      `This is part ${index + 1} of ${parts.length}.\n\n${transcriptOf(part)}`,
+      `${label}\n\n${transcriptOf(part)}`,
       PART_MAX_TOKENS,
-      `part ${index + 1}/${parts.length}`
+      label,
+      controlFor(deadline)
     )
-    if (!raw) {
-      failed = true
-      return null
+    if (raw) return parseOutline(raw, part, 1)
+    if (lastFailure?.kind !== 'too-large' || part.length < 2 || depth >= 2) return null
+    const joined: Outline = { topics: [], decisions: [], actions: [], questions: [] }
+    for (const half of splitIntoParts(part, linesLength(part) / 2, 2)) {
+      const outline = await outlineLines(half, label, deadline, depth + 1)
+      if (!outline) return null
+      joined.topics.push(...outline.topics)
+      joined.decisions.push(...outline.decisions)
+      joined.actions.push(...outline.actions)
+      joined.questions.push(...outline.questions)
     }
-    onProgress?.({ phase: 'outline', done: ++done, total: parts.length })
-    return parseOutline(raw, part, 1)
-  })
-  if (outlines.some((o) => o === null)) return null
+    return joined
+  }
+
+  // One part that cannot be outlined stops the run, so the parts still waiting are not started.
+  let failed = false
+  let next = 0
+  const worker = async (workerIndex: number): Promise<void> => {
+    while (!failed) {
+      // Rate limited: one worker goes on alone, so the calls stop competing for the same allowance.
+      if (oneAtATime && workerIndex > 0) return
+      while (next < parts.length && outlines[next]) next++
+      if (next >= parts.length) return
+      const index = next++
+      if (Date.now() >= totalDeadline) {
+        failed = true
+        return
+      }
+      const outline = await outlineLines(parts[index], `This is part ${index + 1} of ${parts.length}.`, Date.now() + limits.partMs, 0)
+      if (!outline) {
+        failed = true
+        return
+      }
+      outlines[index] = outline
+      options.onPartDone?.(index, outline)
+      report({ phase: 'outline', done: ++done, total: parts.length })
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MIND_MAP_CONCURRENCY, parts.length) }, (_, i) => worker(i)))
+  if (outlines.some((o) => o === null)) return fail()
 
   const all: Outline = { topics: [], decisions: [], actions: [], questions: [] }
   for (const outline of outlines as Outline[]) {
@@ -258,33 +486,46 @@ export async function generateMindMap(
   }
   if (all.topics.length === 0) {
     console.error('[meeting] mind map: no part produced a topic')
-    return null
+    return { map: null, failure: { reason: 'failed', detail: 'The AI found no topics in the recording.' } }
   }
 
-  onProgress?.({ phase: 'merge', done: parts.length, total: parts.length })
+  report({ phase: 'merge', done: parts.length, total: parts.length })
   const merged = await callJson(
     target,
     `${MERGE_PROMPT}\n${languageRule(language, 'lists')}`,
     describeForMerge(all, lines),
     MERGE_MAX_TOKENS,
-    'merge'
+    'merge',
+    controlFor(Date.now() + limits.partMs)
   )
-  if (!merged) return null
+  if (!merged) return fail()
   const branches = groupTopics(merged, all.topics)
   if (!branches) {
     console.error('[meeting] mind map merge: response JSON had no usable branches')
-    return null
+    return { map: null, failure: { reason: 'failed', detail: 'The AI answer for the final step was not usable.' } }
   }
-  return assembleMindMap({
-    title: cleanTitle(merged.title) || branches[0].label,
-    note: cleanNote(merged.note),
-    branches,
-    decisions: keepListed(merged.decisions, all.decisions),
-    actions: keepListed(merged.actions, all.actions),
-    questions: keepListed(merged.questions, all.questions),
-    labels: resolveBranchLabels(language, merged.branchLabels),
-    lines,
-    language,
-    generatedAt: new Date().toISOString()
-  })
+  return {
+    map: assembleMindMap({
+      title: cleanTitle(merged.title) || branches[0].label,
+      note: cleanNote(merged.note),
+      branches,
+      decisions: keepListed(merged.decisions, all.decisions),
+      actions: keepListed(merged.actions, all.actions),
+      questions: keepListed(merged.questions, all.questions),
+      labels: resolveBranchLabels(language, merged.branchLabels),
+      lines,
+      language,
+      generatedAt: new Date().toISOString()
+    })
+  }
+}
+
+/** runMindMap for a caller that only wants the map: null on any failure. */
+export async function generateMindMap(
+  segments: MeetingSegment[],
+  target: ChatTarget,
+  language: string,
+  onProgress?: (progress: Omit<MindMapProgress, 'sessionId'>) => void
+): Promise<MeetingMindMap | null> {
+  return (await runMindMap(segments, target, language, { onProgress })).map
 }

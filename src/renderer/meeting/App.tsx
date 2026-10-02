@@ -17,6 +17,7 @@ import type {
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
+import type { MindMapJobStatus } from '@shared/types'
 import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import './meeting.css'
@@ -301,6 +302,15 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
   return blocks
 }
 
+/** One line saying where a session's mind map job is — the tooltip of its marks in the session list and on the tab. */
+function mindMapJobLabel(job: MindMapJobStatus): string {
+  if (job.state === 'done') return 'The mind map is ready'
+  if (job.state === 'stopped') {
+    return job.total > 1 ? `The mind map is not finished (${job.done} of ${job.total} parts done) — open the Mind map tab to continue` : 'The mind map is not finished — open the Mind map tab to try again'
+  }
+  if (job.phase === 'merge') return 'Building the mind map — putting the parts together'
+  return job.total > 1 ? `Building the mind map — ${job.done} of ${job.total} parts done` : 'Building the mind map'
+}
 /** How an AI call failed: Wispra Cloud's monthly AI allowance is used up ('quota'), or anything else ('error'). */
 type FailureKind = 'error' | 'quota'
 
@@ -408,10 +418,16 @@ export function MeetingPanel(): React.JSX.Element {
   const [pastMindMap, setPastMindMap] = useState<MeetingMindMap | undefined>(undefined)
   /** True once the Mind map tab has been opened for the session being viewed — its view then stays mounted (hidden) behind the other tabs so the map keeps its open branches and zoom. */
   const [mindMapOpened, setMindMapOpened] = useState(false)
-  const [mindMapGenerating, setMindMapGenerating] = useState(false)
-  const [mindMapProgress, setMindMapProgress] = useState<MindMapProgress | null>(null)
-  /** The last mind map generation for the session being viewed failed — stops the open-tab effect from retrying in a loop; "Try again"/Regenerate clear it. */
-  const [mindMapFailed, setMindMapFailed] = useState<FailureKind | false>(false)
+  /**
+   * Mind map jobs by session id: running, stopped part-way, or finished but not yet
+   * looked at. The jobs run in the main process (mindMapJobs.ts) whatever this page
+   * shows — this only mirrors them, so leaving the tab, the session or the page never
+   * stops or restarts one. A stopped job also keeps the open-tab effect from retrying in
+   * a loop; "Continue"/"Try again"/Regenerate start it again.
+   */
+  const [mindMapJobs, setMindMapJobs] = useState<Record<string, MindMapJobStatus>>({})
+  /** False until the jobs were fetched after mount — before that the open-tab effect cannot know whether one is already running. */
+  const [mindMapJobsLoaded, setMindMapJobsLoaded] = useState(false)
   /** Transcript stretch picked with "Show in transcript" on the Mind map tab. Never set together with chatHighlightId — whichever was chosen last wins. */
   const [mapHighlight, setMapHighlight] = useState<MapHighlight | null>(null)
   /** Which platform tabs are currently waiting on a generateMeetingContent() call — per-platform (not a single value) so switching between several not-yet-generated tabs in quick succession tracks each one's own in-flight state correctly instead of only the most recently opened tab. */
@@ -693,7 +709,12 @@ export function MeetingPanel(): React.JSX.Element {
       }
     })
     window.api.onMeetingMindMapProgress((progress) => {
-      if (viewingPastIdRef.current === progress.sessionId) setMindMapProgress(progress)
+      setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
+    })
+    // Jobs that were already running (or stopped, or finished unseen) before this page mounted.
+    void window.api.getMeetingMindMapJobs().then((jobs) => {
+      setMindMapJobs((prev) => ({ ...Object.fromEntries((jobs ?? []).map((job) => [job.sessionId, job])), ...prev }))
+      setMindMapJobsLoaded(true)
     })
     const applyAiQuota = (notice: AiQuotaNotice | null): void => {
       aiQuotaRef.current = notice
@@ -757,9 +778,6 @@ export function MeetingPanel(): React.JSX.Element {
     setChatHighlightId(null)
     setMapHighlight(null)
     setMindMapOpened(false)
-    setMindMapGenerating(false)
-    setMindMapProgress(null)
-    setMindMapFailed(false)
     const id = viewingPastId
     void window.api.getMeetingSession(id).then((full) => {
       if (cancelled || !full) return
@@ -779,7 +797,10 @@ export function MeetingPanel(): React.JSX.Element {
   }, [viewingPastId])
 
   // Asks the main process for the viewed session's mind map — the cached one, a first
-  // build, or (regenerate) a rebuild. A rebuild is written in the language currently
+  // build, the rest of a build that stopped part-way, or (regenerate) a rebuild. The
+  // build is a background job there: its progress and its end arrive as job statuses
+  // (mindMapJobs), for whichever session, whether or not this page is still showing it.
+  // A rebuild is written in the language currently
   // picked under "Website & social posts", so changing that field and pressing
   // Regenerate re-maps an existing recording in the new language; a first build uses
   // the choice saved with the recording, like the Website and social tabs. On success
@@ -788,33 +809,54 @@ export function MeetingPanel(): React.JSX.Element {
     (regenerate: boolean): void => {
       const id = viewingPastIdRef.current
       if (id === null) return
-      setMindMapGenerating(true)
-      setMindMapFailed(false)
-      setMindMapProgress(null)
+      // Shown at once; the job's own status replaces it a moment later.
+      setMindMapJobs((prev) => ({
+        ...prev,
+        [id]: { sessionId: id, state: 'running', phase: 'outline', done: prev[id]?.done ?? 0, total: prev[id]?.total ?? 0, startedAt: new Date().toISOString() }
+      }))
       const startedAt = Date.now()
       void window.api
         .generateMeetingMindMap(id, regenerate ? { regenerate: true, language: langConfig.website } : undefined)
         .then((result) => {
-          if (viewingPastIdRef.current !== id) return
-          setMindMapGenerating(false)
-          if (result) setPastMindMap((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
-          else setMindMapFailed(failureKind(startedAt))
+          if (result) {
+            if (viewingPastIdRef.current === id) setPastMindMap((prev) => (prev?.generatedAt === result.generatedAt ? prev : result))
+            // Normally the job has already said "done"; never leave the placeholder above spinning.
+            setMindMapJobs((prev) => {
+              if (prev[id]?.state !== 'running') return prev
+              const { [id]: _finished, ...rest } = prev
+              return rest
+            })
+            return
+          }
+          // The job says why it stopped; this only covers a request that never became a job.
+          setMindMapJobs((prev) => (prev[id]?.state === 'running' ? { ...prev, [id]: { ...prev[id], state: 'stopped', reason: failureKind(startedAt) === 'quota' ? 'quota' : 'failed' } } : prev))
         })
     },
     [langConfig.website]
   )
 
   // Build the mind map the first time its tab is opened; later opens find it cached on
-  // the session. Unlike the content tabs below, a failed attempt is remembered
-  // (mindMapFailed) and retried only when the user asks, since a long recording's map
-  // takes several AI calls.
+  // the session. A session that already has a job — running, or stopped part-way — is
+  // left alone: a running one is simply shown, a stopped one goes on only when the user
+  // asks, since a long recording's map takes several AI calls.
   useEffect(() => {
     if (viewingPastId === null || pastView !== 'mindmap') return
     setMindMapOpened(true)
-    if (pastLoadedId !== viewingPastId) return
-    if (pastMindMap || mindMapGenerating || mindMapFailed || pastSegments.length === 0) return
+    if (pastLoadedId !== viewingPastId || !mindMapJobsLoaded) return
+    if (pastMindMap || mindMapJobs[viewingPastId] || pastSegments.length === 0) return
     requestMindMap(false)
-  }, [pastView, viewingPastId, pastLoadedId, pastMindMap, mindMapGenerating, mindMapFailed, pastSegments, requestMindMap])
+  }, [pastView, viewingPastId, pastLoadedId, pastMindMap, mindMapJobs, mindMapJobsLoaded, pastSegments, requestMindMap])
+
+  // The finished map is on screen: its "ready" mark has done its job.
+  useEffect(() => {
+    if (viewingPastId === null || pastView !== 'mindmap' || mindMapJobs[viewingPastId]?.state !== 'done') return
+    const id = viewingPastId
+    void window.api.ackMeetingMindMap(id)
+    setMindMapJobs((prev) => {
+      const { [id]: _seen, ...rest } = prev
+      return rest
+    })
+  }, [pastView, viewingPastId, mindMapJobs])
 
   // Generate a platform's content the first time its tab is opened, then cache
   // it in pastContent (also persisted server-side by the IPC handler) so
@@ -887,6 +929,7 @@ export function MeetingPanel(): React.JSX.Element {
   // The viewed session's mind map — undefined while pastMindMap still belongs to the
   // session viewed before (see pastLoadedId).
   const viewedMindMap = pastLoadedId === viewingPastId ? pastMindMap : undefined
+  const viewedMapJob = viewingPastId !== null ? mindMapJobs[viewingPastId] : undefined
   const pastDurationMs = sessions.find((s) => s.id === viewingPastId)?.durationMs ?? 0
   const contentLanguageLabel =
     langConfig.website === 'auto'
@@ -1320,6 +1363,18 @@ export function MeetingPanel(): React.JSX.Element {
                         {s.status === 'recording' && <span className="meeting-session-dot" />}
                         {s.status === 'summarizing' ? 'Summarizing…' : formatElapsed(s.durationMs)}
                       </span>
+                      {mindMapJobs[s.id] && (
+                        <span className={`meeting-session-map-tag ${mindMapJobs[s.id].state}`} title={mindMapJobLabel(mindMapJobs[s.id])}>
+                          <span className={`meeting-map-dot ${mindMapJobs[s.id].state}`} />
+                          {mindMapJobs[s.id].state === 'running'
+                            ? mindMapJobs[s.id].total > 1
+                              ? `Mind map ${mindMapJobs[s.id].done}/${mindMapJobs[s.id].total}`
+                              : 'Mind map…'
+                            : mindMapJobs[s.id].state === 'done'
+                              ? 'Mind map ready'
+                              : 'Mind map not finished'}
+                        </span>
+                      )}
                       {sessionSpace && (
                         <span className="meeting-session-space-tag" title={`In space: ${sessionSpace.name}`}>
                           <FolderIcon size={10} />
@@ -1407,6 +1462,9 @@ export function MeetingPanel(): React.JSX.Element {
                       onClick={() => setPastView(tab.id)}
                     >
                       {tab.label}
+                      {tab.id === 'mindmap' && viewedMapJob && (
+                        <span className={`meeting-map-dot ${viewedMapJob.state}`} title={mindMapJobLabel(viewedMapJob)} />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -1447,9 +1505,9 @@ export function MeetingPanel(): React.JSX.Element {
                     durationMs={pastDurationMs}
                     dateLabel={formatSessionDate(pastCreatedAt)}
                     active={pastView === 'mindmap'}
-                    generating={mindMapGenerating}
-                    progress={mindMapProgress}
-                    failure={mindMapFailed || null}
+                    generating={viewedMapJob?.state === 'running'}
+                    progress={viewedMapJob ?? null}
+                    stopped={viewedMapJob?.state === 'stopped' ? viewedMapJob : null}
                     quotaMessage={quotaMessage}
                     regenerateTitle={`Build the map again, written in ${contentLanguageLabel} — the "Website & social posts" language on the New session screen`}
                     onRetry={() => requestMindMap(false)}

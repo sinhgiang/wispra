@@ -229,9 +229,12 @@ async function partB() {
   })
   handle(IPC.MEETING_GENERATE_MIND_MAP, async (_event, id) => {
     count(`${id}/mindmap`)
-    win.webContents.send(IPC.MEETING_MIND_MAP_PROGRESS, { sessionId: id, phase: 'outline', done: 2, total: 5 })
+    // What the background job reports (see mindMapJobs.ts): two of five parts done, then stopped by the allowance.
+    const status = { sessionId: id, state: 'running', phase: 'outline', done: 2, total: 5, startedAt: new Date().toISOString() }
+    win.webContents.send(IPC.MEETING_MIND_MAP_PROGRESS, status)
     await sleep(40)
     fail()
+    win.webContents.send(IPC.MEETING_MIND_MAP_PROGRESS, { ...status, state: 'stopped', reason: 'quota' })
     return null
   })
 
@@ -303,11 +306,11 @@ async function partB() {
   await sleep(SETTLE_MS)
   const PANEL = `document.querySelector('.mm-panel')`
   const overlay = await js(`(document.querySelector('.mm-overlay') || { innerText: '' }).innerText.replace(/\\s+/g, ' ')`)
-  check('mind map: says it was not built, why, and how far it got', overlay.includes('The mind map was not built') && overlay.includes("used all of this month's AI allowance") && overlay.includes('It stopped after 2 of 5 parts'), overlay)
-  check('mind map: one call only, with a "Try again" button', calls['one/mindmap'] === 1 && (await hasRetry(PANEL)), { calls: calls['one/mindmap'] })
-  await clickButton('Try again', PANEL)
+  check('mind map: says it was not built, why, and how far it got', overlay.includes('The mind map was not built') && overlay.includes("used all of this month's AI allowance") && overlay.includes('It stopped after 2 of 5 parts. They are kept'), overlay)
+  check('mind map: one call only, with a "Continue" button (the finished parts are kept)', calls['one/mindmap'] === 1 && (await js(`[...${PANEL}.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Continue')`)), { calls: calls['one/mindmap'] })
+  await clickButton('Continue', PANEL)
   await sleep(SETTLE_MS)
-  check('mind map: "Try again" calls exactly once more', calls['one/mindmap'] === 2, { calls: calls['one/mindmap'] })
+  check('mind map: "Continue" calls exactly once more', calls['one/mindmap'] === 2, { calls: calls['one/mindmap'] })
 
   // An ordinary failure while an older notice is still around keeps its ordinary message.
   mode = 'error'
