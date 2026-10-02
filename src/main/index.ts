@@ -58,10 +58,10 @@ import {
   askMeetingChat,
   resolveChatTarget
 } from './postprocess'
-import { generateMindMap } from './mindMap'
-import { mindMapLanguage } from './mindMapLogic'
 import { generateOutline } from './outline'
 import { outlineLanguage } from './outlineLogic'
+import { generateMindMap } from './mindMap'
+import { mindMapLanguage } from './mindMapLogic'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
