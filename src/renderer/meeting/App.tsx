@@ -408,6 +408,8 @@ export function MeetingPanel(): React.JSX.Element {
   const [mapHighlight, setMapHighlight] = useState<MapHighlight | null>(null)
   /** Which platform tabs are currently waiting on a generateMeetingContent() call — per-platform (not a single value) so switching between several not-yet-generated tabs in quick succession tracks each one's own in-flight state correctly instead of only the most recently opened tab. */
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
+  /** Which platform tabs' last generateMeetingContent() call failed for the session being viewed. A failed tab is not generated again by itself — the effect below would otherwise call the LLM in a loop for as long as the tab stays open — only when the user presses "Try again" (retryContent). */
+  const [failedPlatforms, setFailedPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
   /** Which of the 3 generated variants is shown for each social platform. */
   const [variantIndex, setVariantIndex] = useState<Record<'facebook' | 'instagram' | 'linkedin' | 'twitter', number>>({
     facebook: 0,
@@ -711,6 +713,7 @@ export function MeetingPanel(): React.JSX.Element {
     let cancelled = false
     setPastView('transcript')
     setGeneratingPlatforms({})
+    setFailedPlatforms({})
     setSummaryGenerating(false)
     setVariantIndex({ facebook: 0, instagram: 0, linkedin: 0, twitter: 0 })
     setChatInput('')
@@ -778,18 +781,28 @@ export function MeetingPanel(): React.JSX.Element {
 
   // Generate a platform's content the first time its tab is opened, then cache
   // it in pastContent (also persisted server-side by the IPC handler) so
-  // re-opening the tab later doesn't call the LLM again.
+  // re-opening the tab later doesn't call the LLM again. One call per open: a
+  // failed attempt is remembered in failedPlatforms and only "Try again" clears it.
+  // Without that, the failure itself (generatingPlatforms flipping back to false
+  // with still no content) re-ran this effect and called the LLM again at once,
+  // over and over while the tab stayed open.
   useEffect(() => {
     if (viewingPastId === null) return
     if (pastView === 'transcript' || pastView === 'summary' || pastView === 'mindmap') return
     const platform = pastView
     if (pastContent?.[platform]) return
-    if (generatingPlatforms[platform]) return
+    if (generatingPlatforms[platform] || failedPlatforms[platform]) return
     const id = viewingPastId
     setGeneratingPlatforms((prev) => ({ ...prev, [platform]: true }))
     void window.api.generateMeetingContent(id, platform).then((result) => {
+      // A different session is on screen by now: its own state was reset when it
+      // opened, and this late answer must not touch it.
+      if (viewingPastIdRef.current !== id) return
       setGeneratingPlatforms((prev) => ({ ...prev, [platform]: false }))
-      if (!result || viewingPastIdRef.current !== id) return
+      if (!result) {
+        setFailedPlatforms((prev) => ({ ...prev, [platform]: true }))
+        return
+      }
       setPastContent((prev) => {
         if (result.platform === 'website') {
           return { ...prev, website: { title: result.title, metaDescription: result.metaDescription, body: result.body } }
@@ -800,7 +813,13 @@ export function MeetingPanel(): React.JSX.Element {
         return { ...prev, twitter: result.posts }
       })
     })
-  }, [pastView, viewingPastId, pastContent, generatingPlatforms])
+  }, [pastView, viewingPastId, pastContent, generatingPlatforms, failedPlatforms])
+
+  // "Try again" on a platform tab whose generation failed: clearing the failure lets
+  // the effect above make exactly one new attempt.
+  const retryContent = (platform: ContentPlatform): void => {
+    setFailedPlatforms((prev) => ({ ...prev, [platform]: false }))
+  }
 
   // Keep the transcript scrolled to the latest paragraph as it streams in.
   useEffect(() => {
@@ -1450,9 +1469,16 @@ export function MeetingPanel(): React.JSX.Element {
                     </>
                   ) : (
                     <div className="meeting-transcript-empty">
-                      {generatingPlatforms.website
-                        ? 'Writing a blog post…'
-                        : 'Could not generate a blog post — check your connection/API key, then reopen this tab to retry.'}
+                      {failedPlatforms.website ? (
+                        <>
+                          <div>Could not generate a blog post — check your connection/API key, then try again.</div>
+                          <button className="meeting-retry-btn" onClick={() => retryContent('website')}>
+                            Try again
+                          </button>
+                        </>
+                      ) : (
+                        'Writing a blog post…'
+                      )}
                     </div>
                   )}
                 </div>
@@ -1478,9 +1504,16 @@ export function MeetingPanel(): React.JSX.Element {
                       </p>
                     ) : (
                       <div className="meeting-transcript-empty">
-                        {generatingPlatforms[pastView]
-                          ? `Writing ${pastView} posts…`
-                          : 'Could not generate posts — check your connection/API key, then reopen this tab to retry.'}
+                        {failedPlatforms[pastView] ? (
+                          <>
+                            <div>Could not generate posts — check your connection/API key, then try again.</div>
+                            <button className="meeting-retry-btn" onClick={() => retryContent(pastView)}>
+                              Try again
+                            </button>
+                          </>
+                        ) : (
+                          `Writing ${pastView} posts…`
+                        )}
                       </div>
                     )}
                   </div>

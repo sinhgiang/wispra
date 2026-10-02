@@ -12,6 +12,7 @@ System-wide voice dictation desktop app (Windows + macOS). Press the global hotk
 - `npm run dev` — start the app in dev mode (electron-vite)
 - `npm run typecheck` — TypeScript check for all processes
 - `npm run build` — bundle main/preload/renderer
+- `npm run check:content-retry` — automated check (builds, then runs the Meeting tab in Electron with stub IPC, no API key): a failing Website/social content tab calls the generator once, and "Try again" once more
 - `npm run build:win` — build Windows NSIS installer
 - `npm run build:mac` — build macOS DMG (requires a Mac)
 - `node scripts/generate-icons.js` — regenerate PNG icons in `resources/`
