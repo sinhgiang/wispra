@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wispra — four-column Transcript design prototype</title>
+<style>
+  /* Tokens copied from src/renderer/settings/settings.css so the prototype matches the app. */
+  :root {
+    --accent: #6366f1;
+    --accent-hover: #4f46e5;
+    --accent-subtle: rgba(99, 102, 241, 0.1);
+    --bg: #ffffff;
+    --surface: #f7f7f8;
+    --surface-2: #f0f0f2;
+    --border: rgba(0, 0, 0, 0.07);
+    --border-md: rgba(0, 0, 0, 0.13);
+    --text: #111827;
+    --text-2: #6b7280;
+    --text-3: #9ca3af;
+    --r: 10px;
+    --r-sm: 7px;
+    --r-pill: 100px;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --shadow: 0 8px 28px rgba(15, 17, 23, 0.14), 0 1px 3px rgba(15, 17, 23, 0.08);
+    --hl: rgba(245, 158, 11, 0.16);
+    --hl-edge: #f59e0b;
+    --stage: #e9eaee;
+    --topic-l: 0.45;
+    --chip-l: 0.93;
+  }
+  :root[data-theme='dark'] {
+    --bg: #0f1117;
+    --surface: #181b22;
+    --surface-2: #1d2029;
+    --border: rgba(255, 255, 255, 0.07);
+    --border-md: rgba(255, 255, 255, 0.12);
+    --text: #eef0f5;
+    --text-2: #8892a4;
+    --text-3: #5b6475;
+    --shadow: 0 10px 32px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --hl: rgba(245, 158, 11, 0.2);
+    --stage: #05060a;
+    --topic-l: 0.82;
+    --chip-l: 0.3;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--stage);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-md); border-radius: 99px; }
+
+  /* ── Prototype bar (NOT part of the app) ───────────────────────────── */
+  .proto-bar {
+    flex-shrink: 0; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 7px 14px; background: #14161c; color: #c9cfdb; font-size: 12px;
+  }
+  .proto-bar strong { color: #fff; font-weight: 600; }
+  .proto-bar .spacer { flex: 1; }
+  .proto-group { display: flex; align-items: center; gap: 6px; }
+  .proto-seg { display: flex; background: #262a34; border-radius: 6px; padding: 2px; }
+  .proto-seg button {
+    border: none; background: transparent; color: #aab1c0; font-size: 12px;
+    padding: 3px 10px; border-radius: 5px; cursor: pointer;
+  }
+  .proto-seg button.active { background: #3b4150; color: #fff; }
+  .proto-seg button:hover { color: #fff; }
+
+  /* ── App window ────────────────────────────────────────────────────── */
+  .stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .window { position: relative; width: 100%; height: 100%; background: var(--bg); display: flex; flex-direction: column; overflow: hidden; }
+  .stage.sized { padding: 16px; }
+  .stage.sized .window { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: var(--shadow); border: 1px solid var(--border-md); }
+  /* Content size of the app's default 900 × 600 window, and of a 1100 × 680 one. */
+  .stage[data-size='default'] .window { width: 884px; height: 561px; }
+  .stage[data-size='medium'] .window { width: 1084px; height: 641px; }
+
+  .app-header { flex-shrink: 0; display: flex; align-items: center; gap: 18px; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  .wordmark { display: flex; align-items: center; gap: 8px; }
+  .wordmark-badge { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: #fff; }
+  .wordmark h1 { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+  .tab-nav { display: flex; gap: 2px; overflow: hidden; }
+  .tab-nav span { font-size: 12.5px; font-weight: 500; color: var(--text-2); padding: 5px 10px; border-radius: var(--r-sm); white-space: nowrap; }
+  .tab-nav span.active { background: var(--surface-2); color: var(--text); }
+  .tab-beta { font-size: 8.5px; font-weight: 700; color: var(--accent); margin-left: 3px; vertical-align: 1px; }
+
+  .meeting-layout { flex: 1; display: flex; min-height: 0; }
+  .meeting-sidebar { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .meeting-new-btn { border: 1px solid var(--border-md); background: var(--surface); color: var(--text); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-weight: 500; text-align: center; }
+  .side-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); padding: 4px 2px 0; }
+  .session-row { border-radius: var(--r-sm); padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .session-row.active { background: var(--accent-subtle); }
+  .session-title { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-meta { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+  .meeting-main { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px; display: flex; flex-direction: column; }
+  .meeting-session-view { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  /* Header, tabs and chat keep the app's 900px reading width; the four columns use the full width. */
+  .meeting-session-view > * { width: 100%; max-width: 900px; margin-left: auto; margin-right: auto; }
+  .meeting-session-view > .tx { max-width: none; }
+  .meeting-session-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .meeting-session-heading h2 { font-size: 15px; font-weight: 600; }
+  .meeting-session-date { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .meeting-view-toggle { display: flex; flex-wrap: wrap; gap: 2px; background: var(--surface-2); border-radius: var(--r-pill); padding: 2px; align-self: flex-start; width: auto !important; margin-left: 0 !important; }
+  .meeting-view-row { display: flex; }
+  .meeting-view-btn { border: none; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: var(--r-pill); }
+  .meeting-view-btn.active { background: var(--surface); color: var(--text); }
+  .meeting-copy-btn { flex-shrink: 0; border: 1px solid var(--border-md); background: var(--surface); color: var(--text-2); border-radius: var(--r-sm); padding: 5px 10px; font-size: 12px; }
+
+  /* ── Four-column transcript ────────────────────────────────────────── */
+  .tx {
+    --col-time: 92px;
+    --col-topic: 176px;
+    --col-act: 272px;
+    position: relative; flex: 1; min-height: 0; display: flex;
+    border: 1px solid var(--border-md); border-radius: 12px; overflow: hidden; background: var(--bg);
+    container-type: inline-size;
+  }
+  .tx-scroll { position: relative; flex: 1; min-width: 0; overflow-y: auto; scroll-behavior: smooth; }
+  .tx-cols {
+    display: grid; grid-template-columns: var(--col-time) var(--col-topic) 1fr; column-gap: 14px;
+    padding: 0 14px;
+  }
+  .tx-head {
+    position: sticky; top: 0; z-index: 3; background: var(--surface); border-bottom: 1px solid var(--border);
+    align-items: center; height: 32px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3);
+  }
+  .tx-head .grow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+  .sec { padding-top: 14px; padding-bottom: 14px; row-gap: 14px; border-bottom: 1px solid var(--border); }
+  .sec:last-child { border-bottom: none; }
+  .sec-topic { min-width: 0; border-left: 3px solid oklch(0.72 0.12 var(--hue)); padding-left: 10px; }
+  .sec-topic-inner { position: sticky; top: 46px; display: flex; flex-direction: column; gap: 3px; }
+  .sec-topic h3 { font-size: 13.5px; font-weight: 700; line-height: 1.35; color: oklch(var(--topic-l) 0.11 var(--hue)); overflow-wrap: anywhere; }
+  .sec-topic .range { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+  .p-time { font-variant-numeric: tabular-nums; padding-top: 2px; min-width: 0; }
+  .p-time .elapsed { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+  .p-time .clock { display: block; font-size: 10px; color: var(--text-3); margin-top: 1px; }
+  .speaker {
+    display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin-top: 5px;
+    font-size: 10.5px; font-weight: 600; padding: 1px 7px 1px 5px; border-radius: var(--r-pill);
+    background: oklch(var(--chip-l) 0.04 var(--hue)); color: oklch(var(--topic-l) 0.1 var(--hue));
+  }
+  .speaker i { width: 6px; height: 6px; border-radius: 50%; background: oklch(0.65 0.15 var(--hue)); flex-shrink: 0; }
+  .speaker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .speaker.unnamed { background: var(--surface-2); color: var(--text-3); font-weight: 500; }
+  .speaker.unnamed i { background: var(--text-3); }
+  .tx.no-speakers .speaker { display: none; }
+
+  .p-text { min-width: 0; font-size: 13.5px; line-height: 1.6; overflow-wrap: anywhere; border-radius: var(--r-sm); transition: background 0.3s ease, box-shadow 0.3s ease; }
+  .p-text.hl { background: var(--hl); box-shadow: inset 3px 0 0 var(--hl-edge), 0 0 0 6px var(--hl); }
+  .p-time.hl .elapsed { color: var(--hl-edge); }
+
+  /* Column 4: action items */
+  .tx-actions {
+    width: var(--col-act); flex-shrink: 0; display: flex; flex-direction: column; min-height: 0;
+    border-left: 1px solid var(--border); background: var(--bg);
+  }
+  .tx-actions .tx-head { display: flex; justify-content: space-between; padding: 0 12px; flex-shrink: 0; position: static; }
+  .act-count { font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--accent-subtle); border-radius: var(--r-pill); padding: 0 7px; letter-spacing: 0; }
+  .act-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .act {
+    display: flex; gap: 9px; align-items: flex-start; width: 100%; text-align: left; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    border-radius: var(--r); padding: 8px 10px; transition: border-color 0.15s, background 0.15s, transform 0.1s;
+  }
+  .act:hover { border-color: var(--accent); background: var(--accent-subtle); }
+  .act:active { transform: scale(0.985); }
+  .act.active { border-color: var(--hl-edge); background: var(--hl); }
+  .act-time {
+    flex-shrink: 0; margin-top: 1px; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--accent); background: var(--accent-subtle); border-radius: var(--r-pill); padding: 1px 7px;
+  }
+  .act.active .act-time { color: #b45309; background: rgba(245, 158, 11, 0.22); }
+  :root[data-theme='dark'] .act.active .act-time { color: #fbbf24; }
+  .act-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .act-text { font-size: 12.5px; line-height: 1.4; font-weight: 500; }
+  .act-meta { font-size: 11px; color: var(--text-2); }
+  .act-hint { font-size: 11px; color: var(--text-3); padding: 4px 4px 0; }
+  .tx-actions-toggle, .tx-actions-close { display: none; }
+
+  /* ── Medium width: the topic becomes a heading row above its paragraphs ── */
+  @container (max-width: 979px) {
+    .tx { --col-act: 236px; }
+    .tx-cols { grid-template-columns: var(--col-time) 1fr; }
+    .tx-head .col-topic { display: none; }
+    .sec-topic { grid-column: 1 / -1 !important; grid-row: auto !important; }
+    .sec-topic-inner { position: static; flex-direction: row; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .sec .p-time, .sec .p-text { grid-column: auto !important; grid-row: auto !important; }
+  }
+  /* ── Narrow (the default 900px window): action items move into a slide-over panel ── */
+  @container (max-width: 699px) {
+    .tx-actions {
+      position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: min(300px, 88%);
+      box-shadow: var(--shadow); transform: translateX(105%); transition: transform 0.26s var(--ease-out);
+    }
+    .tx.actions-open .tx-actions { transform: none; }
+    .tx-actions-toggle {
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      border: 1px solid var(--border-md); background: var(--bg); color: var(--text); border-radius: var(--r-pill);
+      font-size: 11px; font-weight: 600; padding: 2px 4px 2px 10px; letter-spacing: 0; text-transform: none;
+    }
+    .tx-actions-toggle:hover { border-color: var(--accent); }
+    .tx-actions-close {
+      display: inline-grid; place-items: center; width: 22px; height: 22px; cursor: pointer;
+      border: none; background: transparent; color: var(--text-2); border-radius: 6px; font-size: 13px;
+    }
+    .tx-actions-close:hover { background: var(--surface-2); color: var(--text); }
+  }
+
+  /* Other tabs + chat (unchanged parts of the app, static here) */
+  .placeholder { flex: 1; color: var(--text-3); font-size: 13px; text-align: center; padding-top: 40px; }
+  .meeting-chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
+  .meeting-chat-input { flex: 1; resize: none; border: 1px solid var(--border-md); background: var(--surface); color: var(--text); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-family: inherit; line-height: 1.4; }
+  .meeting-chat-send-btn { border: none; background: var(--accent); color: #fff; border-radius: var(--r-pill); padding: 8px 16px; font-size: 12.5px; font-weight: 600; opacity: 0.5; }
+
+  @media (max-width: 720px) { .meeting-sidebar { display: none; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <span><strong>Design prototype</strong> · four-column Transcript (T-0021) · sample data, nothing here calls the AI</span>
+  <span class="spacer"></span>
+  <div class="proto-group">Theme
+    <div class="proto-seg" id="themeSeg"><button data-theme="light">Light</button><button data-theme="dark">Dark</button></div>
+  </div>
+  <div class="proto-group">Window
+    <div class="proto-seg" id="sizeSeg"><button data-size="fill" class="active">Large</button><button data-size="medium">1100 × 680</button><button data-size="default">Default 900 × 600</button></div>
+  </div>
+  <div class="proto-group">Speaker names
+    <div class="proto-seg" id="speakerSeg"><button data-speakers="on" class="active">Shown</button><button data-speakers="off">Hidden</button></div>
+  </div>
+</div>
+
+<div class="stage" id="stage" data-size="fill">
+  <div class="window">
+    <header class="app-header">
+      <div class="wordmark">
+        <div class="wordmark-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+        <h1>Wispra</h1>
+      </div>
+      <nav class="tab-nav">
+        <span>Dictate</span><span class="active">Meeting<span class="tab-beta">BETA</span></span><span>Transcribe</span><span>History</span><span>Learned</span><span>Account</span>
+      </nav>
+    </header>
+
+    <div class="meeting-layout">
+      <aside class="meeting-sidebar">
+        <div class="meeting-new-btn">+ New session</div>
+        <div class="side-label">Recent</div>
+        <div class="session-row active"><span class="session-title" id="sideTitle"></span><span class="session-meta">42:15</span></div>
+        <div class="session-row"><span class="session-title">Demo Day Build to Own</span><span class="session-meta">2:28:40</span></div>
+        <div class="session-row"><span class="session-title">Hướng dẫn triển khai MCP</span><span class="session-meta">1:05:19</span></div>
+      </aside>
+
+      <div class="meeting-main">
+        <div class="meeting-session-view">
+          <div class="meeting-session-header">
+            <div class="meeting-session-heading">
+              <h2 id="sessionTitle"></h2>
+              <div class="meeting-session-date" id="sessionDate"></div>
+            </div>
+            <button class="meeting-copy-btn">Copy transcript</button>
+          </div>
+          <div class="meeting-view-row">
+            <div class="meeting-view-toggle">
+              <button class="meeting-view-btn active">Transcript</button><button class="meeting-view-btn">Summary</button><button class="meeting-view-btn">Mind map</button><button class="meeting-view-btn">Website</button><button class="meeting-view-btn">Facebook</button><button class="meeting-view-btn">Instagram</button><button class="meeting-view-btn">LinkedIn</button><button class="meeting-view-btn">X</button>
+            </div>
+          </div>
+
+          <!-- The four columns -->
+          <div class="tx" id="tx">
+            <div class="tx-scroll" id="txScroll">
+              <div class="tx-cols tx-head">
+                <span>Time · speaker</span>
+                <span class="col-topic">Topic</span>
+                <span class="grow">
+                  <span>Transcript</span>
+                  <button class="tx-actions-toggle" id="actionsToggle" aria-controls="actionsPanel">Action items <span class="act-count" id="actCountToggle"></span></button>
+                </span>
+              </div>
+              <div id="sections"></div>
+            </div>
+            <aside class="tx-actions" id="actionsPanel" aria-label="Action items">
+              <div class="tx-head">
+                <span>Action items <span class="act-count" id="actCount"></span></span>
+                <button class="tx-actions-close" id="actionsClose" aria-label="Close action items">✕</button>
+              </div>
+              <div class="act-list" id="actList"></div>
+            </aside>
+          </div>
+
+          <div class="meeting-chat-input-row">
+            <textarea class="meeting-chat-input" rows="1" placeholder="Ask a question about this recording…"></textarea>
+            <button class="meeting-chat-send-btn" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="sample-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
