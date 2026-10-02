@@ -392,6 +392,60 @@ export interface MeetingSession {
   spaceId?: string
   /** Q&A chat with AI about this session's own transcript (see askMeetingChat in postprocess.ts) — works both while still recording and after Stop. Undefined = no chat yet, same "treated as absent" pattern as languageConfig/content. */
   chat?: MeetingChatMessage[]
+  /** AI-generated mind map of the whole recording (see generateMindMap in mindMap.ts), built the first time the Mind map tab is opened and cached here. Undefined until generated. */
+  mindMap?: MeetingMindMap
+}
+
+/**
+ * What a main branch of a mind map holds: 'topic' branches follow the recording in
+ * time order; the other three collect outcomes from the whole recording.
+ */
+export type MindMapBranchKind = 'topic' | 'decisions' | 'actions' | 'questions'
+
+/** One node of a session's mind map — see MeetingMindMap. */
+export interface MindMapNode {
+  /** A few words, shown on the node. */
+  label: string
+  /** One or two sentences shown in the node's detail card. */
+  note?: string
+  /** First and last segment ids this node is about (inclusive range) — "Show in
+   * transcript" highlights that stretch, same mechanism as MeetingChatMessage.
+   * Both present or both absent — never just one. */
+  startSegmentId?: string
+  endSegmentId?: string
+  /** Main branches only. */
+  kind?: MindMapBranchKind
+  /** Action items only, and only when the recording names them. */
+  owner?: string
+  due?: string
+  children: MindMapNode[]
+}
+
+/**
+ * Mind map of a finished meeting session. All of its text (title, labels, notes) is
+ * written in `language`, which follows the session's "Website & social posts"
+ * language choice — not the spoken language, and not the Summary language the
+ * session title is written in (which is why the map carries its own centre title).
+ */
+export interface MeetingMindMap {
+  /** Centre of the map. */
+  title: string
+  note?: string
+  /** Main branches: topics in time order, then Decisions / Action items / Open questions when the recording has them. */
+  branches: MindMapNode[]
+  /** ISO-639-1 code the map was written in, or "auto" (same language as the transcript). */
+  language: string
+  /** ISO timestamp. */
+  generatedAt: string
+}
+
+/** Progress of one mind map generation: a long recording is outlined part by part, then the parts are merged. */
+export interface MindMapProgress {
+  sessionId: string
+  phase: 'outline' | 'merge'
+  /** Parts outlined so far / parts in total. */
+  done: number
+  total: number
 }
 
 /**

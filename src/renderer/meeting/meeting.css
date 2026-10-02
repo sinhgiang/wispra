@@ -650,7 +650,7 @@
   min-height: 0;
   min-width: 0;
   width: 100%;
-  /* Wide enough to use a resizable Settings window's extra space (default 780px, but
+  /* Wide enough to use a resizable Settings window's extra space (default 900px, but
      freely resizable — see windows.ts), while still keeping line length readable on
      very wide windows rather than going full-bleed edge-to-edge. */
   max-width: 900px;
@@ -658,6 +658,30 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Mind map tab: the map itself uses the full width of a wide window; the header, tab
+   row and chat input keep the 900px reading width. */
+.meeting-session-view--map {
+  max-width: none;
+}
+
+.meeting-session-view--map > * {
+  width: 100%;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.meeting-session-view--map > .meeting-mindmap-view {
+  max-width: none;
+}
+
+.meeting-mindmap-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .meeting-session-header {
@@ -725,7 +749,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Row holding the tab toggle (left) and the copy button (right), below the title. */
+/* Row holding the tab toggle, below the title (the copy button sits beside the title). */
 .meeting-view-toggle-row {
   display: flex;
   align-items: center;
@@ -734,7 +758,7 @@
   flex-wrap: wrap;
 }
 
-/* Transcript/Summary/Website/Facebook/Instagram/LinkedIn tab toggle in the past-session header. */
+/* Transcript/Summary/Mind map/Website/Facebook/Instagram/LinkedIn/X tab toggle in the past-session header. */
 .meeting-view-toggle {
   display: flex;
   flex-wrap: wrap;
@@ -990,6 +1014,562 @@
   }
 }
 
+/* "From mind map" bar above the transcript after "Show in transcript" on the Mind map
+   tab (see MapHighlight in App.tsx): names the node and offers the way back. */
+.meeting-from-map {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  border-radius: var(--r);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.meeting-from-map-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.meeting-from-map-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-from-map-label b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.meeting-from-map-back,
+.meeting-from-map-clear {
+  flex-shrink: 0;
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.meeting-from-map-clear {
+  border-color: transparent;
+  padding: 4px 7px;
+}
+
+.meeting-from-map-back:hover,
+.meeting-from-map-clear:hover {
+  background: var(--surface-2);
+  border-color: var(--border-md);
+  color: var(--text);
+}
+
+.meeting-from-map-clear:hover {
+  border-color: transparent;
+}
+
+/* ── Mind map tab (see MindMapView.tsx; the map itself is drawn by mindMapRenderer.ts) ── */
+
+.mm-panel {
+  --mm-float: rgba(255, 255, 255, 0.92);
+  --mm-shadow: 0 8px 28px rgba(15, 17, 23, 0.12), 0 1px 3px rgba(15, 17, 23, 0.08);
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border-md);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg);
+  container-type: inline-size;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mm-panel {
+    --mm-float: rgba(24, 27, 34, 0.92);
+    --mm-shadow: 0 10px 32px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* "Full screen" fills the app window (above its sticky header), not the OS screen. */
+.mm-panel.mm-full {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  border: none;
+  border-radius: 0;
+}
+
+.mm-canvas {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.mm-canvas.mm-grabbing {
+  cursor: grabbing;
+}
+
+.mm-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.mm-node .mm-box {
+  transition: filter 0.12s ease;
+}
+
+.mm-node:hover .mm-box {
+  filter: brightness(0.96) saturate(1.15);
+}
+
+@media (prefers-color-scheme: dark) {
+  .mm-node:hover .mm-box {
+    filter: brightness(1.18);
+  }
+}
+
+.mm-node:focus-visible .mm-ring {
+  display: inline !important;
+}
+
+.mm-toggle circle {
+  transition: transform 0.12s ease;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.mm-toggle:hover circle {
+  transform: scale(1.18);
+}
+
+/* Floating toolbars: levels (top left), actions (top right), zoom (bottom right). */
+.mm-float {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--mm-float);
+  border: 1px solid var(--border-md);
+  box-shadow: 0 2px 10px rgba(15, 17, 23, 0.07);
+  backdrop-filter: blur(10px);
+}
+
+.mm-float.tl {
+  top: 12px;
+  left: 12px;
+}
+
+/* Above the detail card (z-index 4), which opens right under it: the Export menu drops over the card. */
+.mm-float.tr {
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+}
+
+.mm-float.br {
+  bottom: 12px;
+  right: 12px;
+}
+
+.mm-float-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  padding: 0 6px 0 8px;
+}
+
+.mm-btn {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.mm-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.mm-btn.active,
+.mm-btn.active:hover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mm-btn.active,
+  .mm-btn.active:hover {
+    color: #a5b4fc;
+  }
+}
+
+.mm-btn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.mm-zoom-label {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border-md);
+  margin: 0 3px;
+}
+
+.mm-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 2;
+  font-size: 11.5px;
+  color: var(--text-3);
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+
+.mm-hint.hide {
+  opacity: 0;
+}
+
+/* Narrow panels: icon-only toolbar, no hint. */
+@container (max-width: 640px) {
+  .mm-btn-text,
+  .mm-hint {
+    display: none;
+  }
+}
+
+/* Export menu */
+.mm-menu-wrap {
+  position: relative;
+}
+
+.mm-menu {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  min-width: 196px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border-md);
+  border-radius: 10px;
+  box-shadow: var(--mm-shadow);
+}
+
+.mm-menu button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 400;
+  padding: 7px 10px;
+  border-radius: 7px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.mm-menu button small {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.mm-menu button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Node detail card */
+.mm-card {
+  position: absolute;
+  z-index: 4;
+  top: 58px;
+  right: 12px;
+  width: min(296px, calc(100% - 24px));
+  max-height: calc(100% - 116px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--mm-float);
+  border: 1px solid var(--border-md);
+  border-radius: 14px;
+  box-shadow: var(--mm-shadow);
+  backdrop-filter: blur(14px);
+  opacity: 0;
+  transform: translateX(14px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.28s var(--ease-out);
+  overflow-y: auto;
+}
+
+.mm-card.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.mm-card-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mm-card-crumb {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mm-card-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mm-card-close {
+  width: 24px;
+  height: 24px;
+  min-width: 0;
+  padding: 0;
+  margin: -4px -4px -4px 0;
+}
+
+.mm-card h3 {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.mm-card-note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.mm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mm-chip {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-radius: var(--r-pill);
+  padding: 2px 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.mm-primary {
+  flex: 1;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.mm-primary:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+.mm-primary svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mm-secondary {
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--text-2);
+  padding: 8px 11px;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mm-secondary:hover {
+  background: var(--surface-2);
+  border-color: var(--border-md);
+  color: var(--text);
+}
+
+/* Generating / failed / empty states, over the canvas */
+.mm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bg);
+  text-align: center;
+  padding: 24px;
+}
+
+.mm-overlay:empty {
+  display: none;
+}
+
+.mm-overlay .meeting-retry-btn {
+  margin-top: 0;
+}
+
+.mm-gen-art {
+  width: 132px;
+  height: 72px;
+}
+
+.mm-gen-art path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.3;
+  stroke-dasharray: 60;
+  animation: mm-gen-draw 1.6s ease-in-out infinite;
+}
+
+.mm-gen-art path:nth-child(2) { animation-delay: 0.15s; }
+.mm-gen-art path:nth-child(3) { animation-delay: 0.3s; }
+.mm-gen-art path:nth-child(4) { animation-delay: 0.45s; }
+.mm-gen-art path:nth-child(5) { animation-delay: 0.6s; }
+.mm-gen-art path:nth-child(6) { animation-delay: 0.75s; }
+
+.mm-gen-art circle {
+  fill: var(--accent);
+}
+
+@keyframes mm-gen-draw {
+  0% { stroke-dashoffset: 60; opacity: 0.15; }
+  50% { stroke-dashoffset: 0; opacity: 0.75; }
+  100% { stroke-dashoffset: -60; opacity: 0.15; }
+}
+
+.mm-overlay-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mm-overlay-step {
+  font-size: 12.5px;
+  color: var(--text-2);
+  min-height: 19px;
+}
+
+.mm-gen-bar {
+  width: 220px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.mm-gen-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.mm-overlay-foot {
+  font-size: 11.5px;
+  color: var(--text-3);
+  max-width: 320px;
+}
+
+.mm-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  z-index: 8;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  background: #111827;
+  color: #fff;
+  font-size: 12.5px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  box-shadow: var(--mm-shadow);
+  pointer-events: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mm-toast {
+    background: #eef0f5;
+    color: #111827;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-card,
+  .mm-gen-art path,
+  .mm-gen-bar i {
+    transition: none;
+    animation: none;
+  }
+}
+
 /* ── In-session AI chat (see MeetingChatPanel in App.tsx) ─────────────────── */
 
 .meeting-chat-panel {
@@ -1000,6 +1580,17 @@
   max-height: 46%;
   border-top: 1px solid var(--border);
   padding-top: 12px;
+}
+
+/* Mind map tab: only the input row, so the map gets the height. */
+.meeting-chat-panel.compact {
+  border-top: none;
+  padding-top: 0;
+}
+
+.meeting-chat-panel.compact .meeting-chat-header,
+.meeting-chat-panel.compact .meeting-chat-messages {
+  display: none;
 }
 
 .meeting-chat-header {

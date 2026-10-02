@@ -187,7 +187,17 @@ export const IPC = {
   // renderer -> main: user asked the in-session AI chat a question about the transcript
   // (works while still recording or after Stop) — see askMeetingChat in postprocess.ts.
   // Resolves the assistant's MeetingChatMessage, or null on failure (nothing persisted).
-  MEETING_CHAT_SEND: 'meeting:chat-send'
+  MEETING_CHAT_SEND: 'meeting:chat-send',
+  // renderer -> main: build (or return the cached) mind map of a stopped session — see
+  // generateMindMap in mindMap.ts. Takes an optional { regenerate, language }: regenerate
+  // rebuilds a map that already exists, in `language` when given. Resolves the
+  // MeetingMindMap, or null on failure (the previous map, if any, is kept).
+  MEETING_GENERATE_MIND_MAP: 'meeting:generate-mind-map',
+  // main -> settings renderer: how far a mind map generation is (MindMapProgress)
+  MEETING_MIND_MAP_PROGRESS: 'meeting:mind-map-progress',
+  // renderer -> main: save the mind map's PNG export (bytes + suggested file name) through
+  // a Save dialog; resolves { ok, error? }
+  MEETING_SAVE_MIND_MAP_PNG: 'meeting:save-mind-map-png'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

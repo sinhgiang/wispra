@@ -126,7 +126,8 @@ export function openSettingsWindow(initialTab?: string): BrowserWindow {
     return settingsWindow
   }
   settingsWindow = new BrowserWindow({
-    width: 780,
+    // Wide enough for a finished meeting's row of view tabs (Transcript … X) to sit on one line.
+    width: 900,
     height: 600,
     minWidth: 640,
     minHeight: 480,

@@ -1,0 +1,463 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import type { MeetingMindMap, MeetingSegment, MindMapProgress } from '@shared/types'
+import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
+import { createMindMap, mindMapNodeColor, type MindMapController, type MindMapLayoutNode } from './mindMapRenderer'
+
+/** Levels shown when the map opens: the centre and the main branches only — the user opens the rest. */
+const DEFAULT_LEVEL = 2
+const LEVELS: Array<{ level: number; label: string; title: string }> = [
+  { level: 2, label: '2', title: 'Centre and main branches' },
+  { level: 3, label: '3', title: 'Main branches and their points' },
+  { level: 9, label: 'All', title: 'Expand everything' }
+]
+/** Longest side of the exported PNG, in pixels. */
+const PNG_MAX_SIDE = 8000
+
+const DARK_QUERY = '(prefers-color-scheme: dark)'
+
+function Icon({ d }: { d: string }): ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  )
+}
+
+function minutesLabel(ms: number): string {
+  const min = Math.max(1, Math.round(ms / 60000))
+  return min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`
+}
+
+function progressText(progress: MindMapProgress | null): string {
+  if (!progress || progress.total <= 1) return 'Reading the transcript…'
+  if (progress.phase === 'merge') return 'Merging the parts into one map…'
+  return `Outlining part ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
+}
+
+function progressPercent(progress: MindMapProgress | null): number {
+  if (!progress || progress.total <= 1) return 12
+  // One extra step for the merge call that follows the parts.
+  return Math.max(6, Math.round((progress.done / (progress.total + 1)) * 100))
+}
+
+/**
+ * The Mind map tab of a finished session: the map itself (drawn by mindMapRenderer.ts),
+ * its toolbar, the node detail card and the generating/failed states. View-only —
+ * nodes cannot be edited. Stays mounted while another tab is shown (`active` false) so
+ * coming back from "Show in transcript" finds the map as it was left.
+ */
+export function MindMapView({
+  map,
+  segments,
+  durationMs,
+  dateLabel,
+  active,
+  generating,
+  progress,
+  failed,
+  regenerateTitle,
+  onRetry,
+  onRegenerate,
+  onShowInTranscript
+}: {
+  map: MeetingMindMap | undefined
+  segments: MeetingSegment[]
+  durationMs: number
+  /** The session's date, for the Markdown outline's header line. */
+  dateLabel: string
+  active: boolean
+  generating: boolean
+  progress: MindMapProgress | null
+  /** The last generation attempt failed (there may still be an earlier map to show). */
+  failed: boolean
+  regenerateTitle: string
+  onRetry: () => void
+  onRegenerate: () => void
+  onShowInTranscript: (node: MindMapTreeNode, color: string) => void
+}): ReactElement {
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLElement>(null)
+  const zoomLabelRef = useRef<HTMLButtonElement>(null)
+  const controllerRef = useRef<MindMapController | null>(null)
+  const introducedRef = useRef(false)
+  const activeRef = useRef(active)
+  activeRef.current = active
+
+  const [dark, setDark] = useState(() => window.matchMedia(DARK_QUERY).matches)
+  const [selected, setSelected] = useState<MindMapLayoutNode | null>(null)
+  /** Which "Levels" preset the map currently matches; null once a branch was opened or closed by hand. */
+  const [level, setLevel] = useState<number | null>(DEFAULT_LEVEL)
+  /** Bumped when a branch is toggled, so the card's Expand/Collapse label re-reads the controller. */
+  const [, setToggleCount] = useState(0)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [hintHidden, setHintHidden] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+
+  const tree = useMemo(() => (map ? buildMindMapTree(map, segments, durationMs) : null), [map, segments, durationMs])
+
+  const showToast = useCallback((text: string) => setToast(text), [])
+  useEffect(() => {
+    if (!toast) return
+    const id = setTimeout(() => setToast(null), 2400)
+    return () => clearTimeout(id)
+  }, [toast])
+
+  // A failed Regenerate leaves the earlier map on screen, so it has to say so.
+  useEffect(() => {
+    if (failed && map) setToast('Could not rebuild the mind map — the previous one is kept')
+  }, [failed, map])
+
+  useEffect(() => {
+    const query = window.matchMedia(DARK_QUERY)
+    const onChange = (): void => {
+      setDark(query.matches)
+      controllerRef.current?.setDark(query.matches)
+    }
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+
+  // (Re)build the drawing whenever the map itself changes (first generation, Regenerate).
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!tree || !canvas) return
+    const controller = createMindMap(canvas, {
+      tree,
+      dark: window.matchMedia(DARK_QUERY).matches,
+      onSelect: setSelected,
+      onViewChange: (k) => {
+        if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(k * 100)}%`
+      },
+      onManualToggle: () => {
+        setLevel(null)
+        setToggleCount((n) => n + 1)
+      }
+    })
+    controllerRef.current = controller
+    introducedRef.current = false
+    setSelected(null)
+    setLevel(DEFAULT_LEVEL)
+    // The intro fits the map to the canvas, so it has to wait until the tab is visible.
+    if (activeRef.current) {
+      controller.intro(DEFAULT_LEVEL)
+      introducedRef.current = true
+    }
+    return () => {
+      controller.destroy()
+      controllerRef.current = null
+    }
+  }, [tree])
+
+  useEffect(() => {
+    if (!active) {
+      setFullscreen(false)
+      setMenuOpen(false)
+      return
+    }
+    if (controllerRef.current && !introducedRef.current) {
+      controllerRef.current.intro(DEFAULT_LEVEL)
+      introducedRef.current = true
+    }
+  }, [active])
+
+  // Keep the selected node clear of the detail card.
+  useEffect(() => {
+    const controller = controllerRef.current
+    if (!controller) return
+    if (!selected) {
+      controller.setInsetRight(0)
+      return
+    }
+    controller.setInsetRight((cardRef.current?.offsetWidth ?? 0) + 12)
+    controller.ensureVisible(selected.id)
+  }, [selected])
+
+  // Full screen = the map fills the whole app window (not the OS screen).
+  const firstFullscreenRender = useRef(true)
+  useEffect(() => {
+    if (firstFullscreenRender.current) {
+      firstFullscreenRender.current = false
+      return
+    }
+    const id = requestAnimationFrame(() => controllerRef.current?.fit())
+    return () => cancelAnimationFrame(id)
+  }, [fullscreen])
+
+  useEffect(() => {
+    if (!active) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.tagName === 'SELECT')) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const controller = controllerRef.current
+      if (e.key === 'Escape') {
+        if (menuOpen) setMenuOpen(false)
+        else if (selected) controller?.select(null)
+        else setFullscreen(false)
+      } else if (!controller) return
+      else if (e.key === '+' || e.key === '=') controller.zoomBy(1.25)
+      else if (e.key === '-') controller.zoomBy(1 / 1.25)
+      else if (e.key === '0') controller.resetZoom()
+      else if (e.key === 'f' || e.key === 'F') controller.fit()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [active, menuOpen, selected])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (): void => setMenuOpen(false)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [menuOpen])
+
+  const pickLevel = (next: number): void => {
+    controllerRef.current?.setLevel(next)
+    setLevel(next)
+  }
+
+  const copyOutline = (): void => {
+    if (!tree) return
+    window.api.copyText(mindMapMarkdown(tree, dateLabel))
+    showToast('Markdown outline copied to the clipboard')
+  }
+
+  const exportPng = (): void => {
+    const controller = controllerRef.current
+    if (!controller || !map) return
+    const { svg, width, height } = controller.exportSvg(48)
+    const scale = Math.min(2, PNG_MAX_SIDE / Math.max(width, height))
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(width * scale)
+      canvas.height = Math.round(height * scale)
+      canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((blob) => {
+        if (!blob) return showToast('Could not render the PNG')
+        void blob
+          .arrayBuffer()
+          .then((bytes) => window.api.saveMindMapPng(bytes, `${map.title} - mind map`))
+          .then((result) => {
+            if (result.ok) showToast(`PNG saved (${canvas.width} × ${canvas.height})`)
+            else if (result.error !== 'Cancelled.') showToast(`Could not save the PNG: ${result.error ?? 'unknown error'}`)
+          })
+      }, 'image/png')
+    }
+    img.onerror = () => showToast('Could not render the PNG')
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+  }
+
+  const node = selected?.data
+  const color = selected ? mindMapNodeColor(selected, dark) : undefined
+  const crumb = !selected
+    ? ''
+    : selected.depth === 0
+      ? 'Recording'
+      : selected.depth === 1
+        ? node?.kind === 'topic'
+          ? 'Topic'
+          : 'Outcome'
+        : (() => {
+            const path: string[] = []
+            for (let p = selected.parent; p && p.depth > 0; p = p.parent) path.unshift(p.data.label)
+            return path.join('  ›  ')
+          })()
+  const chips: string[] = []
+  if (selected && node && node.startMs !== undefined && node.endMs !== undefined) {
+    const single = selected.children.length === 0 && selected.depth > 1
+    chips.push(single ? formatElapsed(node.startMs) : `${formatElapsed(node.startMs)} – ${formatElapsed(node.endMs)}`)
+    if (!single && node.endMs > node.startMs) chips.push(minutesLabel(node.endMs - node.startMs))
+  }
+  if (node?.owner) chips.push(`Owner: ${node.owner}`)
+  if (node?.due) chips.push(`Due: ${node.due}`)
+  if (selected && selected.children.length > 0) {
+    chips.push(`${selected.children.length} ${selected.children.length === 1 ? 'point' : 'points'}`)
+  }
+  const canToggle = !!selected && selected.depth > 0 && selected.children.length > 0
+  const canShow = !!selected && selected.depth > 0 && !!node?.startSegmentId && !!node.endSegmentId
+
+  return (
+    <div className={fullscreen ? 'mm-panel mm-full' : 'mm-panel'}>
+      <div
+        className="mm-canvas"
+        ref={canvasRef}
+        onPointerDown={() => setHintHidden(true)}
+        onWheel={() => setHintHidden(true)}
+      />
+
+      {map && (
+        <>
+          <div className="mm-float tl" role="group" aria-label="Levels shown">
+            <span className="mm-float-label">Levels</span>
+            {LEVELS.map((l) => (
+              <button
+                key={l.level}
+                type="button"
+                className={level === l.level ? 'mm-btn active' : 'mm-btn'}
+                title={l.title}
+                onClick={() => pickLevel(l.level)}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mm-float tr">
+            <button type="button" className="mm-btn" title={regenerateTitle} onClick={onRegenerate} disabled={generating}>
+              <Icon d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" />
+              <span className="mm-btn-text">Regenerate</span>
+            </button>
+            <span className="mm-sep" />
+            <div className="mm-menu-wrap">
+              <button
+                type="button"
+                className="mm-btn"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                title="Export"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setMenuOpen((open) => !open)
+                }}
+              >
+                <Icon d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+                <span className="mm-btn-text">Export</span>
+              </button>
+              {menuOpen && (
+                <div className="mm-menu" role="menu">
+                  <button type="button" role="menuitem" onClick={exportPng}>
+                    Download PNG
+                    <small>The map as shown, at 2× resolution</small>
+                  </button>
+                  <button type="button" role="menuitem" onClick={copyOutline}>
+                    Copy Markdown outline
+                    <small>The full map as a nested list</small>
+                  </button>
+                </div>
+              )}
+            </div>
+            <span className="mm-sep" />
+            <button
+              type="button"
+              className="mm-btn"
+              title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen (Esc to exit)'}
+              aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
+              onClick={() => setFullscreen((on) => !on)}
+            >
+              <Icon d={fullscreen ? 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5' : 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'} />
+            </button>
+          </div>
+
+          <div className="mm-float br" role="group" aria-label="Zoom">
+            <button type="button" className="mm-btn" title="Zoom out (−)" aria-label="Zoom out" onClick={() => controllerRef.current?.zoomBy(1 / 1.25)}>
+              −
+            </button>
+            <button
+              type="button"
+              className="mm-btn mm-zoom-label"
+              ref={zoomLabelRef}
+              title="Reset to 100% (0)"
+              onClick={() => controllerRef.current?.resetZoom()}
+            >
+              100%
+            </button>
+            <button type="button" className="mm-btn" title="Zoom in (+)" aria-label="Zoom in" onClick={() => controllerRef.current?.zoomBy(1.25)}>
+              +
+            </button>
+            <span className="mm-sep" />
+            <button type="button" className="mm-btn" title="Fit to screen (F)" onClick={() => controllerRef.current?.fit()}>
+              <Icon d="M6 6h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2ZM9 12h6" />
+              <span className="mm-btn-text">Fit</span>
+            </button>
+          </div>
+
+          <div className={hintHidden ? 'mm-hint hide' : 'mm-hint'}>
+            Click a numbered circle to open a branch · click a node for details · scroll to zoom · drag to move
+          </div>
+        </>
+      )}
+
+      <aside className={selected ? 'mm-card show' : 'mm-card'} ref={cardRef} aria-live="polite">
+        {selected && node && (
+          <>
+            <div className="mm-card-top">
+              <span className="mm-card-dot" style={{ background: color }} />
+              <span className="mm-card-crumb" style={{ color }}>
+                {crumb}
+              </span>
+              <button type="button" className="mm-btn mm-card-close" aria-label="Close" onClick={() => controllerRef.current?.select(null)}>
+                ✕
+              </button>
+            </div>
+            <h3>{node.label}</h3>
+            {chips.length > 0 && (
+              <div className="mm-chips">
+                {chips.map((chip) => (
+                  <span key={chip} className="mm-chip">
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            )}
+            {node.note && <p className="mm-card-note">{node.note}</p>}
+            {(canShow || canToggle) && (
+              <div className="mm-card-actions">
+                {canShow && (
+                  <button type="button" className="mm-primary" onClick={() => onShowInTranscript(node, color ?? '')}>
+                    <Icon d="M4 6h16M4 12h10M4 18h13" />
+                    Show in transcript
+                  </button>
+                )}
+                {canToggle && (
+                  <button type="button" className="mm-secondary" onClick={() => controllerRef.current?.toggle(selected.id)}>
+                    {controllerRef.current?.isExpanded(selected.id) ? 'Collapse' : 'Expand'}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </aside>
+
+      {generating ? (
+        <div className="mm-overlay">
+          <svg className="mm-gen-art" viewBox="0 0 132 72" aria-hidden="true">
+            <path d="M66 36C84 36 84 12 104 12" />
+            <path d="M66 36C84 36 84 36 104 36" />
+            <path d="M66 36C84 36 84 60 104 60" />
+            <path d="M66 36C48 36 48 12 28 12" />
+            <path d="M66 36C48 36 48 36 28 36" />
+            <path d="M66 36C48 36 48 60 28 60" />
+            <circle cx="66" cy="36" r="6" />
+          </svg>
+          <div className="mm-overlay-title">Building the mind map</div>
+          <div className="mm-overlay-step">{progressText(progress)}</div>
+          <div className="mm-gen-bar">
+            <i style={{ width: `${progressPercent(progress)}%` }} />
+          </div>
+          <div className="mm-overlay-foot">
+            This runs once. The map is saved with the recording and opens instantly next time.
+          </div>
+        </div>
+      ) : !map ? (
+        <div className="mm-overlay">
+          {segments.length === 0 ? (
+            <div className="mm-overlay-step">No speech was transcribed in this session.</div>
+          ) : failed ? (
+            <>
+              <div className="mm-overlay-title">Could not build the mind map</div>
+              <div className="mm-overlay-step">Check your connection/API key, then try again.</div>
+              <button type="button" className="meeting-retry-btn" onClick={onRetry}>
+                Try again
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {toast && <div className="mm-toast">{toast}</div>}
+    </div>
+  )
+}

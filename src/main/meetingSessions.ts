@@ -7,6 +7,7 @@ import type {
   MeetingChatMessage,
   MeetingContent,
   MeetingLanguageConfig,
+  MeetingMindMap,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary
@@ -319,6 +320,20 @@ class MeetingSessions {
     const session = this.get(id)
     if (!session) return
     session.content = { ...session.content, ...patch }
+    this.persist(session)
+    for (const fn of this.metaListeners) fn(session)
+  }
+
+  /**
+   * Saves a session's mind map (see generateMindMap in mindMap.ts) and notifies
+   * listeners, so re-opening the Mind map tab shows it instead of calling the LLM
+   * again. Replaces any earlier map (Regenerate). No-ops if the session was deleted
+   * in the meantime.
+   */
+  setMindMap(id: string, mindMap: MeetingMindMap): void {
+    const session = this.get(id)
+    if (!session) return
+    session.mindMap = mindMap
     this.persist(session)
     for (const fn of this.metaListeners) fn(session)
   }

@@ -263,8 +263,40 @@ const MAX_TRANSCRIPT_CHARS = 20_000
 // to witness every topic change) — a separate, larger budget just for that call.
 const SUMMARY_MAX_TRANSCRIPT_CHARS = 60_000
 
+export interface ChatTarget {
+  apiKey: string
+  base: string
+  model: string
+}
+
+/**
+ * Which chat-completions endpoint, model and key/token the given provider settings
+ * point at — the same resolution every function in this file does inline. Returns
+ * null when the provider has no usable key/token. Used by mindMap.ts.
+ */
+export function resolveChatTarget(
+  provider: SttProvider,
+  groqKey: string,
+  openaiKey: string,
+  localBaseUrl?: string,
+  localLlmModel?: string,
+  proxyToken?: string
+): ChatTarget | null {
+  if (provider === 'local') {
+    return { apiKey: 'local', base: localBaseUrl ?? 'http://localhost:11434/v1', model: localLlmModel ?? 'llama3.2' }
+  }
+  if (provider === 'proxy') {
+    return proxyToken ? { apiKey: proxyToken, base: `${WISPRA_API_BASE}/api`, model: GROQ_CHAT_MODEL } : null
+  }
+  const apiKey = provider === 'openai' ? openaiKey : groqKey
+  if (!apiKey) return null
+  return provider === 'openai'
+    ? { apiKey, base: OPENAI_API_BASE, model: OPENAI_CHAT_MODEL }
+    : { apiKey, base: GROQ_API_BASE, model: GROQ_CHAT_MODEL }
+}
+
 /** Human-readable name for an ISO-639-1 code, for embedding in a prompt sentence. Falls back to the raw code if it's not in the known list. */
-function languageName(code: string): string {
+export function languageName(code: string): string {
   return LANGUAGES.find((l) => l.code === code)?.label ?? code
 }
 
@@ -404,7 +436,7 @@ export async function translateSegment(
   }
 }
 
-const ANTI_FABRICATION_RULE =
+export const ANTI_FABRICATION_RULE =
   '- Base everything only on what is actually said in the transcript. NEVER invent facts, numbers, statistics, quotes, or claims that are not present in it — if the transcript lacks specifics, stay general rather than making something up.'
 
 const MEETING_TITLE_PROMPT = `You are a professional note-taker and meeting-minutes writer with 10-15+ years of experience covering long meetings, demo days, lectures, interviews, and voice memos — thorough and precise, never skipping a topic just to keep things short. Read the whole transcript and respond with ONLY a JSON object (no markdown, no code fences, no explanation) in this exact shape:
