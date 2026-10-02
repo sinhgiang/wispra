@@ -45,6 +45,8 @@ export interface MindMapJobsDeps {
   notify: (status: MindMapJobStatus) => void
   /** Language codes the user can pick. */
   languages: string[]
+  /** True if Wispra Cloud said "monthly AI allowance used up" at or after this time (ms) — see aiQuota.ts. */
+  quotaExceededSince?: (since: number) => boolean
   /** True while something that must not be slowed down is using the AI (a dictation being processed). */
   busy?: () => boolean
   limits?: Partial<MindMapLimits>
@@ -120,7 +122,8 @@ export function createMindMapJobs(deps: MindMapJobsDeps): MindMapJobs {
     const previous = saved && (!options?.regenerate || saved.language === requested) ? saved : null
     // Continuing keeps the language the kept parts were written in.
     const language = previous?.language ?? requested
-    const startedAt = new Date().toISOString()
+    const began = Date.now()
+    const startedAt = new Date(began).toISOString()
     const checkpoint: Checkpoint = {
       version: 1,
       sessionId: id,
@@ -174,7 +177,11 @@ export function createMindMapJobs(deps: MindMapJobsDeps): MindMapJobs {
           setStatus(current)
         }
       })
-      if (!result.map) return stop(result.failure.reason, result.failure.detail)
+      if (!result.map) {
+        // The allowance ran out on the way: say that, rather than "the provider refused".
+        if (deps.quotaExceededSince?.(began)) return stop('quota')
+        return stop(result.failure.reason, result.failure.detail)
+      }
       deps.saveMindMap(id, result.map)
       removeCheckpoint(id)
       const { waitingUntil: _waitingUntil, ...rest } = current

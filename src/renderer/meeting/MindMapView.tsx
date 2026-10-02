@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type { MeetingMindMap, MeetingSegment, MindMapJobStatus } from '@shared/types'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import { createMindMap, mindMapNodeColor, type MindMapController, type MindMapLayoutNode } from './mindMapRenderer'
@@ -65,6 +65,8 @@ function stoppedText(job: MindMapJobStatus): { title: string; text: string; acti
       return { title: 'Could not reach the AI', text: `Check your internet connection.${keptText}`, action }
     case 'no-key':
       return { title: 'No AI access', text: 'Add your API key, or sign in on the Account tab, then try again.', action }
+    case 'quota':
+      return { title: 'The mind map was not built', text: `This month's AI allowance is used up.${keptText}`, action }
     case 'refused':
       return { title: 'The AI provider refused the request', text: `Check your API key or plan.${keptText}`, action }
     default:
@@ -87,6 +89,7 @@ export function MindMapView({
   generating,
   progress,
   stopped,
+  quotaMessage,
   regenerateTitle,
   onRetry,
   onRegenerate,
@@ -103,6 +106,8 @@ export function MindMapView({
   progress: MindMapJobStatus | null
   /** The job stopped without a map (there may still be an earlier map to show). */
   stopped: MindMapJobStatus | null
+  /** What to show when it stopped because Wispra Cloud's monthly AI allowance is used up. */
+  quotaMessage: ReactNode
   regenerateTitle: string
   onRetry: () => void
   onRegenerate: () => void
@@ -138,7 +143,12 @@ export function MindMapView({
 
   // A failed Regenerate leaves the earlier map on screen, so it has to say so.
   useEffect(() => {
-    if (stopped && map) setToast('Could not rebuild the mind map — the previous one is kept')
+    if (!stopped || !map) return
+    setToast(
+      stopped.reason === 'quota'
+        ? "This month's AI allowance is used up — the previous mind map is kept"
+        : 'Could not rebuild the mind map — the previous one is kept'
+    )
   }, [stopped, map])
 
   // While the run waits for the provider's limit, redraw when the wait is over.
@@ -488,6 +498,20 @@ export function MindMapView({
         <div className="mm-overlay">
           {segments.length === 0 ? (
             <div className="mm-overlay-step">No speech was transcribed in this session.</div>
+          ) : stopped?.reason === 'quota' && quotaMessage ? (
+            <>
+              <div className="mm-overlay-title">The mind map was not built</div>
+              {quotaMessage}
+              {stopped.total > 1 && (
+                // A long recording is outlined part by part; the allowance ran out on the way.
+                <div className="mm-overlay-step">
+                  It stopped after {stopped.done} of {stopped.total} parts. They are kept — it goes on from there.
+                </div>
+              )}
+              <button type="button" className="meeting-retry-btn" onClick={onRetry}>
+                {stopped.total > 1 && stopped.done > 0 ? 'Continue' : 'Try again'}
+              </button>
+            </>
           ) : stopped ? (
             <>
               <div className="mm-overlay-title">{stoppedText(stopped).title}</div>

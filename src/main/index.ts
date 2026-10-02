@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
+  AiQuotaNotice,
   ApiKeyTestResult,
   ContentPlatform,
   FileTranscribeResult,
@@ -56,6 +57,7 @@ import {
   resolveChatTarget
 } from './postprocess'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
+import { aiQuota } from './aiQuota'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -519,6 +521,7 @@ function getMindMapJobs(): MindMapJobs {
     saveMindMap: (id, mindMap) => meetingSessions.setMindMap(id, mindMap),
     notify: (status) => broadcast(IPC.MEETING_MIND_MAP_PROGRESS, status),
     languages: LANGUAGES.map((l) => l.code),
+    quotaExceededSince: (since) => aiQuota.exceededSince(since),
     // A dictation being transcribed and cleaned up goes first: the job holds its next AI call until it is typed in.
     busy: () => controller.getState() === 'processing'
   })
@@ -816,13 +819,21 @@ function wireIpc(): void {
           }
         }
 
-        text = await postProcess(
-          text, provider, groqApiKey, openaiApiKey,
-          effectiveMode, lexicon.llmTerms(vocabulary, appRelevance), localBaseUrl, localLlmModel, appContextHint,
-          proxyToken, lexicon.hintsFor(text),
-          // The user's own writing conventions + a few of their hand-fixed dictations as examples.
-          style.blockFor(text, { app: appName, mode: effectiveMode?.id })
-        )
+        // Wispra Cloud's monthly AI allowance used up: the text is typed exactly as
+        // dictated (postProcess already returns its input on any failure, so nothing the
+        // user said is lost), without spending a request on a cleanup that cannot run.
+        const cleanupStartedAt = Date.now()
+        const cleanupPaused = provider === 'proxy' && aiQuota.shouldSkipCleanup()
+        if (!cleanupPaused) {
+          text = await postProcess(
+            text, provider, groqApiKey, openaiApiKey,
+            effectiveMode, lexicon.llmTerms(vocabulary, appRelevance), localBaseUrl, localLlmModel, appContextHint,
+            proxyToken, lexicon.hintsFor(text),
+            // The user's own writing conventions + a few of their hand-fixed dictations as examples.
+            style.blockFor(text, { app: appName, mode: effectiveMode?.id })
+          )
+        }
+        if (cleanupPaused || aiQuota.exceededSince(cleanupStartedAt)) announceCleanupPaused()
       }
 
       // 4. Preview before paste — show notification then wait.
@@ -1048,6 +1059,7 @@ function wireIpc(): void {
 
   ipcMain.handle(IPC.AUTH_LOGOUT, () => {
     auth.logout()
+    aiQuota.clear()
     // Reset to BYOK provider (will show onboarding if no key)
     const settings = store.get()
     if (settings.provider === 'proxy') {
@@ -1070,8 +1082,17 @@ function wireIpc(): void {
       if (!response.ok) {
         return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
       }
-      const data = (await response.json()) as { plan: string; usageSeconds: number; limitSeconds: number | null; subscribeUrl: string | null }
-      return {
+      const data = (await response.json()) as {
+        plan: string
+        usageSeconds: number
+        limitSeconds: number | null
+        subscribeUrl: string | null
+        // Sent only by servers that meter AI text; older ones leave these out.
+        aiTokensUsed?: unknown
+        aiTokensLimit?: unknown
+        aiTokensResetAt?: unknown
+      }
+      const info: AccountInfo = {
         email: state.email,
         avatarUrl: state.avatarUrl,
         plan: data.plan === 'pro' ? 'pro' : 'free',
@@ -1079,9 +1100,26 @@ function wireIpc(): void {
         limitSeconds: data.limitSeconds,
         subscribeUrl: data.subscribeUrl ?? null,
       }
+      if (typeof data.aiTokensUsed === 'number' && typeof data.aiTokensLimit === 'number' && data.aiTokensLimit > 0) {
+        info.aiTokensUsed = data.aiTokensUsed
+        info.aiTokensLimit = data.aiTokensLimit
+        if (typeof data.aiTokensResetAt === 'string') info.aiTokensResetAt = data.aiTokensResetAt
+        // The server now reports allowance left (upgrade, or a new month): drop a stale notice.
+        if (data.aiTokensUsed < data.aiTokensLimit) aiQuota.clear()
+      }
+      return info
     } catch {
       return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
     }
+  })
+
+  // ── Wispra Cloud AI text allowance ─────────────────────────────────────────
+
+  ipcMain.handle(IPC.GET_AI_QUOTA, (): AiQuotaNotice | null => aiQuota.current())
+  aiQuota.onChange((notice) => broadcast(IPC.AI_QUOTA_CHANGED, notice))
+  // The allowance belongs to the Cloud account; with any other provider it does not apply.
+  store.onChange((s) => {
+    if (s.provider !== 'proxy') aiQuota.clear()
   })
 
   // ── Cloud sync ─────────────────────────────────────────────────────────────
@@ -1142,6 +1180,21 @@ function checkJustUpdated(): void {
   } catch {
     try { unlinkSync(flagPath) } catch { /* ignore */ }
   }
+}
+
+/**
+ * Tells the user, once per quota period per app run, that dictation cleanup is paused
+ * because this month's Wispra Cloud AI allowance is used up. A silent notification —
+ * never a dialog — so it cannot get in the way of the text being typed.
+ */
+function announceCleanupPaused(): void {
+  const notice = aiQuota.claimDictationNotice()
+  if (!notice) return
+  const resets = new Date(notice.resetAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })
+  notify(
+    'Wispra — AI cleanup paused',
+    `You've used this month's AI allowance. Your words are still typed, just without cleanup. It resets on ${resets}.`
+  )
 }
 
 function notify(title: string, body: string): void {

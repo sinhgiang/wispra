@@ -270,6 +270,28 @@ export interface AccountInfo {
   subscribeUrl: string | null
   /** Google profile photo URL. */
   avatarUrl?: string
+  /**
+   * This month's AI text allowance (dictation cleanup, summaries, content tabs, chat, mind
+   * map) as the server reports it. Absent when the server does not send it yet.
+   */
+  aiTokensUsed?: number
+  aiTokensLimit?: number
+  /** ISO timestamp of the next reset. */
+  aiTokensResetAt?: string
+}
+
+/**
+ * The server said this month's Wispra Cloud AI text allowance is used up (HTTP 402,
+ * code "ai_quota_exceeded" — see src/main/aiQuota.ts). Only ever set for Cloud users.
+ */
+export interface AiQuotaNotice {
+  plan: 'free' | 'pro'
+  limitTokens: number
+  usedTokens: number
+  /** ISO timestamp when the allowance resets. */
+  resetAt: string
+  /** When the app got this answer (ms since epoch) — lets a caller tell "my call just failed for this reason" from an older notice. */
+  seenAt: number
 }
 
 /** Cloud sync state (see src/main/sync.ts) — surfaced in Settings > Account. */
@@ -458,10 +480,11 @@ export interface MindMapProgress {
  * - timeout: the provider did not answer in time
  * - offline: the provider could not be reached
  * - no-key: no API key / not signed in
- * - refused: the provider rejected the request (bad key, no access, quota)
+ * - refused: the provider rejected the request (bad key, no access)
+ * - quota: Wispra Cloud's monthly AI allowance is used up (see aiQuota.ts)
  * - failed: anything else (server error, unusable answer)
  */
-export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'timeout' | 'offline' | 'no-key' | 'refused' | 'failed'
+export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'timeout' | 'offline' | 'no-key' | 'refused' | 'quota' | 'failed'
 
 /**
  * A session's mind map job as the renderer sees it (see mindMapJobs.ts). The job runs in

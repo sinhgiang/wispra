@@ -110,6 +110,11 @@ export const IPC = {
   AUTH_LOGOUT: 'auth:logout',
   AUTH_STATE: 'auth:state',
   GET_ACCOUNT_INFO: 'auth:account-info',
+  // Wispra Cloud's monthly AI text allowance (see src/main/aiQuota.ts)
+  // renderer -> main: resolves the current AiQuotaNotice, or null
+  GET_AI_QUOTA: 'ai-quota:get',
+  // main -> renderers: the allowance was just found used up (AiQuotaNotice), or is available again (null)
+  AI_QUOTA_CHANGED: 'ai-quota:changed',
 
   // cloud sync — opt-in push of History/Meetings/Lexicon to Supabase (see src/main/sync.ts)
   // renderer -> main: trigger an immediate sync; resolves once the attempt finishes (success or failure)

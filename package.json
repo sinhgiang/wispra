@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "check:mind-map-background": "electron-vite build && electron scripts/check-mind-map-background.cjs",
     "check:content-retry": "electron-vite build && electron scripts/check-content-retry.cjs",
+    "check:ai-quota": "electron-vite build && electron scripts/check-ai-quota.cjs",
     "postinstall": "node scripts/generate-icons.js",
     "build:win": "electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac"

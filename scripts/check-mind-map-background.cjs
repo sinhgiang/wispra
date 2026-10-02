@@ -108,6 +108,7 @@ async function partA() {
       used.push({ at: now, tokens })
     }
     if (provider.fail && provider.fail(call)) return reply(500, { error: { message: 'The model is overloaded' } })
+    if (provider.refuse && provider.refuse(call)) return reply(402, { error: 'Monthly AI limit reached', code: 'ai_quota_exceeded' })
     // Honour the caller's time limit like a real slow connection would.
     await new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, provider.latencyMs)
@@ -285,6 +286,14 @@ async function partA() {
     reset({})
     map = await jobs.start('long')
     check('no API key / signed out: stops at once with that reason, without calling anything', map === null && statuses[statuses.length - 1].reason === 'no-key' && calls.length === 0)
+
+    // ── 9. Wispra Cloud's monthly AI allowance runs out on the way ──
+    dir = path.join(TMP, 'jobs-9')
+    ;({ jobs, session, statuses } = makeJobs(dir, { quotaExceededSince: () => calls.some((c) => c.status === 402) }))
+    reset({ latencyMs: 30, refuse: (c) => c.kind === 'part' && c.part >= 4 })
+    map = await jobs.start('long')
+    stopped = statuses[statuses.length - 1]
+    check('allowance used up part-way: stops with that reason, keeps the finished parts, and does not keep calling', map === null && stopped.reason === 'quota' && stopped.done === 3 && calls.filter((c) => c.status === 402).length <= 3, { reason: stopped.reason, done: stopped.done, refused: calls.filter((c) => c.status === 402).length })
   } finally {
     console.error = quiet
     globalThis.fetch = realFetch

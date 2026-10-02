@@ -12,6 +12,7 @@ import {
 } from '@shared/constants'
 import type { MeetingMindMap, MeetingSegment, MindMapProgress } from '@shared/types'
 import { ANTI_FABRICATION_RULE, languageName, type ChatTarget } from './postprocess'
+import { aiQuota } from './aiQuota'
 import {
   assembleMindMap,
   buildTranscriptLines,
@@ -181,7 +182,7 @@ export async function callJson(
   let rateLimitWaits = 0
   for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
     try {
-      const response = await fetch(`${target.base}/chat/completions`, {
+      const response = await aiQuota.fetch(`${target.base}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${target.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({

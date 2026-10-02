@@ -1612,6 +1612,38 @@
   }
 }
 
+/* "This month's AI allowance is used up" (see AiQuotaMessage.tsx) — shown in place of a
+   failed summary, content tab, chat answer or mind map for Wispra Cloud users. */
+.ai-quota-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: var(--accent-subtle);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.ai-quota-message strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ai-quota-message a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.meeting-chat-panel .ai-quota-message {
+  max-width: none;
+  margin: 0;
+}
+
 /* ── In-session AI chat (see MeetingChatPanel in App.tsx) ─────────────────── */
 
 .meeting-chat-panel {
