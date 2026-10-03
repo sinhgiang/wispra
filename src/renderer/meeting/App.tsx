@@ -738,14 +738,14 @@ export function MeetingPanel(): React.JSX.Element {
         setLiveChat(session.chat ?? [])
       }
     })
+    window.api.onMeetingMindMapProgress((progress) => {
+      setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
+    })
     window.api.onMeetingContentStatus((status) => {
       const key = `${status.sessionId}/${status.platform}`
       if (status.rateLimited) contentRateLimitedRef.current.add(key)
       if (viewingPastIdRef.current !== status.sessionId) return
       setContentWaiting((prev) => ({ ...prev, [status.platform]: status.waitingUntil }))
-    })
-    window.api.onMeetingMindMapProgress((progress) => {
-      setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
     })
     // Jobs that were already running (or stopped, or finished unseen) before this page mounted.
     void window.api.getMeetingMindMapJobs().then((jobs) => {
