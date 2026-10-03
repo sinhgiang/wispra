@@ -55,6 +55,8 @@ export const DEFAULT_SETTINGS: Settings = {
   provider: 'proxy',
   groqApiKey: '',
   openaiApiKey: '',
+  cloudflareAccountId: '',
+  cloudflareApiToken: '',
   hotkey: 'CommandOrControl+Shift+Space',
   language: 'auto',
   launchAtLogin: false,
@@ -101,6 +103,11 @@ export const SYNC_DEBOUNCE_MS = 15_000
 export const SYNC_STARTUP_DELAY_MS = 10_000
 
 export const GROQ_API_BASE = 'https://api.groq.com/openai/v1'
+/** Groq's smaller model, with a daily allowance of its own: the first backup when gpt-oss-120b reaches its daily limit. */
+export const GROQ_BACKUP_CHAT_MODEL = 'openai/gpt-oss-20b'
+/** Cloudflare Workers AI's OpenAI-compatible endpoint for an account — the last backup for AI text. */
+export const cloudflareAiBase = (accountId: string): string => `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/v1`
+export const CLOUDFLARE_CHAT_MODEL = '@cf/openai/gpt-oss-120b'
 // Full large-v3, not the "-turbo" distilled variant: turbo drops the decoder from 32 to 4
 // layers for ~8x speed, at a real accuracy cost on non-English/tonal languages like
 // Vietnamese. Transcription already happens after recording stops (not live/streaming),

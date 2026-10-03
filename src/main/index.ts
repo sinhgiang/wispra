@@ -58,7 +58,10 @@ import {
   generateMeetingContent,
   translateSegment,
   askMeetingChat,
-  resolveChatTarget
+  resolveBackupRoutes,
+  resolveChatTarget,
+  testCloudflare,
+  withBackupRoutes
 } from './postprocess'
 import { generateOutline } from './outline'
 import { outlineLanguage } from './outlineLogic'
@@ -395,17 +398,21 @@ async function requestMeetingSummary(session: MeetingSession): Promise<boolean> 
     const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
     const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
     const transcript = session.segments.map((s) => s.text).join(' ')
-    const result = await generateMeetingTitle(
-      transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken,
-      session.languageConfig?.summary,
-      {
-        onWait: (waitingUntil) => report({ sessionId: id, waitingUntil }),
-        onRateLimited: () => report({ sessionId: id, rateLimited: true }),
-        onDailyLimit: (dailyLimit) => report({ sessionId: id, dailyLimit })
-      }
+    // The main model, then the backups when one reaches its daily limit.
+    const { result, backupModel } = await withBackupRoutes(
+      resolveBackupRoutes(store.get()),
+      (route, onDailyLimit) =>
+        generateMeetingTitle(transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken, session.languageConfig?.summary, {
+          route,
+          onWait: (waitingUntil) => report({ sessionId: id, waitingUntil }),
+          onRateLimited: () => report({ sessionId: id, rateLimited: true }),
+          onDailyLimit
+        }),
+      (dailyLimit) => report({ sessionId: id, dailyLimit })
     )
     if (!result) return false
     summaryStatuses.delete(id)
+    meetingSessions.setBackupModel(id, 'summary', backupModel)
     meetingSessions.finishSummary(session.id, { title: result.title, summary: result.summary })
     return true
   } catch (err) {
@@ -463,16 +470,20 @@ async function generateSessionContent(
   try {
     const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
     const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
-    const result = await generateMeetingContent(
-      platform, transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken,
-      session.languageConfig?.[platform],
-      {
-        onWait: (waitingUntil) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, waitingUntil } satisfies MeetingContentStatus),
-        onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus),
-        onDailyLimit: (dailyLimit) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, dailyLimit } satisfies MeetingContentStatus)
-      }
+    // The main model, then the backups when one reaches its daily limit.
+    const { result, backupModel } = await withBackupRoutes(
+      resolveBackupRoutes(store.get()),
+      (route, onDailyLimit) =>
+        generateMeetingContent(platform, transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken, session.languageConfig?.[platform], {
+          route,
+          onWait: (waitingUntil) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, waitingUntil } satisfies MeetingContentStatus),
+          onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus),
+          onDailyLimit
+        }),
+      (dailyLimit) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, dailyLimit } satisfies MeetingContentStatus)
     )
     if (!result) return null
+    meetingSessions.setBackupModel(id, platform, backupModel)
 
     let patch: Partial<MeetingContent>
     if (result.platform === 'website') {
@@ -542,6 +553,7 @@ function getMindMapJobs(): MindMapJobs {
   mindMapJobs ??= createMindMapJobs({
     dir: join(app.getPath('userData'), 'mind-map-jobs'),
     getSession: (id) => meetingSessions.get(id) ?? undefined,
+    resolveBackups: () => resolveBackupRoutes(store.get()),
     // Mirrors generateSessionContent's provider/key resolution.
     resolveTarget: async () => {
       const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
@@ -603,7 +615,8 @@ function generateSessionOutline(id: string, options?: { regenerate?: boolean }):
         language,
         (progress) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress),
         // Sent before the failure, so the Transcript tab can say it was the daily limit.
-        (dailyLimit) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, phase: 'outline', done: 0, total: 0, dailyLimit } satisfies OutlineProgress)
+        (dailyLimit) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, phase: 'outline', done: 0, total: 0, dailyLimit } satisfies OutlineProgress),
+        resolveBackupRoutes(store.get())
       )
       if (!outline) return null
       meetingSessions.setOutline(id, outline)
@@ -995,6 +1008,9 @@ function wireIpc(): void {
     return result
   })
 
+  ipcMain.handle(IPC.TEST_CLOUDFLARE, (_event, accountId: string, apiToken: string) =>
+    testCloudflare(String(accountId ?? ''), String(apiToken ?? ''))
+  )
   ipcMain.handle(
     IPC.TEST_API_KEY,
     (_event, provider: string, apiKey: string, localBaseUrl?: string): Promise<ApiKeyTestResult> => {

@@ -15,11 +15,30 @@ import type { DailyLimitInfo } from '@shared/types'
 
 export interface RateLimitInfo {
   scope: 'minute' | 'day'
-  unit?: 'tokens' | 'requests'
+  unit?: 'tokens' | 'requests' | 'neurons'
   limit?: number
   used?: number
   /** How long the provider asks to wait (ms). */
   retryAfterMs: number
+}
+
+/**
+ * Cloudflare Workers AI's free plan ends for the day with an error about the "daily free
+ * allocation" of neurons (wording taken from its documentation's description; the exact
+ * text of a live answer has not been seen). It resets at 00:00 UTC.
+ */
+const DAILY_ALLOCATION = /daily (?:free )?allocation|\bneurons?\b/i
+
+/** True when an error answer (any status) is a daily allocation running out. */
+export function isDailyAllocation(body: string): boolean {
+  return DAILY_ALLOCATION.test(providerMessage(body))
+}
+
+/** The next 00:00 UTC, ms from now. */
+function untilUtcMidnight(now = Date.now()): number {
+  const next = new Date(now)
+  next.setUTCHours(24, 0, 0, 0)
+  return next.getTime() - now
 }
 
 /** A wait this long can only be a daily limit, even when the message does not say so. */
@@ -49,10 +68,18 @@ function waitFromMessage(message: string): number | undefined {
 export function parseRateLimit(retryAfter: string | null, body: string): RateLimitInfo {
   const message = providerMessage(body)
   const header = Number(retryAfter)
-  const retryAfterMs = Number.isFinite(header) && header > 0 ? header * 1000 : (waitFromMessage(message) ?? 5000)
-  const named = /per day|\((?:TPD|RPD)\)/i.test(message) ? 'day' : /per minute|\((?:TPM|RPM)\)/i.test(message) ? 'minute' : null
+  const allocation = DAILY_ALLOCATION.test(message)
+  const retryAfterMs =
+    Number.isFinite(header) && header > 0 ? header * 1000 : (waitFromMessage(message) ?? (allocation ? untilUtcMidnight() : 5000))
+  const named = /per day|\((?:TPD|RPD)\)|daily/i.test(message) ? 'day' : /per minute|\((?:TPM|RPM)\)/i.test(message) ? 'minute' : null
   const scope = named ?? (retryAfterMs >= DAY_SCOPE_MIN_WAIT_MS ? 'day' : 'minute')
-  const unit = /tokens per|\(TP[MD]\)/i.test(message) ? 'tokens' : /requests per|\(RP[MD]\)/i.test(message) ? 'requests' : undefined
+  const unit = /tokens per|\(TP[MD]\)/i.test(message)
+    ? 'tokens'
+    : /requests per|\(RP[MD]\)/i.test(message)
+      ? 'requests'
+      : /\bneurons?\b/i.test(message)
+        ? 'neurons'
+        : undefined
   const numbers = /Limit\s*:?\s*(\d+)\s*,\s*Used\s*:?\s*(\d+)/i.exec(message)
   const info: RateLimitInfo = { scope, retryAfterMs }
   if (unit) info.unit = unit

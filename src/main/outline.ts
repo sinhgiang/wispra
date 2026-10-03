@@ -6,7 +6,7 @@ import {
 } from '@shared/constants'
 import type { DailyLimitInfo, MeetingOutline, MeetingSegment, OutlineProgress } from '@shared/types'
 import { ANTI_FABRICATION_RULE, languageName, type ChatTarget } from './postprocess'
-import { callJson, mapLimited, JSON_ONLY, TRANSCRIPT_FORMAT, type JsonCallControl } from './mindMap'
+import { createRouter, mapLimited, JSON_ONLY, TRANSCRIPT_FORMAT, type JsonCallControl } from './mindMap'
 import { buildTranscriptLines, formatLine, linesLength, splitIntoParts, type TranscriptLine } from './mindMapLogic'
 import { applyMerge, assembleOutline, describeForMerge, parseOutline, type RefOutline } from './outlineLogic'
 
@@ -81,30 +81,45 @@ export async function generateOutline(
   language: string,
   onProgress?: (progress: Omit<OutlineProgress, 'sessionId'>) => void,
   /** Told when a call stopped at the provider's daily limit (not waited out), before null is returned. */
-  onDailyLimit?: (info: DailyLimitInfo) => void
+  onDailyLimit?: (info: DailyLimitInfo) => void,
+  /** Routes to go on with when the one before reaches its daily limit (see resolveBackupRoutes). */
+  backups: ChatTarget[] = []
 ): Promise<MeetingOutline | null> {
   // No deadline: a per-minute limit keeps the few short waits it always had.
   const control: JsonCallControl = { onFailure: (failure) => failure.daily && onDailyLimit?.(failure.daily) }
+  let progress: Omit<OutlineProgress, 'sessionId'> = { phase: 'outline', done: 0, total: 1 }
+  const report = (next: Omit<OutlineProgress, 'sessionId'>): void => {
+    progress = { ...next, ...(progress.backupModel ? { backupModel: progress.backupModel } : {}) }
+    onProgress?.(progress)
+  }
+  // The main route, then backups when one reaches its daily limit.
+  const router = createRouter(target, backups, (route) => {
+    progress = { ...progress, backupModel: route.label }
+    onProgress?.(progress)
+  })
+  const finish = (outline: MeetingOutline): MeetingOutline => {
+    const backupModel = router.usedBackup()
+    return backupModel ? { ...outline, backupModel } : outline
+  }
   const lines = buildTranscriptLines(segments)
   if (lines.length === 0) return null
 
   if (linesLength(lines) <= MIND_MAP_SINGLE_PASS_CHARS) {
-    onProgress?.({ phase: 'outline', done: 0, total: 1 })
-    const raw = await callJson(target, `${SINGLE_PROMPT}\n${languageRule(language, 'transcript')}`, transcriptOf(lines), SINGLE_MAX_TOKENS, 'transcript outline', control)
+    report({ phase: 'outline', done: 0, total: 1 })
+    const raw = await router.call(`${SINGLE_PROMPT}\n${languageRule(language, 'transcript')}`, transcriptOf(lines), SINGLE_MAX_TOKENS, 'transcript outline', control)
     const outline = raw && parseOutline(raw, lines)
     if (!outline) return null
-    return assembleOutline(outline, lines, language, new Date().toISOString())
+    return finish(assembleOutline(outline, lines, language, new Date().toISOString()))
   }
 
   const parts = splitIntoParts(lines, MIND_MAP_PART_CHARS, MIND_MAP_MAX_PARTS)
   let done = 0
   // One part that cannot be outlined fails the whole outline, so the parts still waiting are skipped.
   let failed = false
-  onProgress?.({ phase: 'outline', done, total: parts.length })
+  report({ phase: 'outline', done, total: parts.length })
   const outlines = await mapLimited(parts, MIND_MAP_CONCURRENCY, async (part, index): Promise<RefOutline | null> => {
     if (failed) return null
-    const raw = await callJson(
-      target,
+    const raw = await router.call(
       `${PART_PROMPT}\n${languageRule(language, 'transcript')}`,
       `This is part ${index + 1} of ${parts.length}.\n\n${transcriptOf(part)}`,
       PART_MAX_TOKENS,
@@ -116,7 +131,7 @@ export async function generateOutline(
       failed = true
       return null
     }
-    onProgress?.({ phase: 'outline', done: ++done, total: parts.length })
+    report({ phase: 'outline', done: ++done, total: parts.length })
     return outline
   })
   if (outlines.some((o) => o === null)) return null
@@ -128,8 +143,8 @@ export async function generateOutline(
     all.speakers.push(...outline.speakers)
   }
 
-  onProgress?.({ phase: 'merge', done: parts.length, total: parts.length })
-  const merged = await callJson(target, `${MERGE_PROMPT}\n${languageRule(language, 'lists')}`, describeForMerge(all, lines), MERGE_MAX_TOKENS, 'transcript outline merge', control)
+  report({ phase: 'merge', done: parts.length, total: parts.length })
+  const merged = await router.call(`${MERGE_PROMPT}\n${languageRule(language, 'lists')}`, describeForMerge(all, lines), MERGE_MAX_TOKENS, 'transcript outline merge', control)
   if (merged) all = applyMerge(merged, all)
-  return assembleOutline(all, lines, language, new Date().toISOString())
+  return finish(assembleOutline(all, lines, language, new Date().toISOString()))
 }

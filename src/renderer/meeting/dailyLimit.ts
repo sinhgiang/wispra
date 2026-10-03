@@ -21,7 +21,7 @@ function inAbout(ms: number): string {
  * 200,000 tokens used today. It resets in about 18 min (at 7:42 PM)."
  */
 export function dailyLimitText(info: DailyLimitInfo, now = Date.now()): string {
-  const unit = info.unit === 'requests' ? 'requests' : 'tokens'
+  const unit = info.unit === 'requests' ? 'requests' : info.unit === 'neurons' ? 'neurons (Cloudflare Workers AI)' : 'tokens'
   const numbers =
     info.used !== undefined && info.limit !== undefined
       ? ` ${info.used.toLocaleString()} of ${info.limit.toLocaleString()} ${unit} used today.`

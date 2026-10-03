@@ -131,6 +131,11 @@ function buildSections(
 }
 
 function progressText(progress: OutlineProgress | null): string {
+  const text = progressSentence(progress)
+  return progress?.backupModel ? `${text} (backup model ${progress.backupModel} — the main model reached its daily limit)` : text
+}
+
+function progressSentence(progress: OutlineProgress | null): string {
   if (!progress || progress.total <= 1) return 'Finding topics and action items…'
   if (progress.phase === 'merge') return 'Finding topics and action items… joining the parts'
   return `Finding topics and action items… part ${Math.min(progress.done + 1, progress.total)} of ${progress.total}`
@@ -344,6 +349,9 @@ export function TranscriptColumns({
           {hasOutline && byTopic && <span className="txc-col-actions">{actionsHeader}</span>}
         </div>
 
+        {outline?.backupModel && !generating && (
+          <div className="txc-backup-note">Topics and action items partly written by the backup model {outline.backupModel}.</div>
+        )}
         {(generating || (failed && !generating)) && (
           <div className={generating ? 'txc-status' : 'txc-status txc-status-failed'} role="status">
             {generating ? (

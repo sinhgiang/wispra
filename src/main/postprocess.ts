@@ -1,8 +1,16 @@
-import { GROQ_API_BASE, LANGUAGES, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
+import {
+  CLOUDFLARE_CHAT_MODEL,
+  cloudflareAiBase,
+  GROQ_API_BASE,
+  GROQ_BACKUP_CHAT_MODEL,
+  LANGUAGES,
+  OPENAI_API_BASE,
+  WISPRA_API_BASE
+} from '@shared/constants'
 import type { ContentPlatform, DailyLimitInfo, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
 import type { CorrectionHint } from './lexiconLogic'
 import { aiQuota } from './aiQuota'
-import { dailyLimitInfo, parseRateLimit } from './rateLimit'
+import { dailyLimitInfo, isDailyAllocation, parseRateLimit } from './rateLimit'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -269,6 +277,65 @@ export interface ChatTarget {
   apiKey: string
   base: string
   model: string
+  /** False for a provider whose JSON mode this model does not support (Cloudflare Workers AI): ask in plain mode and take the JSON out of the text. */
+  jsonMode?: boolean
+  /** Set on a backup route only: how the UI names it ("Groq gpt-oss-20b"). */
+  label?: string
+}
+
+/**
+ * The backups for AI text, in order, after the main route of resolveChatTarget: Groq's
+ * smaller model on the user's own Groq key (its daily allowance is separate), then
+ * Cloudflare Workers AI when an account id and token are saved. Switched to only when
+ * the route before has reached its daily limit — never for a per-minute limit.
+ * Transcription is not affected: it stays on the chosen provider.
+ */
+export function resolveBackupRoutes(settings: {
+  provider: SttProvider
+  groqApiKey: string
+  cloudflareAccountId?: string
+  cloudflareApiToken?: string
+}): ChatTarget[] {
+  const routes: ChatTarget[] = []
+  if (settings.provider === 'groq' && settings.groqApiKey) {
+    routes.push({ apiKey: settings.groqApiKey, base: GROQ_API_BASE, model: GROQ_BACKUP_CHAT_MODEL, label: 'Groq gpt-oss-20b' })
+  }
+  const accountId = settings.cloudflareAccountId?.trim()
+  const token = settings.cloudflareApiToken?.trim()
+  if ((settings.provider === 'groq' || settings.provider === 'proxy') && accountId && token) {
+    routes.push({ apiKey: token, base: cloudflareAiBase(accountId), model: CLOUDFLARE_CHAT_MODEL, jsonMode: false, label: 'Cloudflare Workers AI (gpt-oss-120b)' })
+  }
+  return routes
+}
+
+/**
+ * Runs `attempt` on the main route, then on each backup in turn while the one before
+ * stopped at its DAILY limit. `attempt` gets the route (undefined = the main one) and an
+ * onDailyLimit to call; the daily limit of the last route tried is handed to
+ * `onFinalDailyLimit`. Returns the result and, when a backup produced it, its label.
+ */
+export async function withBackupRoutes<T>(
+  backups: ChatTarget[],
+  attempt: (route: ChatTarget | undefined, onDailyLimit: (info: DailyLimitInfo) => void) => Promise<T | null>,
+  onFinalDailyLimit?: (info: DailyLimitInfo) => void
+): Promise<{ result: T | null; backupModel?: string }> {
+  const routes: Array<ChatTarget | undefined> = [undefined, ...backups]
+  let daily: DailyLimitInfo | null = null
+  for (const route of routes) {
+    daily = null
+    const result = await attempt(route, (info) => (daily = info))
+    if (result) return { result, backupModel: route?.label }
+    if (!daily) return { result: null }
+  }
+  if (daily) onFinalDailyLimit?.(daily)
+  return { result: null }
+}
+
+/** The JSON object in a plain-mode answer: the text between its first "{" and last "}". */
+function jsonTextOf(raw: string): string {
+  const from = raw.indexOf('{')
+  const to = raw.lastIndexOf('}')
+  return from >= 0 && to > from ? raw.slice(from, to + 1) : raw
 }
 
 /**
@@ -482,7 +549,11 @@ export async function generateMeetingTitle(
   let base: string
   let model: string
 
-  if (provider === 'local') {
+  if (hooks.route) {
+    apiKey = hooks.route.apiKey
+    base = hooks.route.base
+    model = hooks.route.model
+  } else if (provider === 'local') {
     apiKey = 'local'
     base = localBaseUrl ?? 'http://localhost:11434/v1'
     model = localLlmModel ?? 'llama3.2'
@@ -529,10 +600,10 @@ export async function generateMeetingTitle(
         // margin, same order of magnitude as the website article's budget.
         max_tokens: 6000,
         temperature: 0.3,
-        response_format: { type: 'json_object' }
+        ...(hooks.route?.jsonMode === false ? {} : { response_format: { type: 'json_object' } })
       }),
       signal: AbortSignal.timeout(MEETING_TITLE_TIMEOUT_MS)
-    }), hooks, provider === 'proxy', 'title generation')
+    }), hooks, hooks.route ? hooks.route.base.startsWith(WISPRA_API_BASE) : provider === 'proxy', 'title generation')
     if (!response) return null
     if (!response.ok) {
       console.error(`[meeting] title generation: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
@@ -548,7 +619,7 @@ export async function generateMeetingTitle(
 
     // Some models add a code fence around JSON despite instructions not to — strip it.
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-    const parsed = JSON.parse(cleaned) as { title?: string; summary?: string }
+    const parsed = JSON.parse(hooks.route?.jsonMode === false ? jsonTextOf(cleaned) : cleaned) as { title?: string; summary?: string }
     const title = parsed.title?.trim()
     if (!title) {
       console.error('[meeting] title generation: response JSON had no title field')
@@ -695,7 +766,17 @@ async function sendWaitingOutRateLimits(
   let waited = 0
   for (;;) {
     const response = await send()
-    if (response.status !== 429) return response
+    if (response.status !== 429) {
+      if (!response.ok) {
+        const text = await response.clone().text().catch(() => '')
+        if (isDailyAllocation(text)) {
+          console.error(`[meeting] ${what}: HTTP ${response.status} — ${text.slice(0, 300)}`)
+          hooks.onDailyLimit?.(dailyLimitInfo(parseRateLimit(response.headers.get('retry-after'), text), viaCloud))
+          return null
+        }
+      }
+      return response
+    }
     const body = await response.text().catch(() => '')
     console.error(`[meeting] ${what}: HTTP 429 — ${body.slice(0, 300)}`)
     const limit = parseRateLimit(response.headers.get('retry-after'), body)
@@ -723,6 +804,8 @@ export interface ContentRequestHooks {
   onDailyLimit?: (info: DailyLimitInfo) => void
   /** Total waiting allowed (default CONTENT_RATE_LIMIT_BUDGET_MS); a test passes less. */
   budgetMs?: number
+  /** Send to this route (a backup — see resolveBackupRoutes) instead of the one `provider` points at. */
+  route?: ChatTarget
 }
 
 export async function generateMeetingContent(
@@ -745,7 +828,11 @@ export async function generateMeetingContent(
   let base: string
   let model: string
 
-  if (provider === 'local') {
+  if (hooks.route) {
+    apiKey = hooks.route.apiKey
+    base = hooks.route.base
+    model = hooks.route.model
+  } else if (provider === 'local') {
     apiKey = 'local'
     base = localBaseUrl ?? 'http://localhost:11434/v1'
     model = localLlmModel ?? 'llama3.2'
@@ -785,12 +872,12 @@ export async function generateMeetingContent(
             ],
             max_tokens: CONTENT_MAX_TOKENS[platform],
             temperature: 0.5,
-            response_format: { type: 'json_object' }
+            ...(hooks.route?.jsonMode === false ? {} : { response_format: { type: 'json_object' } })
           }),
           signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
         }),
       hooks,
-      provider === 'proxy',
+      hooks.route ? hooks.route.base.startsWith(WISPRA_API_BASE) : provider === 'proxy',
       `${platform} content generation`
     )
     if (!response) return null
@@ -809,7 +896,7 @@ export async function generateMeetingContent(
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
 
     if (platform === 'website') {
-      const parsed = JSON.parse(cleaned) as { title?: string; metaDescription?: string; body?: string }
+      const parsed = JSON.parse(hooks.route?.jsonMode === false ? jsonTextOf(cleaned) : cleaned) as { title?: string; metaDescription?: string; body?: string }
       const title = parsed.title?.trim()
       const body = parsed.body?.trim()
       if (!title || !body) {
@@ -824,7 +911,7 @@ export async function generateMeetingContent(
       }
     }
 
-    const parsed = JSON.parse(cleaned) as { posts?: string[] }
+    const parsed = JSON.parse(hooks.route?.jsonMode === false ? jsonTextOf(cleaned) : cleaned) as { posts?: string[] }
     const posts = (parsed.posts ?? []).map((p) => normalizeEscapes(p.trim())).filter(Boolean)
     if (posts.length === 0) {
       console.error(`[meeting] ${platform} content generation: response JSON had no posts`)
@@ -1046,5 +1133,36 @@ export async function askMeetingChat(
   } catch (err) {
     console.error('[meeting] chat failed:', err)
     return null
+  }
+}
+
+/**
+ * Tries a Cloudflare account id + API token on Workers AI with one tiny request, before
+ * they are saved. Never logs or returns the token.
+ */
+export async function testCloudflare(accountId: string, apiToken: string): Promise<{ ok: boolean; error?: string }> {
+  const id = accountId.trim()
+  const token = apiToken.trim()
+  if (!id || !token) return { ok: false, error: 'Enter both the Account ID and the API token.' }
+  try {
+    const response = await fetch(`${cloudflareAiBase(id)}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: CLOUDFLARE_CHAT_MODEL, messages: [{ role: 'user', content: 'Reply with OK.' }], max_tokens: 16 }),
+      signal: AbortSignal.timeout(20_000)
+    })
+    if (response.ok) return { ok: true }
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, error: 'Cloudflare did not accept this token for Workers AI. Create it with "Create a Workers AI API Token" on the Workers AI page of the Cloudflare dashboard (permissions Workers AI Read and Edit).' }
+    }
+    if (response.status === 404 || response.status === 400) {
+      return { ok: false, error: `Cloudflare answered HTTP ${response.status} — check the Account ID.` }
+    }
+    if (isDailyAllocation(await response.text().catch(() => ''))) {
+      return { ok: false, error: "This Cloudflare account has used today's free Workers AI allocation. Try again after 00:00 UTC." }
+    }
+    return { ok: false, error: `Cloudflare answered HTTP ${response.status}.` }
+  } catch {
+    return { ok: false, error: 'Could not reach Cloudflare — check your connection.' }
   }
 }

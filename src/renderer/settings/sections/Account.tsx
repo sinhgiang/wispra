@@ -128,6 +128,71 @@ function AiRouteChoice({ settings, signedIn }: { settings: Settings; signedIn: b
   )
 }
 
+/**
+ * Backups for AI text when the main model reaches its DAILY limit: Groq's smaller model
+ * (automatic, same key), then Cloudflare Workers AI once an account id and token are
+ * saved here. The two values are tested before saving and never shown again.
+ */
+function AiBackupSection({ settings }: { settings: Settings }): React.JSX.Element {
+  const saved = !!(settings.cloudflareAccountId && settings.cloudflareApiToken)
+  const [accountId, setAccountId] = useState('')
+  const [token, setToken] = useState('')
+  const [status, setStatus] = useState<{ kind: 'busy' | 'err'; text: string } | null>(null)
+
+  async function testAndSave(): Promise<void> {
+    setStatus({ kind: 'busy', text: 'Testing with Cloudflare…' })
+    const result = await window.api.testCloudflare(accountId.trim(), token.trim())
+    if (!result.ok) {
+      setStatus({ kind: 'err', text: result.error ?? 'Cloudflare did not accept these.' })
+      return
+    }
+    await window.api.setSettings({ cloudflareAccountId: accountId.trim(), cloudflareApiToken: token.trim() })
+    setAccountId('')
+    setToken('')
+    setStatus(null)
+  }
+
+  return (
+    <div className="ai-route ai-backup">
+      <div className="ai-route-title">Backup when the AI reaches its daily limit</div>
+      <p className="ai-route-note">
+        Mind maps, Transcript topics, summaries and posts: when Groq&apos;s gpt-oss-120b reaches its daily limit on your own
+        key, Wispra goes on with Groq&apos;s smaller gpt-oss-20b (its own daily allowance), then with Cloudflare Workers AI if
+        it is set up below. Each result says when a backup model wrote it. Transcription always stays on Groq.
+      </p>
+      {saved ? (
+        <div className="ai-route-key ai-backup-key">
+          <span className="ai-route-status">Cloudflare Workers AI is set up.</span>
+          <button onClick={() => void window.api.setSettings({ cloudflareAccountId: '', cloudflareApiToken: '' })}>Remove</button>
+        </div>
+      ) : (
+        <div className="ai-route-key ai-backup-key">
+          <input
+            type="password"
+            placeholder="Cloudflare Account ID"
+            value={accountId}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setAccountId(e.target.value)}
+          />
+          <input
+            type="password"
+            placeholder="Cloudflare API token (Workers AI)"
+            value={token}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <button className="primary" disabled={!accountId.trim() || !token.trim() || status?.kind === 'busy'} onClick={() => void testAndSave()}>
+            Test and save
+          </button>
+          {status && <span className={`ai-route-status ${status.kind}`}>{status.text}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function AccountSection({ settings }: { settings: Settings }): React.JSX.Element {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null | 'loading'>('loading')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -395,6 +460,7 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
       )}
 
       <AiRouteChoice settings={settings} signedIn={isLoggedIn} />
+      <AiBackupSection settings={settings} />
 
       {/* ── Cloud sync ─────────────────────────────────────────── */}
       {isLoggedIn && (
