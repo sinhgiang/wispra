@@ -130,6 +130,9 @@ async function main(): Promise<void> {
   await app.whenReady()
 
   store.load()
+  // The first start of a version that limits automatic AI to new recordings: recordings
+  // made before now keep their AI work behind "Create" buttons (see Settings.autoAiSince).
+  if (!store.get().autoAiSince) store.set({ autoAiSince: new Date().toISOString() })
   history.load()
   lexicon.load()
   suggestions.load()

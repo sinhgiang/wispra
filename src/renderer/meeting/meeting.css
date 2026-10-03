@@ -2225,6 +2225,17 @@
 .meeting-session-map-tag.done { color: #16a34a; }
 .meeting-session-map-tag.stopped { color: #b45309; }
 
+/* An older recording's Transcript: topics and action items only when asked for. */
+.txc-create {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.txc-create .meeting-create-btn {
+  flex: none;
+}
+
 .mm-overlay-foot {
   font-size: 11.5px;
   color: var(--text-3);
