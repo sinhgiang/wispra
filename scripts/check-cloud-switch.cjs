@@ -187,7 +187,7 @@ async function partB() {
   }
   const option = (name) => `[...document.querySelectorAll('.ai-route-option')].find((o) => o.textContent.includes(${JSON.stringify(name)}))`
   const state = () =>
-    js(`(() => { const o = (n) => { const el = [...document.querySelectorAll('.ai-route-option')].find((x) => x.textContent.includes(n)); return el ? { checked: el.querySelector('input').checked, disabled: el.querySelector('input').disabled } : null }; return { cloud: o('Use Wispra Cloud'), own: o('Use my own Groq API key'), text: (document.querySelector('.ai-route') || {}).innerText || '', keyField: !!document.querySelector('.ai-route-key input') } })()`)
+    js(`(() => { const o = (n) => { const el = [...document.querySelectorAll('.ai-route-option')].find((x) => x.textContent.includes(n)); return el ? { checked: el.querySelector('input').checked, disabled: el.querySelector('input').disabled } : null }; return { cloud: o('Use Wispra Cloud'), own: o('Use my own Groq API key'), text: (document.querySelector('.ai-route') || {}).innerText || '', keyField: !!document.querySelector('.ai-route-key:not(.ai-backup-key) input') } })()`)
   const leaks = () => js(`document.body.innerText.includes(${JSON.stringify(OWN_KEY)}) || [...document.querySelectorAll('input')].some((i) => i.value.includes(${JSON.stringify(OWN_KEY)}))`)
   // Opens the Settings window on its first tab, then goes to `tab` (Account / Transcribe) the way a user does.
   const load = async (tab) => {
@@ -231,9 +231,9 @@ async function partB() {
   await click(option('Use my own Groq API key'))
   s = await state()
   check('…choosing the own key asks for one instead of switching to a route that cannot work', s.keyField && patches.length === 0)
-  await js(`(() => { const i = document.querySelector('.ai-route-key input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'placeholder-new-key'); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+  await js(`(() => { const i = document.querySelector('.ai-route-key:not(.ai-backup-key) input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'placeholder-new-key'); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
   await sleep(100)
-  await click(`[...document.querySelectorAll('.ai-route-key button')].find((b) => b.textContent.includes('Save key'))`, 600)
+  await click(`[...document.querySelectorAll('.ai-route-key:not(.ai-backup-key) button')].find((b) => b.textContent.includes('Save key'))`, 600)
   s = await state()
   check('…the key is tested, saved, and the own-key route chosen', keyTests.length === 1 && keyTests[0].provider === 'groq' && keyTests[0].sameAsTyped && patches.length === 1 && patches[0].provider === 'groq' && patches[0].groqApiKey === 'placeholder-new-key' && s.own.checked && !s.keyField, { keyTests, patchKeys: patches.map((p) => Object.keys(p)) })
 

@@ -43,6 +43,9 @@ export interface Settings {
   provider: SttProvider
   groqApiKey: string
   openaiApiKey: string
+  /** Cloudflare Workers AI, the last backup for AI text (see resolveBackupRoutes): account id and an API token with Workers AI permission. Never shown again once saved. */
+  cloudflareAccountId: string
+  cloudflareApiToken: string
   /** Electron accelerator string, e.g. "CommandOrControl+Shift+Space". */
   hotkey: string
   /** ISO-639-1 code ("vi", "en", ...) or "auto" for automatic detection. */
@@ -424,6 +427,8 @@ export interface MeetingSession {
   outline?: MeetingOutline
   /** Speaker names the user typed, by paragraph (the id of the paragraph's first segment). Wins over the outline's names; an empty string means "no name here". */
   speakerNames?: Record<string, string>
+  /** Summary and Website / social posts written by a backup model (main model at its daily limit) — that model's name, per item. */
+  backupModels?: Partial<Record<'summary' | ContentPlatform, string>>
   /** AI-generated mind map of the whole recording (see generateMindMap in mindMap.ts), built the first time the Mind map tab is opened and cached here. Undefined until generated. */
   mindMap?: MeetingMindMap
 }
@@ -462,6 +467,8 @@ export interface MindMapNode {
 export interface MeetingMindMap {
   /** Centre of the map. */
   title: string
+  /** Some of the map was written by this backup model, after the main model reached its daily limit. */
+  backupModel?: string
   note?: string
   /** Main branches: topics in time order, then Decisions / Action items / Open questions when the recording has them. */
   branches: MindMapNode[]
@@ -477,6 +484,8 @@ export interface MeetingMindMap {
  * are written in `language`, which follows the session's "Summary" language choice.
  */
 export interface MeetingOutline {
+  /** Some of it was written by this backup model, after the main model reached its daily limit. */
+  backupModel?: string
   /** Sections of the transcript, in order, contiguous and covering all of it. */
   topics: Array<{ title: string; startSegmentId: string; endSegmentId: string }>
   /** Tasks stated in the recording, each pointing at the paragraph where it is said. Empty when there are none. */
@@ -495,7 +504,8 @@ export interface MeetingOutline {
  * numbers. See parseRateLimit in rateLimit.ts.
  */
 export interface DailyLimitInfo {
-  unit: 'tokens' | 'requests'
+  /** Groq counts tokens or requests per day; Cloudflare Workers AI counts "neurons". */
+  unit: 'tokens' | 'requests' | 'neurons'
   used?: number
   limit?: number
   /** When the provider says it accepts requests again (ms since epoch). */
@@ -515,6 +525,8 @@ export interface MindMapProgress {
   waitingUntil?: number
   /** Set when the run stopped at the provider's daily limit (mind map: with reason "daily-limit"; transcript outline: before it reports failure). */
   dailyLimit?: DailyLimitInfo
+  /** The main model reached its daily limit and the run goes on with this backup (e.g. "Groq gpt-oss-20b"). */
+  backupModel?: string
 }
 
 /**

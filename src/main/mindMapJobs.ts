@@ -41,6 +41,8 @@ export interface MindMapJobsDeps {
   getSession: (id: string) => MeetingSession | undefined
   /** The chat endpoint to use right now, or null when there is no key / the user is signed out. */
   resolveTarget: () => Promise<ChatTarget | null>
+  /** Routes to go on with when the one before reaches its daily limit (see resolveBackupRoutes). */
+  resolveBackups?: () => ChatTarget[]
   saveMindMap: (id: string, mindMap: MeetingMindMap) => void
   /** Called on every change of a job's status. */
   notify: (status: MindMapJobStatus) => void
@@ -162,6 +164,7 @@ export function createMindMapJobs(deps: MindMapJobsDeps): MindMapJobs {
       const result = await runMindMap(session.segments, target, language, {
         resume: previous ? { signature: previous.signature, parts: previous.parts } : undefined,
         limits: deps.limits,
+        backups: deps.resolveBackups?.() ?? [],
         gate,
         onPlan: (signature, total) => {
           // A transcript or language that changed since the kept parts were made: they do not apply.

@@ -525,6 +525,10 @@ button:disabled {
   color: var(--text-2);
   margin: 0;
 }
+.ai-backup-warning strong {
+  color: var(--text);
+}
+
 .ai-route-key {
   display: flex;
   gap: 8px;

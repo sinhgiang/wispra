@@ -339,6 +339,12 @@ const WAITING_TEXT = "Waiting for the AI provider's per-minute limit, then tryin
 const RATE_LIMITED_TEXT =
   "The AI provider's per-minute limit was still reached after waiting a few minutes — often because a mind map is being built with the same key. Try again in a minute."
 
+/** Says that a backup model wrote what follows (the main model was at its daily limit). Nothing when the main model did. */
+function BackupModelNote({ model }: { model: string | undefined }): ReactElement | null {
+  if (!model) return null
+  return <p className="meeting-backup-note">Written by the backup model {model} — the main model had reached its daily limit.</p>
+}
+
 /** How each social platform is named in the "Create …" button and the messages around it. */
 const PLATFORM_NAMES: Record<Exclude<ContentPlatform, 'website'>, string> = {
   facebook: 'Facebook',
@@ -461,6 +467,8 @@ export function MeetingPanel(): React.JSX.Element {
   const [pastView, setPastView] = useState<PastView>('transcript')
   /** On-demand-generated ready-to-post content for the session being viewed, cached on the session itself once generated (see setContent in meetingSessions.ts). */
   const [pastContent, setPastContent] = useState<MeetingContent | undefined>(undefined)
+  /** Which backup model wrote the viewed session's summary / posts, when the main model was at its daily limit. */
+  const [pastBackupModels, setPastBackupModels] = useState<MeetingSession['backupModels']>(undefined)
   /** Topics, action items and speaker names of the session being viewed (see MeetingOutline) — what the Transcript tab's columns are built from. */
   const [pastOutline, setPastOutline] = useState<MeetingOutline | undefined>(undefined)
   const [outlineGenerating, setOutlineGenerating] = useState(false)
@@ -765,6 +773,7 @@ export function MeetingPanel(): React.JSX.Element {
         setPastStatus(session.status)
         setPastSummary(session.summary ?? '')
         setPastContent(session.content)
+        setPastBackupModels(session.backupModels)
         setPastChat(session.chat ?? [])
         // Same map, new object (this broadcast fires for every session change, e.g. a
         // chat answer): keep the old reference so the drawn map is not rebuilt.
@@ -878,6 +887,7 @@ export function MeetingPanel(): React.JSX.Element {
       setPastStatus(full.status)
       setPastSummary(full.summary ?? '')
       setPastContent(full.content)
+      setPastBackupModels(full.backupModels)
       setPastChat(full.chat ?? [])
       setPastMindMap(full.mindMap)
       setPastOutline(full.outline)
@@ -1705,7 +1715,10 @@ export function MeetingPanel(): React.JSX.Element {
               ) : pastView === 'summary' ? (
                 <div className="meeting-summary-view">
                   {pastSummary ? (
-                    renderSummaryBlocks(pastSummary)
+                    <>
+                      <BackupModelNote model={pastBackupModels?.summary} />
+                      {renderSummaryBlocks(pastSummary)}
+                    </>
                   ) : (
                     <div className="meeting-transcript-empty">
                       <div>
@@ -1733,6 +1746,7 @@ export function MeetingPanel(): React.JSX.Element {
                 <div className="meeting-summary-view">
                   {pastContent?.website ? (
                     <>
+                      <BackupModelNote model={pastBackupModels?.website} />
                       <p className="meeting-content-seo-title">
                         <strong>SEO title ({pastContent.website.title.length} chars):</strong> {pastContent.website.title}
                       </p>
@@ -1790,9 +1804,12 @@ export function MeetingPanel(): React.JSX.Element {
                   ) : null}
                   <div className="meeting-summary-view">
                     {pastContent?.[pastView] ? (
-                      <p className="meeting-post-text">
-                        {renderInlineBold(pastContent[pastView]![variantIndex[pastView]], 'post')}
-                      </p>
+                      <>
+                        <BackupModelNote model={pastBackupModels?.[pastView]} />
+                        <p className="meeting-post-text">
+                          {renderInlineBold(pastContent[pastView]![variantIndex[pastView]], 'post')}
+                        </p>
+                      </>
                     ) : (
                       <div className="meeting-transcript-empty">
                         {failedPlatforms[pastView] ? (

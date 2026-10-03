@@ -30,6 +30,11 @@ function minutesLabel(ms: number): string {
 }
 
 function progressText(progress: MindMapJobStatus | null): string {
+  const text = progressSentence(progress)
+  return progress?.backupModel ? `${text} Using the backup model ${progress.backupModel} — the main model reached its daily limit.` : text
+}
+
+function progressSentence(progress: MindMapJobStatus | null): string {
   if (!progress || progress.total === 0) return 'Reading the transcript…'
   const waiting = progress.waitingUntil !== undefined && progress.waitingUntil > Date.now()
   if (progress.total === 1) return waiting ? "Waiting for the AI provider's per-minute limit…" : 'Building the map from the transcript…'
@@ -454,6 +459,12 @@ export function MindMapView({
               <span className="mm-btn-text">Fit</span>
             </button>
           </div>
+
+          {map.backupModel && (
+            <div className="mm-backup-note" title="The main model reached its daily limit while this map was being built">
+              Partly written by the backup model {map.backupModel}
+            </div>
+          )}
 
           <div className={hintHidden ? 'mm-hint hide' : 'mm-hint'}>
             Click a numbered circle to open a branch · click a node for details · scroll to zoom · drag to move

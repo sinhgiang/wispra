@@ -235,8 +235,9 @@ export async function callJson(
     return ++badAnswers < MAX_BAD_ANSWERS && !outOfTime()
   }
   for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
-    // The last try for a readable answer goes without JSON mode.
-    const jsonMode = badAnswers < MAX_BAD_ANSWERS - 1
+    // The last try for a readable answer goes without JSON mode; so does every try on a
+    // provider whose JSON mode this model does not have (Cloudflare Workers AI).
+    const jsonMode = target.jsonMode !== false && badAnswers < MAX_BAD_ANSWERS - 1
     try {
       const response = await aiQuota.fetch(`${target.base}/chat/completions`, {
         method: 'POST',
@@ -333,6 +334,45 @@ export async function callJson(
   return giveUp()
 }
 
+/**
+ * Sends JSON calls along a chain of routes: the main one, then backups (see
+ * resolveBackupRoutes). A call that stops at a route's DAILY limit moves the whole chain
+ * on to the next route and is asked again there; any other failure is returned as it is.
+ * Calls in flight on a route that just ran out move on too, without moving the chain twice.
+ */
+export function createRouter(main: ChatTarget, backups: ChatTarget[] = [], onSwitch?: (route: ChatTarget) => void) {
+  const routes = [main, ...backups]
+  let index = 0
+  let usedBackup: string | undefined
+  return {
+    /** The backup that answered at least one call, if any. */
+    usedBackup: (): string | undefined => usedBackup,
+    async call(system: string, user: string, maxTokens: number, what: string, control?: JsonCallControl): Promise<Record<string, unknown> | null> {
+      for (;;) {
+        const at = index
+        let failure: JsonCallFailure | null = null
+        const raw = await callJson(routes[at], system, user, maxTokens, what, {
+          ...control,
+          onFailure: (f) => {
+            failure = f
+            // A daily limit with a backup left is not this call's failure: it goes on there.
+            if (f.kind !== 'daily-limit' || at + 1 >= routes.length) control?.onFailure?.(f)
+          }
+        })
+        if (raw) {
+          if (routes[at].label) usedBackup = routes[at].label
+          return raw
+        }
+        if ((failure as JsonCallFailure | null)?.kind !== 'daily-limit' || at + 1 >= routes.length) return null
+        if (index === at) {
+          index = at + 1
+          onSwitch?.(routes[index])
+        }
+      }
+    }
+  }
+}
+
 /** Runs `task` over `items` with at most `limit` in flight, keeping results in order. */
 export async function mapLimited<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length)
@@ -377,6 +417,8 @@ export interface MindMapRunOptions {
   /** Awaited before every AI call, on top of the run's own pacing (e.g. "not while a dictation is being processed"). */
   gate?: () => Promise<void>
   limits?: Partial<MindMapLimits>
+  /** Routes to go on with when the one before reaches its daily limit (see resolveBackupRoutes). */
+  backups?: ChatTarget[]
 }
 
 export type MindMapRunResult = { map: MeetingMindMap; failure?: undefined } | { map: null; failure: MindMapRunFailure }
@@ -462,11 +504,16 @@ export async function runMindMap(
     }
   })
   const fail = (): MindMapRunResult => ({ map: null, failure: toRunFailure(lastFailure, totalDeadline) })
+  // The main route, then backups when one reaches its daily limit; the UI is told which backup is in use.
+  const router = createRouter(target, options.backups, (route) => report({ backupModel: route.label }))
+  const withBackup = (map: MeetingMindMap): MindMapRunResult => {
+    const backupModel = router.usedBackup()
+    return { map: backupModel ? { ...map, backupModel } : map }
+  }
 
   if (linesLength(lines) <= MIND_MAP_SINGLE_PASS_CHARS) {
     report({ phase: 'outline', done: 0, total: 1 })
-    const raw = await callJson(
-      target,
+    const raw = await router.call(
       `${SINGLE_PROMPT}\n${languageRule(language, 'transcript')}`,
       transcriptOf(lines),
       SINGLE_MAX_TOKENS,
@@ -479,8 +526,8 @@ export async function runMindMap(
       console.error('[meeting] mind map outline: response JSON had no topics')
       return { map: null, failure: { reason: 'bad-answer', detail: 'The AI answer had no topics.' } }
     }
-    return {
-      map: assembleMindMap({
+    return withBackup(
+      assembleMindMap({
         title: cleanTitle(raw.title) || outline.topics[0].label,
         note: cleanNote(raw.note),
         branches: outline.topics,
@@ -492,7 +539,7 @@ export async function runMindMap(
         language,
         generatedAt: new Date().toISOString()
       })
-    }
+    )
   }
 
   const parts = splitIntoParts(lines, MIND_MAP_PART_CHARS, MIND_MAP_MAX_PARTS)
@@ -511,8 +558,7 @@ export async function runMindMap(
   const outlineLines = async (part: TranscriptLine[], label: string, deadline: number, depth: number): Promise<Outline | null> => {
     const control = controlFor(deadline)
     let own: JsonCallFailure | null = null
-    const raw = await callJson(
-      target,
+    const raw = await router.call(
       `${PART_PROMPT}\n${languageRule(language, 'transcript')}`,
       `${label}\n\n${transcriptOf(part)}`,
       PART_MAX_TOKENS,
@@ -575,8 +621,7 @@ export async function runMindMap(
   }
 
   report({ phase: 'merge', done: parts.length, total: parts.length })
-  const merged = await callJson(
-    target,
+  const merged = await router.call(
     `${MERGE_PROMPT}\n${languageRule(language, 'lists')}`,
     describeForMerge(all, lines),
     MERGE_MAX_TOKENS,
@@ -589,8 +634,8 @@ export async function runMindMap(
     console.error('[meeting] mind map merge: response JSON had no usable branches')
     return { map: null, failure: { reason: 'bad-answer', detail: 'The AI answer for the final step was not usable.' } }
   }
-  return {
-    map: assembleMindMap({
+  return withBackup(
+    assembleMindMap({
       title: cleanTitle(merged.title) || branches[0].label,
       note: cleanNote(merged.note),
       branches,
@@ -602,7 +647,7 @@ export async function runMindMap(
       language,
       generatedAt: new Date().toISOString()
     })
-  }
+  )
 }
 
 /** runMindMap for a caller that only wants the map: null on any failure. */

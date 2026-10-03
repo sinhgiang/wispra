@@ -20,6 +20,8 @@ export const IPC = {
   SETTINGS_CHANGED: 'settings:changed',
   APPLY_HOTKEY: 'settings:apply-hotkey',
   TEST_API_KEY: 'settings:test-api-key',
+  // renderer -> main: try a Cloudflare account id + API token on Workers AI before they are saved; resolves ApiKeyTestResult
+  TEST_CLOUDFLARE: 'settings:test-cloudflare',
   GET_HISTORY: 'history:get',
   CLEAR_HISTORY: 'history:clear',
   HISTORY_CHANGED: 'history:changed',

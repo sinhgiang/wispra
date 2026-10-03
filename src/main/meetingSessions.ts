@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import type {
+  ContentPlatform,
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContent,
@@ -323,6 +324,19 @@ class MeetingSessions {
    * result instead of calling the LLM again. No-ops if the session was
    * deleted in the meantime.
    */
+  /** Notes which backup model wrote the summary or a platform's posts — or clears it (undefined) when the main model did. */
+  setBackupModel(id: string, item: 'summary' | ContentPlatform, model: string | undefined): void {
+    const session = this.get(id)
+    if (!session) return
+    if ((session.backupModels?.[item] ?? undefined) === model) return
+    const next = { ...session.backupModels }
+    if (model) next[item] = model
+    else delete next[item]
+    session.backupModels = Object.keys(next).length ? next : undefined
+    this.persist(session)
+    for (const fn of this.metaListeners) fn(session)
+  }
+
   setContent(id: string, patch: Partial<MeetingContent>): void {
     const session = this.get(id)
     if (!session) return

@@ -61,6 +61,8 @@ const api = {
     ipcRenderer.invoke(IPC.SET_SETTINGS, partial),
   applyHotkey: (accelerator: string): Promise<HotkeyResult> =>
     ipcRenderer.invoke(IPC.APPLY_HOTKEY, accelerator),
+  testCloudflare: (accountId: string, apiToken: string): Promise<ApiKeyTestResult> =>
+    ipcRenderer.invoke(IPC.TEST_CLOUDFLARE, accountId, apiToken),
   testApiKey: (provider: string, apiKey: string, localBaseUrl?: string): Promise<ApiKeyTestResult> =>
     ipcRenderer.invoke(IPC.TEST_API_KEY, provider, apiKey, localBaseUrl),
   onSettingsChanged: (cb: (settings: Settings) => void): void => {
