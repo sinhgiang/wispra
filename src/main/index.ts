@@ -57,6 +57,7 @@ import {
   resolveChatTarget
 } from './postprocess'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
+import { transcribeFileAt } from './transcribeFile'
 import { aiQuota } from './aiQuota'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
@@ -988,18 +989,14 @@ function wireIpc(): void {
   ipcMain.handle(
     IPC.TRANSCRIBE_FILE,
     async (_event, filePath: string, language: string): Promise<FileTranscribeResult> => {
-      try {
-        const { provider, groqApiKey, openaiApiKey, vocabulary } = store.get()
-        const buf = readFileSync(filePath)
-        const { text } = await transcribe(
-          new Uint8Array(buf), provider, groqApiKey, openaiApiKey, language, detectMime(filePath),
-          undefined, undefined, undefined, undefined, lexicon.sttTerms(vocabulary)
-        )
-        if (!text) return { ok: false, error: 'No speech detected in the file.' }
-        return { ok: true, text: lexicon.applyReplacements(text) }
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : 'Transcription failed.' }
-      }
+      // Through Wispra Cloud when that is the chosen route (it used to be sent without the
+      // signed-in session and failed with "Not signed in"), else straight to the provider.
+      return transcribeFileAt(filePath, language, {
+        settings: () => store.get(),
+        getToken: () => auth.getValidToken(),
+        sttTerms: (vocabulary) => lexicon.sttTerms(vocabulary),
+        applyReplacements: (text) => lexicon.applyReplacements(text)
+      })
     }
   )
 
@@ -1201,16 +1198,6 @@ function notify(title: string, body: string): void {
   if (Notification.isSupported()) {
     new Notification({ title, body, silent: true }).show()
   }
-}
-
-function detectMime(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const map: Record<string, string> = {
-    mp3: 'audio/mpeg', mp4: 'video/mp4', wav: 'audio/wav',
-    m4a: 'audio/mp4', ogg: 'audio/ogg', flac: 'audio/flac',
-    webm: 'audio/webm', mov: 'video/quicktime', mkv: 'video/x-matroska'
-  }
-  return map[ext] ?? 'audio/mpeg'
 }
 
 function delay(ms: number): Promise<void> {

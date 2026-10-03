@@ -475,6 +475,74 @@ button:disabled {
 
 /* ── Toggle switch ────────────────────────── */
 
+/* Account → "Where transcription and AI run": Wispra Cloud or the user's own key. */
+.ai-route {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-route-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-route-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border-md);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+.ai-route-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.ai-route-option.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ai-route-option input {
+  margin-top: 3px;
+}
+.ai-route-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-route-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-route-desc,
+.ai-route-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+.ai-route-key {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ai-route-key input {
+  flex: 1;
+  min-width: 220px;
+}
+.ai-route-status {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.ai-route-status.err {
+  color: var(--danger);
+}
+
 .toggle-row {
   display: flex;
   align-items: center;

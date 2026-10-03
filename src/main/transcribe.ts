@@ -446,7 +446,8 @@ async function requestViaProxy(
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
-        'X-Audio-Duration-Seconds': String(Math.ceil(durationSeconds)),
+        // Only a length that is known: the server counts it toward the monthly minutes.
+        ...(durationSeconds > 0 ? { 'X-Audio-Duration-Seconds': String(Math.ceil(durationSeconds)) } : {}),
       },
       body: form,
       signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
