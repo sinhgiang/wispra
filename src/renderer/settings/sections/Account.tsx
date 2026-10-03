@@ -41,6 +41,93 @@ function formatSyncStatus(status: SyncStatus | null): string | null {
   return null
 }
 
+/**
+ * Where transcription and AI text go: Wispra Cloud (the signed-in account, counted toward
+ * its monthly allowance) or straight to Groq with the user's own key. Switching only
+ * changes `provider` — a saved key is never removed, and its value is never shown.
+ */
+function AiRouteChoice({ settings, signedIn }: { settings: Settings; signedIn: boolean }): React.JSX.Element {
+  const keySaved = !!settings.groqApiKey
+  const usingCloud = settings.provider === 'proxy'
+  const usingOwnKey = settings.provider === 'groq'
+  const [askingKey, setAskingKey] = useState(false)
+  const [keyInput, setKeyInput] = useState('')
+  const [keyStatus, setKeyStatus] = useState<{ kind: 'busy' | 'err'; text: string } | null>(null)
+
+  function choose(provider: 'proxy' | 'groq'): void {
+    setAskingKey(false)
+    setKeyStatus(null)
+    void window.api.setSettings({ provider })
+  }
+
+  async function saveKey(): Promise<void> {
+    const trimmed = keyInput.trim()
+    if (!trimmed) return
+    setKeyStatus({ kind: 'busy', text: 'Testing key…' })
+    const result = await window.api.testApiKey('groq', trimmed)
+    if (!result.ok) {
+      setKeyStatus({ kind: 'err', text: result.error ?? 'Key test failed.' })
+      return
+    }
+    await window.api.setSettings({ groqApiKey: trimmed, provider: 'groq' })
+    setKeyInput('')
+    setKeyStatus(null)
+    setAskingKey(false)
+  }
+
+  const otherRoute = settings.provider === 'openai' ? 'OpenAI' : settings.provider === 'local' ? 'a local server' : null
+
+  return (
+    <div className="ai-route" role="radiogroup" aria-label="Where transcription and AI run">
+      <div className="ai-route-title">Where transcription and AI run</div>
+      <label className={`ai-route-option${usingCloud ? ' selected' : ''}${signedIn ? '' : ' disabled'}`}>
+        <input type="radio" name="ai-route" checked={usingCloud} disabled={!signedIn} onChange={() => choose('proxy')} />
+        <div className="ai-route-text">
+          <span className="ai-route-name">Use Wispra Cloud</span>
+          <span className="ai-route-desc">
+            Transcription and AI text (cleanup, summaries, mind maps, posts, chat) go through Wispra&apos;s server and{' '}
+            <strong>count toward this account&apos;s monthly minutes and AI allowance</strong>.
+            {signedIn ? '' : ' Sign in with Google first.'}
+          </span>
+        </div>
+      </label>
+      <label className={`ai-route-option${usingOwnKey || askingKey ? ' selected' : ''}`}>
+        <input
+          type="radio"
+          name="ai-route"
+          checked={usingOwnKey || askingKey}
+          onChange={() => (keySaved ? choose('groq') : setAskingKey(true))}
+        />
+        <div className="ai-route-text">
+          <span className="ai-route-name">Use my own Groq API key</span>
+          <span className="ai-route-desc">
+            Everything goes straight to Groq with your key. <strong>Nothing is counted on this page</strong> — your key&apos;s
+            own Groq limits apply. {keySaved ? 'A key is saved on this computer.' : 'No key is saved yet.'}
+          </span>
+        </div>
+      </label>
+      {askingKey && !keySaved && (
+        <div className="ai-route-key">
+          <input
+            type="password"
+            placeholder="Paste your Groq API key (gsk_…)"
+            value={keyInput}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setKeyInput(e.target.value)}
+          />
+          <button className="primary" disabled={!keyInput.trim() || keyStatus?.kind === 'busy'} onClick={() => void saveKey()}>
+            Save key
+          </button>
+          {keyStatus && <span className={`ai-route-status ${keyStatus.kind}`}>{keyStatus.text}</span>}
+        </div>
+      )}
+      {otherRoute && <p className="ai-route-note">Right now Wispra uses {otherRoute}. Choosing one of the above switches to it.</p>}
+      <p className="ai-route-note">Switching never deletes a saved key.</p>
+    </div>
+  )
+}
+
 export function AccountSection({ settings }: { settings: Settings }): React.JSX.Element {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null | 'loading'>('loading')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -306,6 +393,8 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
           </div>
         </div>
       )}
+
+      <AiRouteChoice settings={settings} signedIn={isLoggedIn} />
 
       {/* ── Cloud sync ─────────────────────────────────────────── */}
       {isLoggedIn && (

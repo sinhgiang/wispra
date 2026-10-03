@@ -661,6 +661,33 @@ ${AI_SLOP_RULE}
  * meetingSessions.ts). Returns null on any failure so the caller can show a
  * "couldn't generate, try again" state instead of throwing.
  */
+/** Longest single wait when the provider says "too many requests" — a per-minute limit clears within a minute. */
+const CONTENT_MAX_RATE_LIMIT_WAIT_MS = 75_000
+/** How long one content request may keep waiting out "too many requests" before it gives up. */
+export const CONTENT_RATE_LIMIT_BUDGET_MS = 3 * 60_000
+
+/**
+ * How long the provider asks us to wait before trying again: the `retry-after` header
+ * (seconds), else Groq's "Please try again in 7.5s" / "in 1m2.5s" — the Wispra Cloud proxy
+ * passes Groq's message on but not its headers — else 5 seconds.
+ */
+export function rateLimitWaitMs(retryAfter: string | null, body: string): number {
+  const header = Number(retryAfter)
+  if (Number.isFinite(header) && header > 0) return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, header * 1000)
+  const said = /try again in\s+(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i.exec(body)
+  if (said) return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, (Number(said[1] ?? 0) * 60 + Number(said[2])) * 1000)
+  return 5000
+}
+
+export interface ContentRequestHooks {
+  /** The provider said "too many requests": the request goes again at `untilMs`. */
+  onWait?: (untilMs: number) => void
+  /** The result is null because the limit was still reached after waiting `budgetMs` in total. */
+  onRateLimited?: () => void
+  /** Total waiting allowed (default CONTENT_RATE_LIMIT_BUDGET_MS); a test passes less. */
+  budgetMs?: number
+}
+
 export async function generateMeetingContent(
   platform: ContentPlatform,
   transcript: string,
@@ -671,7 +698,8 @@ export async function generateMeetingContent(
   localLlmModel?: string,
   proxyToken?: string,
   /** Target language for this platform, from the session's languageConfig[platform] — "auto" or undefined mirrors the transcript's own language (prior behavior). */
-  targetLanguage?: string
+  targetLanguage?: string,
+  hooks: ContentRequestHooks = {}
 ): Promise<MeetingContentResult | null> {
   const trimmed = transcript.trim()
   if (!trimmed) return null
@@ -704,21 +732,40 @@ export async function generateMeetingContent(
       : `${trimmed.slice(0, MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-MAX_TRANSCRIPT_CHARS / 2)}`
 
   try {
-    const response = await aiQuota.fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: withTargetLanguage(CONTENT_PROMPTS[platform], targetLanguage) },
-          { role: 'user', content }
-        ],
-        max_tokens: CONTENT_MAX_TOKENS[platform],
-        temperature: 0.5,
-        response_format: { type: 'json_object' }
-      }),
-      signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
-    })
+    // The provider's per-minute limit (HTTP 429) is waited out and the request sent again —
+    // a mind map being built with the same key can use up the allowance for a while —
+    // within a total waiting budget; past it, the caller is told why there is no result.
+    const budgetMs = hooks.budgetMs ?? CONTENT_RATE_LIMIT_BUDGET_MS
+    let waited = 0
+    let response: Response
+    for (;;) {
+      response = await aiQuota.fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: withTargetLanguage(CONTENT_PROMPTS[platform], targetLanguage) },
+            { role: 'user', content }
+          ],
+          max_tokens: CONTENT_MAX_TOKENS[platform],
+          temperature: 0.5,
+          response_format: { type: 'json_object' }
+        }),
+        signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
+      })
+      if (response.status !== 429) break
+      const body = await response.text().catch(() => '')
+      console.error(`[meeting] ${platform} content generation: HTTP 429 — ${body.slice(0, 300)}`)
+      const wait = rateLimitWaitMs(response.headers.get('retry-after'), body)
+      if (waited + wait > budgetMs) {
+        hooks.onRateLimited?.()
+        return null
+      }
+      waited += wait
+      hooks.onWait?.(Date.now() + wait)
+      await new Promise((resolve) => setTimeout(resolve, wait))
+    }
     if (!response.ok) {
       console.error(`[meeting] ${platform} content generation: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
       return null

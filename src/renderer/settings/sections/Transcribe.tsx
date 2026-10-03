@@ -14,7 +14,8 @@ export function TranscribeSection({ settings }: { settings: Settings }): React.J
   const [copied, setCopied] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
 
-  const hasKey = !!(settings.groqApiKey || settings.openaiApiKey)
+  // Wispra Cloud and a local server need no key of the user's own.
+  const hasKey = !!(settings.groqApiKey || settings.openaiApiKey) || settings.provider === 'proxy' || settings.provider === 'local'
 
   function pickFile(): void {
     void window.api.pickFile().then((path) => {
@@ -69,7 +70,7 @@ export function TranscribeSection({ settings }: { settings: Settings }): React.J
 
       {!hasKey && (
         <p className="hint" style={{ color: 'var(--danger)' }}>
-          Add an API key in Settings → API Key before transcribing.
+          Choose Wispra Cloud or add your own Groq API key on the Account tab before transcribing.
         </p>
       )}
 

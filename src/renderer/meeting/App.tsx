@@ -326,10 +326,36 @@ function mindMapJobLabel(job: MindMapJobStatus): string {
   return job.total > 1 ? `Building the mind map — ${job.done} of ${job.total} parts done` : 'Building the mind map'
 }
 /** How an AI call failed: Wispra Cloud's monthly AI allowance is used up ('quota'), or anything else ('error'). */
-type FailureKind = 'error' | 'quota'
+type FailureKind = 'error' | 'quota' | 'rate-limit'
 
 /** Value of the chat error state when the last question failed because the allowance is used up. */
 const CHAT_ERROR_QUOTA = '\u0000ai-quota'
+
+/** A Website / social request waiting for the AI provider's per-minute limit (HTTP 429). */
+const WAITING_TEXT = "Waiting for the AI provider's per-minute limit, then trying again…"
+/** …and giving up after a few minutes of that. Not a connection or key problem. */
+const RATE_LIMITED_TEXT =
+  "The AI provider's per-minute limit was still reached after waiting a few minutes — often because a mind map is being built with the same key. Try again in a minute."
+
+/** How each social platform is named in the "Create …" button and the messages around it. */
+const PLATFORM_NAMES: Record<Exclude<ContentPlatform, 'website'>, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  linkedin: 'LinkedIn',
+  twitter: 'X'
+}
+
+/** What an empty Website or social tab shows: nothing is generated until this button is pressed. */
+function CreateContentPrompt({ label, text, onCreate }: { label: string; text: string; onCreate: () => void }): ReactElement {
+  return (
+    <div className="meeting-create-prompt">
+      <button type="button" className="meeting-create-btn" onClick={onCreate}>
+        {label}
+      </button>
+      <div className="meeting-create-note">{text}</div>
+    </div>
+  )
+}
 
 type PastView = 'transcript' | 'summary' | 'mindmap' | ContentPlatform
 
@@ -465,6 +491,10 @@ export function MeetingPanel(): React.JSX.Element {
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Partial<Record<ContentPlatform, boolean>>>({})
   /** Which platform tabs' last generateMeetingContent() call failed for the session being viewed. A failed tab is not generated again by itself — the effect below would otherwise call the LLM in a loop for as long as the tab stays open — only when the user presses "Try again" (retryContent). */
   const [failedPlatforms, setFailedPlatforms] = useState<Partial<Record<ContentPlatform, FailureKind>>>({})
+  /** Platform tabs of the viewed session whose request is waiting for the provider's per-minute limit: when it goes again (ms). */
+  const [contentWaiting, setContentWaiting] = useState<Partial<Record<ContentPlatform, number>>>({})
+  /** "sessionId/platform" of requests that gave up because of the provider's per-minute limit — read when their answer arrives. */
+  const contentRateLimitedRef = useRef(new Set<string>())
   /**
    * Wispra Cloud's "this month's AI allowance is used up" notice (see AiQuotaNotice),
    * pushed by the main process the moment the server says so. A failure that follows
@@ -748,6 +778,12 @@ export function MeetingPanel(): React.JSX.Element {
     window.api.onMeetingMindMapProgress((progress) => {
       setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
     })
+    window.api.onMeetingContentStatus((status) => {
+      const key = `${status.sessionId}/${status.platform}`
+      if (status.rateLimited) contentRateLimitedRef.current.add(key)
+      if (viewingPastIdRef.current !== status.sessionId) return
+      setContentWaiting((prev) => ({ ...prev, [status.platform]: status.waitingUntil }))
+    })
     // Jobs that were already running (or stopped, or finished unseen) before this page mounted.
     void window.api.getMeetingMindMapJobs().then((jobs) => {
       setMindMapJobs((prev) => ({ ...Object.fromEntries((jobs ?? []).map((job) => [job.sessionId, job])), ...prev }))
@@ -808,6 +844,7 @@ export function MeetingPanel(): React.JSX.Element {
     setPastView('transcript')
     setGeneratingPlatforms({})
     setFailedPlatforms({})
+    setContentWaiting({})
     setSummaryGenerating(false)
     setVariantIndex({ facebook: 0, instagram: 0, linkedin: 0, twitter: 0 })
     setChatInput('')
@@ -921,17 +958,13 @@ export function MeetingPanel(): React.JSX.Element {
     [langConfig.website]
   )
 
-  // Build the mind map the first time its tab is opened; later opens find it cached on
-  // the session. A session that already has a job — running, or stopped part-way — is
-  // left alone: a running one is simply shown, a stopped one goes on only when the user
-  // asks, since a long recording's map takes several AI calls.
+  // Opening the Mind map tab only shows what is there — a saved map, a job that is
+  // running or stopped part-way, or a "Create mind map" button. Nothing is sent to the AI
+  // until the user presses that button (a long recording's map takes many AI calls).
   useEffect(() => {
     if (viewingPastId === null || pastView !== 'mindmap') return
     setMindMapOpened(true)
-    if (pastLoadedId !== viewingPastId || !mindMapJobsLoaded) return
-    if (pastMindMap || mindMapJobs[viewingPastId] || pastSegments.length === 0) return
-    requestMindMap(false)
-  }, [pastView, viewingPastId, pastLoadedId, pastMindMap, mindMapJobs, mindMapJobsLoaded, pastSegments, requestMindMap])
+  }, [pastView, viewingPastId])
 
   // The finished map is on screen: its "ready" mark has done its job.
   useEffect(() => {
@@ -944,20 +977,15 @@ export function MeetingPanel(): React.JSX.Element {
     })
   }, [pastView, viewingPastId, mindMapJobs])
 
-  // Generate a platform's content the first time its tab is opened, then cache
-  // it in pastContent (also persisted server-side by the IPC handler) so
-  // re-opening the tab later doesn't call the LLM again. One call per open: a
-  // failed attempt is remembered in failedPlatforms and only "Try again" clears it.
-  // Without that, the failure itself (generatingPlatforms flipping back to false
-  // with still no content) re-ran this effect and called the LLM again at once,
-  // over and over while the tab stayed open.
-  useEffect(() => {
-    if (viewingPastId === null) return
-    if (pastView === 'transcript' || pastView === 'summary' || pastView === 'mindmap') return
-    const platform = pastView
-    if (pastContent?.[platform]) return
-    if (generatingPlatforms[platform] || failedPlatforms[platform]) return
-    const id = viewingPastId
+  // Generates a platform's content when the user presses its "Create …" button (or "Try
+  // again" after a failure) — never because a tab was opened. The result is cached in
+  // pastContent (also persisted by the IPC handler), so the tab shows it from then on.
+  // One call per press: a failure is remembered in failedPlatforms until the next press.
+  const createContent = (platform: ContentPlatform): void => {
+    const id = viewingPastIdRef.current
+    if (id === null || pastContent?.[platform] || generatingPlatforms[platform]) return
+    contentRateLimitedRef.current.delete(`${id}/${platform}`)
+    setFailedPlatforms((prev) => ({ ...prev, [platform]: undefined }))
     setGeneratingPlatforms((prev) => ({ ...prev, [platform]: true }))
     const startedAt = Date.now()
     void window.api.generateMeetingContent(id, platform).then((result) => {
@@ -965,8 +993,11 @@ export function MeetingPanel(): React.JSX.Element {
       // opened, and this late answer must not touch it.
       if (viewingPastIdRef.current !== id) return
       setGeneratingPlatforms((prev) => ({ ...prev, [platform]: false }))
+      setContentWaiting((prev) => ({ ...prev, [platform]: undefined }))
       if (!result) {
-        setFailedPlatforms((prev) => ({ ...prev, [platform]: failureKind(startedAt) }))
+        // The main process says "rate limited" before this answer arrives (see onMeetingContentStatus).
+        const rateLimited = contentRateLimitedRef.current.delete(`${id}/${platform}`)
+        setFailedPlatforms((prev) => ({ ...prev, [platform]: rateLimited ? 'rate-limit' : failureKind(startedAt) }))
         return
       }
       setPastContent((prev) => {
@@ -979,12 +1010,6 @@ export function MeetingPanel(): React.JSX.Element {
         return { ...prev, twitter: result.posts }
       })
     })
-  }, [pastView, viewingPastId, pastContent, generatingPlatforms, failedPlatforms])
-
-  // "Try again" on a platform tab whose generation failed: clearing the failure lets
-  // the effect above make exactly one new attempt.
-  const retryContent = (platform: ContentPlatform): void => {
-    setFailedPlatforms((prev) => ({ ...prev, [platform]: undefined }))
   }
 
   // Keep the transcript scrolled to the latest paragraph as it streams in.
@@ -1625,6 +1650,8 @@ export function MeetingPanel(): React.JSX.Element {
                     stopped={viewedMapJob?.state === 'stopped' ? viewedMapJob : null}
                     quotaMessage={quotaMessage}
                     regenerateTitle={`Build the map again, written in ${contentLanguageLabel} — the "Website & social posts" language on the New session screen`}
+                    canCreate={mindMapJobsLoaded}
+                    onCreate={() => requestMindMap(false)}
                     onRetry={() => requestMindMap(false)}
                     onRegenerate={() => requestMindMap(true)}
                     onShowInTranscript={showMapNodeInTranscript}
@@ -1696,15 +1723,23 @@ export function MeetingPanel(): React.JSX.Element {
                         <>
                           {failedPlatforms.website === 'quota' && quotaMessage ? (
                             quotaMessage
+                          ) : failedPlatforms.website === 'rate-limit' ? (
+                            <div>{RATE_LIMITED_TEXT}</div>
                           ) : (
                             <div>Could not generate a blog post — check your connection/API key, then try again.</div>
                           )}
-                          <button className="meeting-retry-btn" onClick={() => retryContent('website')}>
+                          <button className="meeting-retry-btn" onClick={() => createContent('website')}>
                             Try again
                           </button>
                         </>
+                      ) : generatingPlatforms.website ? (
+                        contentWaiting.website ? WAITING_TEXT : 'Writing a blog post…'
                       ) : (
-                        'Writing a blog post…'
+                        <CreateContentPrompt
+                          label="Create website content"
+                          text="A blog post written from this recording: SEO title, meta description and article."
+                          onCreate={() => createContent('website')}
+                        />
                       )}
                     </div>
                   )}
@@ -1735,15 +1770,23 @@ export function MeetingPanel(): React.JSX.Element {
                           <>
                             {failedPlatforms[pastView] === 'quota' && quotaMessage ? (
                               quotaMessage
+                            ) : failedPlatforms[pastView] === 'rate-limit' ? (
+                              <div>{RATE_LIMITED_TEXT}</div>
                             ) : (
                               <div>Could not generate posts — check your connection/API key, then try again.</div>
                             )}
-                            <button className="meeting-retry-btn" onClick={() => retryContent(pastView)}>
+                            <button className="meeting-retry-btn" onClick={() => createContent(pastView)}>
                               Try again
                             </button>
                           </>
+                        ) : generatingPlatforms[pastView] ? (
+                          contentWaiting[pastView] ? WAITING_TEXT : `Writing ${PLATFORM_NAMES[pastView]} posts…`
                         ) : (
-                          `Writing ${pastView} posts…`
+                          <CreateContentPrompt
+                            label={`Create ${PLATFORM_NAMES[pastView]} post`}
+                            text={`Three versions of a ${PLATFORM_NAMES[pastView]} post written from this recording.`}
+                            onCreate={() => createContent(pastView)}
+                          />
                         )}
                       </div>
                     )}

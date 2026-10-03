@@ -565,6 +565,18 @@ export interface MeetingSpace {
 /** Which platform's ready-to-post content to generate/show for a stopped meeting session. */
 export type ContentPlatform = 'website' | 'facebook' | 'instagram' | 'linkedin' | 'twitter'
 
+/**
+ * A Website / social content request that hit the AI provider's per-minute limit (HTTP
+ * 429): it waits and goes again at `waitingUntil` (ms since epoch), or — `rateLimited` —
+ * it gave up because the limit was still reached after waiting (see generateMeetingContent).
+ */
+export interface MeetingContentStatus {
+  sessionId: string
+  platform: ContentPlatform
+  waitingUntil?: number
+  rateLimited?: boolean
+}
+
 /** Ready-to-post content generated from a meeting transcript, one field per platform. Cached on the session once generated so re-opening a tab doesn't re-call the LLM. */
 export interface MeetingContent {
   /** SEO blog/website article — a single piece, not variants. */

@@ -15,6 +15,7 @@ import type {
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContentResult,
+  MeetingContentStatus,
   MeetingLanguageConfig,
   MeetingMindMap,
   MeetingOutline,
@@ -228,6 +229,9 @@ const api = {
   // for one platform. Resolves null if generation failed (offline, bad key, etc).
   generateMeetingContent: (id: string, platform: ContentPlatform): Promise<MeetingContentResult | null> =>
     ipcRenderer.invoke(IPC.MEETING_GENERATE_CONTENT, id, platform),
+  onMeetingContentStatus: (cb: (status: MeetingContentStatus) => void): void => {
+    ipcRenderer.on(IPC.MEETING_CONTENT_STATUS, (_e, status: MeetingContentStatus) => cb(status))
+  },
   // On-demand retry for a stopped session whose title/summary generation failed —
   // resolves true on success, false on failure. On success the actual title/summary
   // update arrives separately via onMeetingSessionUpdated.

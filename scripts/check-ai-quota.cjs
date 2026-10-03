@@ -265,6 +265,8 @@ async function partB() {
   // The allowance message inside `scope`, if any: its text and where its upgrade link points.
   const quotaIn = (scope) =>
     js(`(() => { const m = ${scope} && ${scope}.querySelector('.ai-quota-message'); return m ? { text: m.innerText.replace(/\\s+/g, ' '), link: (m.querySelector('a') || {}).href || null } : null })()`)
+  // Content tabs create nothing until their "Create …" button is pressed.
+  const create = (scope) => js(`(() => { const b = [...${scope}.querySelectorAll('button')].find((x) => x.textContent.trim().startsWith('Create')); if (!b) return false; b.click(); return true })()`)
   const hasRetry = (scope) => js(`!!(${scope} && [...${scope}.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Try again'))`)
 
   await win.loadFile(path.join(ROOT, 'out/renderer/index.html'), { query: { page: 'settings', tab: 'meeting' } })
@@ -276,6 +278,7 @@ async function partB() {
   for (const { id, tab } of PLATFORMS) {
     const key = `one/${id}`
     await clickButton(tab, TABS)
+    await create(VIEW)
     await sleep(SETTLE_MS)
     const message = await quotaIn(VIEW)
     check(`${tab} tab: says the allowance is used up, with the reset date, and how to continue`, message && message.text.includes("used all of this month's AI allowance") && message.text.includes(`resets on ${resetLabel}`) && message.text.includes('own Groq API key') && message.link === 'https://example.com/upgrade', message)
@@ -303,8 +306,10 @@ async function partB() {
   check('chat: the question is put back in the box to send again later', chat.input === question && chat.bubbles === 0, chat)
 
   await clickButton('Mind map', TABS)
-  await sleep(SETTLE_MS)
   const PANEL = `document.querySelector('.mm-panel')`
+  await sleep(300)
+  await create(PANEL)
+  await sleep(SETTLE_MS)
   const overlay = await js(`(document.querySelector('.mm-overlay') || { innerText: '' }).innerText.replace(/\\s+/g, ' ')`)
   check('mind map: says it was not built, why, and how far it got', overlay.includes('The mind map was not built') && overlay.includes("used all of this month's AI allowance") && overlay.includes('It stopped after 2 of 5 parts. They are kept'), overlay)
   check('mind map: one call only, with a "Continue" button (the finished parts are kept)', calls['one/mindmap'] === 1 && (await js(`[...${PANEL}.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Continue')`)), { calls: calls['one/mindmap'] })
@@ -316,6 +321,7 @@ async function partB() {
   mode = 'error'
   await openSession('two')
   await clickButton('Website', TABS)
+  await create(VIEW)
   await sleep(SETTLE_MS)
   const plain = await js(`${VIEW}.innerText.replace(/\\s+/g, ' ')`)
   check('an ordinary failure is still shown as an ordinary failure', plain.includes('Could not generate a blog post') && !(await quotaIn(VIEW)) && calls['two/website'] === 1, plain)
@@ -323,6 +329,7 @@ async function partB() {
   mode = 'quota'
   plan = 'pro'
   await clickButton('Facebook', TABS)
+  await create(VIEW)
   await sleep(SETTLE_MS)
   const pro = await quotaIn(VIEW)
   check('Pro plan: same message, reset date, no upgrade offer', pro && pro.text.includes('on the Pro plan') && pro.text.includes(`resets on ${resetLabel}`) && !pro.text.includes('upgrade') && pro.link === null, pro)
@@ -340,7 +347,7 @@ async function partB() {
   await clickNav('Account')
   await sleep(600)
   account = await js(`document.querySelector('main').innerText.replace(/\\s+/g, ' ')`)
-  check('Account page with an older server (no allowance fields): renders as before, no AI line', account.includes('Wispra Free') && account.includes('30 min used this month') && !account.includes('AI text'), account.slice(0, 200))
+  check('Account page with an older server (no allowance fields): renders as before, no AI line', account.includes('Wispra Free') && account.includes('30 min used this month') && !account.includes('AI text:'), account.slice(0, 200))
 
   check('no errors in the renderer console', errors.length === 0, errors.slice(0, 5))
 }
