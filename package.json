@@ -11,6 +11,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "check:mind-map-background": "electron-vite build && electron scripts/check-mind-map-background.cjs",
+    "check:cloud-switch": "electron-vite build && electron scripts/check-cloud-switch.cjs",
     "check:content-retry": "electron-vite build && electron scripts/check-content-retry.cjs",
     "check:ai-quota": "electron-vite build && electron scripts/check-ai-quota.cjs",
     "postinstall": "node scripts/generate-icons.js",

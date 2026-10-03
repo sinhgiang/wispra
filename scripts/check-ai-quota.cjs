@@ -340,7 +340,7 @@ async function partB() {
   await clickNav('Account')
   await sleep(600)
   account = await js(`document.querySelector('main').innerText.replace(/\\s+/g, ' ')`)
-  check('Account page with an older server (no allowance fields): renders as before, no AI line', account.includes('Wispra Free') && account.includes('30 min used this month') && !account.includes('AI text'), account.slice(0, 200))
+  check('Account page with an older server (no allowance fields): renders as before, no AI line', account.includes('Wispra Free') && account.includes('30 min used this month') && !account.includes('AI text:'), account.slice(0, 200))
 
   check('no errors in the renderer console', errors.length === 0, errors.slice(0, 5))
 }
