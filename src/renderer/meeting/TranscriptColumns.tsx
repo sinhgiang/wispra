@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type ReactElement, type RefObject } from 'react'
 import type { MeetingOutline, OutlineProgress } from '@shared/types'
 import { formatElapsed } from './mindMapData'
+import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 
 /** One paragraph of the transcript, as the Meeting tab groups segments (see groupIntoParagraphs in App.tsx). */
 export interface TranscriptBlock {
@@ -353,9 +354,11 @@ export function TranscriptColumns({
             ) : (
               <>
                 <span>
-                  {hasOutline
-                    ? 'Could not rebuild the topics and action items — the previous ones are kept.'
-                    : 'Could not find topics and action items — check your connection/API key, then try again.'}
+                  {progress?.dailyLimit
+                    ? `${dailyLimitText(progress.dailyLimit)} ${dailyLimitAdvice(progress.dailyLimit, 'Try again')}`
+                    : hasOutline
+                      ? 'Could not rebuild the topics and action items — the previous ones are kept.'
+                      : 'Could not find topics and action items — check your connection/API key, then try again.'}
                 </span>
                 <button type="button" className="meeting-retry-btn" onClick={onRetry}>
                   Try again

@@ -452,7 +452,8 @@ async function generateSessionContent(
       session.languageConfig?.[platform],
       {
         onWait: (waitingUntil) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, waitingUntil } satisfies MeetingContentStatus),
-        onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus)
+        onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus),
+        onDailyLimit: (dailyLimit) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, dailyLimit } satisfies MeetingContentStatus)
       }
     )
     if (!result) return null
@@ -580,8 +581,13 @@ function generateSessionOutline(id: string, options?: { regenerate?: boolean }):
       const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
       const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
       if (!target) return null
-      const outline = await generateOutline(session.segments, target, language, (progress) =>
-        broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress)
+      const outline = await generateOutline(
+        session.segments,
+        target,
+        language,
+        (progress) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress),
+        // Sent before the failure, so the Transcript tab can say it was the daily limit.
+        (dailyLimit) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, phase: 'outline', done: 0, total: 0, dailyLimit } satisfies OutlineProgress)
       )
       if (!outline) return null
       meetingSessions.setOutline(id, outline)

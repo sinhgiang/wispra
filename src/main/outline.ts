@@ -4,9 +4,9 @@ import {
   MIND_MAP_PART_CHARS,
   MIND_MAP_SINGLE_PASS_CHARS
 } from '@shared/constants'
-import type { MeetingOutline, MeetingSegment, OutlineProgress } from '@shared/types'
+import type { DailyLimitInfo, MeetingOutline, MeetingSegment, OutlineProgress } from '@shared/types'
 import { ANTI_FABRICATION_RULE, languageName, type ChatTarget } from './postprocess'
-import { callJson, mapLimited, JSON_ONLY, TRANSCRIPT_FORMAT } from './mindMap'
+import { callJson, mapLimited, JSON_ONLY, TRANSCRIPT_FORMAT, type JsonCallControl } from './mindMap'
 import { buildTranscriptLines, formatLine, linesLength, splitIntoParts, type TranscriptLine } from './mindMapLogic'
 import { applyMerge, assembleOutline, describeForMerge, parseOutline, type RefOutline } from './outlineLogic'
 
@@ -79,14 +79,18 @@ export async function generateOutline(
   segments: MeetingSegment[],
   target: ChatTarget,
   language: string,
-  onProgress?: (progress: Omit<OutlineProgress, 'sessionId'>) => void
+  onProgress?: (progress: Omit<OutlineProgress, 'sessionId'>) => void,
+  /** Told when a call stopped at the provider's daily limit (not waited out), before null is returned. */
+  onDailyLimit?: (info: DailyLimitInfo) => void
 ): Promise<MeetingOutline | null> {
+  // No deadline: a per-minute limit keeps the few short waits it always had.
+  const control: JsonCallControl = { onFailure: (failure) => failure.daily && onDailyLimit?.(failure.daily) }
   const lines = buildTranscriptLines(segments)
   if (lines.length === 0) return null
 
   if (linesLength(lines) <= MIND_MAP_SINGLE_PASS_CHARS) {
     onProgress?.({ phase: 'outline', done: 0, total: 1 })
-    const raw = await callJson(target, `${SINGLE_PROMPT}\n${languageRule(language, 'transcript')}`, transcriptOf(lines), SINGLE_MAX_TOKENS, 'transcript outline')
+    const raw = await callJson(target, `${SINGLE_PROMPT}\n${languageRule(language, 'transcript')}`, transcriptOf(lines), SINGLE_MAX_TOKENS, 'transcript outline', control)
     const outline = raw && parseOutline(raw, lines)
     if (!outline) return null
     return assembleOutline(outline, lines, language, new Date().toISOString())
@@ -104,7 +108,8 @@ export async function generateOutline(
       `${PART_PROMPT}\n${languageRule(language, 'transcript')}`,
       `This is part ${index + 1} of ${parts.length}.\n\n${transcriptOf(part)}`,
       PART_MAX_TOKENS,
-      `transcript outline part ${index + 1}/${parts.length}`
+      `transcript outline part ${index + 1}/${parts.length}`,
+      control
     )
     const outline = raw && parseOutline(raw, part)
     if (!outline) {
@@ -124,7 +129,7 @@ export async function generateOutline(
   }
 
   onProgress?.({ phase: 'merge', done: parts.length, total: parts.length })
-  const merged = await callJson(target, `${MERGE_PROMPT}\n${languageRule(language, 'lists')}`, describeForMerge(all, lines), MERGE_MAX_TOKENS, 'transcript outline merge')
+  const merged = await callJson(target, `${MERGE_PROMPT}\n${languageRule(language, 'lists')}`, describeForMerge(all, lines), MERGE_MAX_TOKENS, 'transcript outline merge', control)
   if (merged) all = applyMerge(merged, all)
   return assembleOutline(all, lines, language, new Date().toISOString())
 }

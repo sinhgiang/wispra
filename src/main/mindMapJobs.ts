@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { MeetingMindMap, MeetingSession, MindMapJobStatus, MindMapStopReason } from '@shared/types'
+import type { DailyLimitInfo, MeetingMindMap, MeetingSession, MindMapJobStatus, MindMapStopReason } from '@shared/types'
 import { runMindMap, type MindMapLimits } from './mindMap'
 import { mindMapLanguage, type Outline } from './mindMapLogic'
 import type { ChatTarget } from './postprocess'
@@ -32,6 +32,7 @@ interface Checkpoint {
   state: 'running' | 'stopped'
   reason?: MindMapStopReason
   detail?: string
+  dailyLimit?: DailyLimitInfo
 }
 
 export interface MindMapJobsDeps {
@@ -144,13 +145,14 @@ export function createMindMapJobs(deps: MindMapJobsDeps): MindMapJobs {
       startedAt
     }
     setStatus(current)
-    const stop = (reason: MindMapStopReason, detail?: string): null => {
+    const stop = (reason: MindMapStopReason, detail?: string, dailyLimit?: DailyLimitInfo): null => {
       checkpoint.state = 'stopped'
       checkpoint.reason = reason
       checkpoint.detail = detail
+      checkpoint.dailyLimit = dailyLimit
       writeCheckpoint(checkpoint)
-      const { waitingUntil: _waitingUntil, ...rest } = current
-      setStatus({ ...rest, state: 'stopped', reason, detail })
+      const { waitingUntil: _waitingUntil, dailyLimit: _earlier, ...rest } = current
+      setStatus({ ...rest, state: 'stopped', reason, detail, ...(dailyLimit ? { dailyLimit } : {}) })
       return null
     }
 
@@ -180,7 +182,7 @@ export function createMindMapJobs(deps: MindMapJobsDeps): MindMapJobs {
       if (!result.map) {
         // The allowance ran out on the way: say that, rather than "the provider refused".
         if (deps.quotaExceededSince?.(began)) return stop('quota')
-        return stop(result.failure.reason, result.failure.detail)
+        return stop(result.failure.reason, result.failure.detail, result.failure.daily)
       }
       deps.saveMindMap(id, result.map)
       removeCheckpoint(id)
@@ -242,6 +244,7 @@ export function createMindMapJobs(deps: MindMapJobsDeps): MindMapJobs {
           // Still marked "running": the app was closed (or crashed) while the job ran.
           reason: checkpoint.state === 'running' ? 'interrupted' : (checkpoint.reason ?? 'failed'),
           detail: checkpoint.state === 'running' ? undefined : checkpoint.detail,
+          ...(checkpoint.state !== 'running' && checkpoint.dailyLimit ? { dailyLimit: checkpoint.dailyLimit } : {}),
           phase: 'outline',
           done: checkpoint.parts.filter(Boolean).length,
           total: checkpoint.total,

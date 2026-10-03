@@ -19,7 +19,8 @@ import type {
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
-import type { MindMapJobStatus } from '@shared/types'
+import type { DailyLimitInfo, MindMapJobStatus } from '@shared/types'
+import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import { TranscriptColumns, type ActionsView } from './TranscriptColumns'
@@ -319,6 +320,7 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
 /** One line saying where a session's mind map job is — the tooltip of its marks in the session list and on the tab. */
 function mindMapJobLabel(job: MindMapJobStatus): string {
   if (job.state === 'done') return 'The mind map is ready'
+  if (job.state === 'stopped' && job.reason === 'daily-limit') return "The mind map stopped at the AI provider's daily limit — open the Mind map tab for when it resets"
   if (job.state === 'stopped') {
     return job.total > 1 ? `The mind map is not finished (${job.done} of ${job.total} parts done) — open the Mind map tab to continue` : 'The mind map is not finished — open the Mind map tab to try again'
   }
@@ -326,7 +328,7 @@ function mindMapJobLabel(job: MindMapJobStatus): string {
   return job.total > 1 ? `Building the mind map — ${job.done} of ${job.total} parts done` : 'Building the mind map'
 }
 /** How an AI call failed: Wispra Cloud's monthly AI allowance is used up ('quota'), or anything else ('error'). */
-type FailureKind = 'error' | 'quota' | 'rate-limit'
+type FailureKind = 'error' | 'quota' | 'rate-limit' | 'daily-limit'
 
 /** Value of the chat error state when the last question failed because the allowance is used up. */
 const CHAT_ERROR_QUOTA = '\u0000ai-quota'
@@ -495,6 +497,10 @@ export function MeetingPanel(): React.JSX.Element {
   const [contentWaiting, setContentWaiting] = useState<Partial<Record<ContentPlatform, number>>>({})
   /** "sessionId/platform" of requests that gave up because of the provider's per-minute limit — read when their answer arrives. */
   const contentRateLimitedRef = useRef(new Set<string>())
+  /** "sessionId/platform" of requests stopped at the provider's daily limit, with its numbers — read when their answer arrives. */
+  const contentDailyRef = useRef(new Map<string, DailyLimitInfo>())
+  /** The daily limit behind a platform tab's failure, when that was the reason. */
+  const [contentDaily, setContentDaily] = useState<Partial<Record<ContentPlatform, DailyLimitInfo>>>({})
   /**
    * Wispra Cloud's "this month's AI allowance is used up" notice (see AiQuotaNotice),
    * pushed by the main process the moment the server says so. A failure that follows
@@ -781,6 +787,7 @@ export function MeetingPanel(): React.JSX.Element {
     window.api.onMeetingContentStatus((status) => {
       const key = `${status.sessionId}/${status.platform}`
       if (status.rateLimited) contentRateLimitedRef.current.add(key)
+      if (status.dailyLimit) contentDailyRef.current.set(key, status.dailyLimit)
       if (viewingPastIdRef.current !== status.sessionId) return
       setContentWaiting((prev) => ({ ...prev, [status.platform]: status.waitingUntil }))
     })
@@ -997,7 +1004,10 @@ export function MeetingPanel(): React.JSX.Element {
       if (!result) {
         // The main process says "rate limited" before this answer arrives (see onMeetingContentStatus).
         const rateLimited = contentRateLimitedRef.current.delete(`${id}/${platform}`)
-        setFailedPlatforms((prev) => ({ ...prev, [platform]: rateLimited ? 'rate-limit' : failureKind(startedAt) }))
+        const daily = contentDailyRef.current.get(`${id}/${platform}`)
+        contentDailyRef.current.delete(`${id}/${platform}`)
+        setContentDaily((prev) => ({ ...prev, [platform]: daily }))
+        setFailedPlatforms((prev) => ({ ...prev, [platform]: daily ? 'daily-limit' : rateLimited ? 'rate-limit' : failureKind(startedAt) }))
         return
       }
       setPastContent((prev) => {
@@ -1723,6 +1733,8 @@ export function MeetingPanel(): React.JSX.Element {
                         <>
                           {failedPlatforms.website === 'quota' && quotaMessage ? (
                             quotaMessage
+                          ) : failedPlatforms.website === 'daily-limit' && contentDaily.website ? (
+                            <div>{`${dailyLimitText(contentDaily.website)} ${dailyLimitAdvice(contentDaily.website, 'Try again')}`}</div>
                           ) : failedPlatforms.website === 'rate-limit' ? (
                             <div>{RATE_LIMITED_TEXT}</div>
                           ) : (
@@ -1770,6 +1782,8 @@ export function MeetingPanel(): React.JSX.Element {
                           <>
                             {failedPlatforms[pastView] === 'quota' && quotaMessage ? (
                               quotaMessage
+                            ) : failedPlatforms[pastView] === 'daily-limit' && contentDaily[pastView] ? (
+                              <div>{`${dailyLimitText(contentDaily[pastView]!)} ${dailyLimitAdvice(contentDaily[pastView]!, 'Try again')}`}</div>
                             ) : failedPlatforms[pastView] === 'rate-limit' ? (
                               <div>{RATE_LIMITED_TEXT}</div>
                             ) : (

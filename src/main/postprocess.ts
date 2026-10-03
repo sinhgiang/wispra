@@ -1,7 +1,8 @@
 import { GROQ_API_BASE, LANGUAGES, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
-import type { ContentPlatform, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
+import type { ContentPlatform, DailyLimitInfo, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
 import type { CorrectionHint } from './lexiconLogic'
 import { aiQuota } from './aiQuota'
+import { dailyLimitInfo, parseRateLimit } from './rateLimit'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -672,11 +673,7 @@ export const CONTENT_RATE_LIMIT_BUDGET_MS = 3 * 60_000
  * passes Groq's message on but not its headers — else 5 seconds.
  */
 export function rateLimitWaitMs(retryAfter: string | null, body: string): number {
-  const header = Number(retryAfter)
-  if (Number.isFinite(header) && header > 0) return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, header * 1000)
-  const said = /try again in\s+(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i.exec(body)
-  if (said) return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, (Number(said[1] ?? 0) * 60 + Number(said[2])) * 1000)
-  return 5000
+  return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, parseRateLimit(retryAfter, body).retryAfterMs)
 }
 
 export interface ContentRequestHooks {
@@ -684,6 +681,8 @@ export interface ContentRequestHooks {
   onWait?: (untilMs: number) => void
   /** The result is null because the limit was still reached after waiting `budgetMs` in total. */
   onRateLimited?: () => void
+  /** The result is null because the provider's DAILY limit is reached — not waited out. */
+  onDailyLimit?: (info: DailyLimitInfo) => void
   /** Total waiting allowed (default CONTENT_RATE_LIMIT_BUDGET_MS); a test passes less. */
   budgetMs?: number
 }
@@ -757,7 +756,12 @@ export async function generateMeetingContent(
       if (response.status !== 429) break
       const body = await response.text().catch(() => '')
       console.error(`[meeting] ${platform} content generation: HTTP 429 — ${body.slice(0, 300)}`)
-      const wait = rateLimitWaitMs(response.headers.get('retry-after'), body)
+      const limit = parseRateLimit(response.headers.get('retry-after'), body)
+      if (limit.scope === 'day') {
+        hooks.onDailyLimit?.(dailyLimitInfo(limit, provider === 'proxy'))
+        return null
+      }
+      const wait = Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, limit.retryAfterMs)
       if (waited + wait > budgetMs) {
         hooks.onRateLimited?.()
         return null
