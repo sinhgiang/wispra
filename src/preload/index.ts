@@ -18,12 +18,14 @@ import type {
   MeetingContentStatus,
   MeetingLanguageConfig,
   MeetingMindMap,
+  MeetingOutline,
   MeetingSegment,
   MeetingSession,
   MeetingSessionSummary,
   MeetingSpace,
   MeetingState,
   MindMapJobStatus,
+  OutlineProgress,
   Settings,
   StatePayload,
   StyleProfile,
@@ -203,7 +205,7 @@ const api = {
   meetingCaptureFailed: (message: string): void => ipcRenderer.send(IPC.MEETING_CAPTURE_FAILED, message),
   meetingChunkCaptured: (
     audio: ArrayBuffer,
-    meta: { startMs: number; endMs: number; startedAt: string; mimeType: string }
+    meta: { startMs: number; endMs: number; startedAt: string; mimeType: string; voice?: 'me' | 'others' }
   ): void => ipcRenderer.send(IPC.MEETING_CHUNK_CAPTURED, audio, meta),
   getMeetingState: (): Promise<MeetingState> => ipcRenderer.invoke(IPC.MEETING_GET_STATE),
   getMeetingSessions: (): Promise<MeetingSessionSummary[]> => ipcRenderer.invoke(IPC.MEETING_GET_SESSIONS),
@@ -246,6 +248,17 @@ const api = {
     id: string,
     options?: { regenerate?: boolean; language?: string }
   ): Promise<MeetingMindMap | null> => ipcRenderer.invoke(IPC.MEETING_GENERATE_MIND_MAP, id, options),
+  // Builds (or returns the cached) transcript outline of a stopped session — topics,
+  // action items, speaker names. Resolves null on failure; on success the outline also
+  // arrives via onMeetingSessionUpdated.
+  generateMeetingOutline: (id: string, options?: { regenerate?: boolean }): Promise<MeetingOutline | null> =>
+    ipcRenderer.invoke(IPC.MEETING_GENERATE_OUTLINE, id, options),
+  onMeetingOutlineProgress: (cb: (progress: OutlineProgress) => void): void => {
+    ipcRenderer.on(IPC.MEETING_OUTLINE_PROGRESS, (_e, progress: OutlineProgress) => cb(progress))
+  },
+  // Speaker names the user typed, by paragraph id ('' = no name for that paragraph).
+  setMeetingSpeakerNames: (id: string, names: Record<string, string>): Promise<void> =>
+    ipcRenderer.invoke(IPC.MEETING_SET_SPEAKER_NAMES, id, names),
   // Saves the mind map's PNG export through a Save dialog.
   saveMindMapPng: (png: ArrayBuffer, suggestedName: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.MEETING_SAVE_MIND_MAP_PNG, png, suggestedName),

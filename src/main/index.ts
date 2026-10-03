@@ -19,8 +19,10 @@ import type {
   MeetingLanguageConfig,
   McpLinkStatus,
   MeetingMindMap,
+  MeetingOutline,
   MeetingSession,
   MeetingState,
+  OutlineProgress,
   Settings,
   StatePayload,
   SyncStatus
@@ -57,6 +59,8 @@ import {
   askMeetingChat,
   resolveChatTarget
 } from './postprocess'
+import { generateOutline } from './outline'
+import { outlineLanguage } from './outlineLogic'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { transcribeFileAt } from './transcribeFile'
 import { aiQuota } from './aiQuota'
@@ -405,6 +409,9 @@ async function finalizeMeetingSession(session: MeetingSession): Promise<void> {
   if (session.status !== 'summarizing') return
   const ok = await requestMeetingSummary(session)
   if (!ok) meetingSessions.finishSummary(session.id, {})
+  // Then the transcript outline (topics, action items, speaker names), in the
+  // background: the session is already 'stopped' and readable without it.
+  void generateSessionOutline(session.id)
 }
 
 /**
@@ -548,6 +555,62 @@ function generateSessionMindMap(
   return getMindMapJobs().start(id, options)
 }
 
+/** Outline generations in flight, by session id — the renderer opening the session joins the one started after Stop. */
+const outlineJobs = new Map<string, Promise<MeetingOutline | null>>()
+
+/**
+ * Builds (or returns the cached) transcript outline of a stopped session: started by
+ * finalizeMeetingSession right after Stop, by the renderer the first time an older
+ * session's Transcript tab is opened, or by its "rebuild" button. Mirrors
+ * generateSessionMindMap; the language is the session's "Summary" choice (see
+ * outlineLanguage). Returns null on any failure — the session keeps whatever outline
+ * it had. Never throws.
+ */
+function generateSessionOutline(id: string, options?: { regenerate?: boolean }): Promise<MeetingOutline | null> {
+  const running = outlineJobs.get(id)
+  if (running) return running
+  const session = meetingSessions.get(id)
+  if (!session || session.status === 'recording') return Promise.resolve(null)
+  if (session.outline && !options?.regenerate) return Promise.resolve(session.outline)
+
+  const language = outlineLanguage(session.languageConfig, LANGUAGES.map((l) => l.code))
+  const job = (async (): Promise<MeetingOutline | null> => {
+    try {
+      const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+      const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+      const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
+      if (!target) return null
+      const outline = await generateOutline(session.segments, target, language, (progress) =>
+        broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress)
+      )
+      if (!outline) return null
+      meetingSessions.setOutline(id, outline)
+      return outline
+    } catch (err) {
+      console.error('[meeting] transcript outline generation failed:', err)
+      return null
+    } finally {
+      outlineJobs.delete(id)
+    }
+  })()
+  outlineJobs.set(id, job)
+  return job
+}
+
+/**
+ * Stores speaker names the user typed for paragraphs of a session (see
+ * MeetingSession.speakerNames). Names are trimmed and capped; anything that is not a
+ * plain { paragraphId: string } map is ignored.
+ */
+function setSessionSpeakerNames(id: string, names: unknown): void {
+  if (!names || typeof names !== 'object') return
+  const clean: Record<string, string> = {}
+  for (const [key, value] of Object.entries(names as Record<string, unknown>).slice(0, 5000)) {
+    if (typeof value === 'string') clean[key] = value.trim().slice(0, 60)
+  }
+  if (Object.keys(clean).length > 0) meetingSessions.setSpeakerNames(id, clean)
+}
+
 /**
  * Saves the Mind map tab's PNG export where the user chooses. The image is rendered
  * in the renderer (from the map's own SVG); only the finished bytes come through here.
@@ -646,6 +709,10 @@ function wireIpc(): void {
     IPC.MEETING_GENERATE_MIND_MAP,
     (_event, id: string, options?: { regenerate?: boolean; language?: string }) => generateSessionMindMap(id, options)
   )
+  ipcMain.handle(IPC.MEETING_GENERATE_OUTLINE, (_event, id: string, options?: { regenerate?: boolean }) =>
+    generateSessionOutline(id, options)
+  )
+  ipcMain.handle(IPC.MEETING_SET_SPEAKER_NAMES, (_event, id: string, names: unknown) => setSessionSpeakerNames(id, names))
   ipcMain.handle(IPC.MEETING_GET_MIND_MAP_JOBS, () => getMindMapJobs().statuses())
   ipcMain.handle(IPC.MEETING_ACK_MIND_MAP, (_event, id: string) => getMindMapJobs().acknowledge(String(id)))
   ipcMain.handle(IPC.MEETING_SAVE_MIND_MAP_PNG, (_event, png: ArrayBuffer, suggestedName: string) =>
@@ -656,7 +723,7 @@ function wireIpc(): void {
     (
       _event,
       audio: ArrayBuffer,
-      meta: { startMs: number; endMs: number; startedAt: string; mimeType: string }
+      meta: { startMs: number; endMs: number; startedAt: string; mimeType: string; voice?: 'me' | 'others' }
     ) => {
       const { provider, groqApiKey, openaiApiKey, localBaseUrl, localSttModel, localLlmModel, vocabulary } = store.get()
       // The session's own language choices (set on the Start-recording screen), NOT the

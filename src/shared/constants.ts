@@ -236,7 +236,15 @@ export const MEETING_MIN_VOICED_MS = 300
  * computer audio plays with the user saying nothing.
  */
 export const MEETING_SILENCE_AUTO_STOP_MS = 5 * 60_000
-// ── Meeting mind map (mindMap.ts) ────────────────────────────────────────────
+// ── Meeting "you / others" detection (renderer/meeting/voice.ts) ─────────────
+/**
+ * In "Both" mode a chunk is labelled as the user's voice (or the other side's) only when
+ * that side's audio carried at least this many times the energy of the other; closer
+ * than that (both talking, or the speakers leaking into the mic) stays unlabelled.
+ */
+export const MEETING_VOICE_DOMINANCE = 4
+
+// ── Meeting mind map and transcript outline (mindMap.ts, outline.ts) ─────────
 /** A transcript up to this many characters (as tagged paragraph lines) is mapped in one AI call. */
 export const MIND_MAP_SINGLE_PASS_CHARS = 14_000
 /**

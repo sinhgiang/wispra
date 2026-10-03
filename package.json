@@ -1,6 +1,6 @@
 {
   "name": "wispra",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "System-wide voice dictation: speak anywhere, get text typed into any app.",
   "main": "out/main/index.js",
   "author": "SinhGiang",
@@ -10,6 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "check:transcript-columns": "electron-vite build && electron scripts/check-transcript-columns.cjs",
     "check:mind-map-background": "electron-vite build && electron scripts/check-mind-map-background.cjs",
     "check:cloud-switch": "electron-vite build && electron scripts/check-cloud-switch.cjs",
     "check:content-retry": "electron-vite build && electron scripts/check-content-retry.cjs",

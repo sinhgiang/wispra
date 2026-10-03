@@ -126,9 +126,11 @@ export function openSettingsWindow(initialTab?: string): BrowserWindow {
     return settingsWindow
   }
   settingsWindow = new BrowserWindow({
-    // Wide enough for a finished meeting's row of view tabs (Transcript … X) to sit on one line.
-    width: 900,
-    height: 600,
+    // Wide enough for a finished meeting's Transcript tab to show its four columns
+    // (time, topic, transcript, action items) side by side; narrower, they fold. Taller
+    // than before too, so the transcript keeps a readable height above the chat panel.
+    width: 1250,
+    height: 700,
     minWidth: 640,
     minHeight: 480,
     title: 'Wispra Settings',

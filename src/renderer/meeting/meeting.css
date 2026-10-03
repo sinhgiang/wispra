@@ -677,6 +677,23 @@
   max-width: none;
 }
 
+/* Transcript tab: same idea — the four columns use the full width, everything else keeps
+   the reading width. */
+.meeting-session-view--wide {
+  max-width: none;
+}
+
+.meeting-session-view--wide > * {
+  width: 100%;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.meeting-session-view--wide > .txc {
+  max-width: none;
+}
+
 .meeting-mindmap-view {
   flex: 1;
   min-height: 0;
@@ -1106,6 +1123,610 @@
 
 .meeting-from-map-clear:hover {
   border-color: transparent;
+}
+
+/* ── Transcript tab as four columns (see TranscriptColumns.tsx) ────────────────────
+   time · speaker | topic | transcript | action items. Three layouts by the width the
+   panel actually has (container queries): all four columns; topic folded into a heading
+   row (with by-topic action items under it); and, for the one-list view in a narrow
+   window, the action list as a slide-over panel. */
+
+.txc {
+  --col-time: 92px;
+  --col-topic: 176px;
+  --col-act: 250px;
+  --txc-topic-l: 0.45;
+  --txc-chip-l: 0.93;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  border: 1px solid var(--border-md);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+  container-type: inline-size;
+}
+
+@media (prefers-color-scheme: dark) {
+  .txc {
+    --txc-topic-l: 0.82;
+    --txc-chip-l: 0.3;
+  }
+}
+
+.txc-scroll {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.txc-cols {
+  display: grid;
+  grid-template-columns: var(--col-time) var(--col-topic) minmax(0, 1fr);
+  column-gap: 14px;
+  padding: 0 14px;
+}
+
+.txc--by-topic .txc-cols {
+  grid-template-columns: var(--col-time) var(--col-topic) minmax(0, 1fr) var(--col-act);
+}
+
+/* No outline (yet): the transcript as before, time and text. */
+.txc--plain .txc-cols {
+  grid-template-columns: var(--col-time) minmax(0, 1fr);
+}
+
+.txc-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  align-items: center;
+  min-height: 34px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.txc-col-time,
+.txc-time {
+  grid-column: 1;
+}
+
+.txc-col-topic,
+.txc-topic {
+  grid-column: 2;
+}
+
+.txc-col-text,
+.txc-text {
+  grid-column: 3;
+}
+
+.txc-col-actions,
+.txc-sec-actions {
+  grid-column: 4;
+}
+
+.txc--plain .txc-col-topic {
+  display: none;
+}
+
+.txc--plain .txc-col-text,
+.txc--plain .txc-text {
+  grid-column: 2;
+}
+
+.txc-col-text {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.txc-head-folded,
+.txc .txc-panel-toggle,
+.txc .txc-panel-close {
+  display: none;
+}
+
+/* "Action items 8 · [By topic | List] · rebuild" */
+.txc-actions-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.txc-actions-label {
+  white-space: nowrap;
+}
+
+.txc-count {
+  margin-left: 3px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.txc-view-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+}
+
+.txc .txc-view-switch button {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.txc .txc-view-switch button:hover {
+  color: var(--text);
+  background: transparent;
+}
+
+.txc .txc-view-switch button.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.txc .txc-icon-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.txc .txc-icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.txc-icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Generating / failed line under the header */
+.txc-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.txc-status .meeting-retry-btn {
+  margin-top: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.txc-status-failed {
+  justify-content: space-between;
+  background: var(--danger-subtle);
+  color: var(--text);
+}
+
+.txc-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border: 2px solid var(--border-md);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: txc-spin 0.8s linear infinite;
+}
+
+@keyframes txc-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* One topic = one grid; the topic cell and (by topic) the action cell span its paragraphs. */
+.txc-sec {
+  padding-top: 14px;
+  padding-bottom: 14px;
+  row-gap: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.txc-sec:last-child {
+  border-bottom: none;
+}
+
+.txc-topic {
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 3px solid oklch(0.72 0.12 var(--hue));
+}
+
+.txc-topic-inner {
+  position: sticky;
+  top: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.txc-topic h3 {
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: oklch(var(--txc-topic-l) 0.11 var(--hue));
+  overflow-wrap: anywhere;
+}
+
+.txc-range {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.txc-time {
+  min-width: 0;
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.txc-elapsed {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.txc-clock {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.txc-time.txc-hl .txc-elapsed {
+  color: #f59e0b;
+}
+
+.txc-text {
+  min-width: 0;
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  border-radius: var(--r-sm);
+  /* Clear of the sticky column header when an action item scrolls it into view. */
+  scroll-margin-top: 48px;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.txc-text.txc-hl {
+  background: rgba(245, 158, 11, 0.16);
+  box-shadow: inset 3px 0 0 #f59e0b, 0 0 0 6px rgba(245, 158, 11, 0.16);
+}
+
+/* Speaker label under the time: a name (from the recording or typed), or "You"/"Others". */
+.txc .txc-speaker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-top: 5px;
+  padding: 1px 7px 1px 5px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: oklch(var(--txc-chip-l) 0.04 var(--hue));
+  color: oklch(var(--txc-topic-l) 0.1 var(--hue));
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.txc-speaker i {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: oklch(0.65 0.15 var(--hue));
+}
+
+.txc-speaker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.txc .txc-speaker:hover {
+  background: oklch(var(--txc-chip-l) 0.07 var(--hue));
+  color: oklch(var(--txc-topic-l) 0.1 var(--hue));
+}
+
+.txc .txc-speaker-voice,
+.txc .txc-speaker-voice:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.txc-speaker-voice i {
+  background: var(--text-3);
+}
+
+/* "+ name": only visible while its row's time cell is hovered or focused. */
+.txc .txc-speaker-add,
+.txc .txc-speaker-add:hover {
+  padding: 1px 7px;
+  background: transparent;
+  color: var(--text-3);
+  font-weight: 500;
+  opacity: 0;
+}
+
+.txc-time:hover .txc-speaker-add,
+.txc .txc-speaker-add:focus-visible {
+  opacity: 1;
+}
+
+.txc-speaker-input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+/* Action items */
+.txc-sec-actions {
+  min-width: 0;
+}
+
+.txc-sec-actions-inner {
+  position: sticky;
+  top: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.txc .txc-act {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+  /* The app-wide button style keeps text on one line; an action item wraps. */
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.txc .txc-act:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--text);
+}
+
+.txc .txc-act.active,
+.txc .txc-act.active:hover {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.16);
+}
+
+.txc-act-time {
+  flex-shrink: 0;
+  margin-top: 1px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.txc-act.active .txc-act-time {
+  background: rgba(245, 158, 11, 0.22);
+  color: #b45309;
+}
+
+@media (prefers-color-scheme: dark) {
+  .txc-act.active .txc-act-time {
+    color: #fbbf24;
+  }
+}
+
+.txc-act-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.txc-act-text {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.txc-act-meta {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* One-list view: the action items as a column of their own, right of the transcript. */
+.txc-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: calc(var(--col-act) + 28px);
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.txc-panel-head {
+  position: static;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 0 12px;
+}
+
+.txc-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.txc-panel-empty {
+  padding: 16px 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* ── Folded: the topic becomes a heading row; by-topic action items sit under it ── */
+@container (max-width: 939px) {
+  .txc-cols,
+  .txc--by-topic .txc-cols {
+    grid-template-columns: var(--col-time) minmax(0, 1fr);
+  }
+
+  .txc-col-topic,
+  .txc-col-actions {
+    display: none;
+  }
+
+  .txc-col-text,
+  .txc-text {
+    grid-column: 2;
+  }
+
+  .txc-head-folded {
+    display: inline-flex;
+  }
+
+  .txc-topic,
+  .txc-sec-actions {
+    grid-column: 1 / -1;
+    grid-row: auto !important;
+  }
+
+  .txc-time,
+  .txc-text {
+    grid-row: auto !important;
+  }
+
+  .txc-topic-inner {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .txc-sec-actions.empty {
+    display: none;
+  }
+
+  .txc-sec-actions-inner {
+    position: static;
+    max-width: 560px;
+  }
+
+  .txc-panel {
+    width: 236px;
+  }
+}
+
+/* ── Narrow, one-list view: the action list slides over the transcript ── */
+@container (max-width: 699px) {
+  .txc-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    width: min(300px, 88%);
+    box-shadow: 0 8px 28px rgba(15, 17, 23, 0.18);
+    transform: translateX(105%);
+    transition: transform 0.26s var(--ease-out);
+  }
+
+  .txc--panel-open .txc-panel {
+    transform: none;
+  }
+
+  .txc .txc-panel-toggle {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 4px 2px 10px;
+    border: 1px solid var(--border-md);
+    border-radius: var(--r-pill);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .txc .txc-panel-close {
+    display: inline-flex;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .txc-panel,
+  .txc-text {
+    transition: none;
+  }
+
+  .txc-spinner {
+    animation: none;
+  }
 }
 
 /* ── Mind map tab (see MindMapView.tsx; the map itself is drawn by mindMapRenderer.ts) ── */

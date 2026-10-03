@@ -211,7 +211,17 @@ export const IPC = {
   MEETING_ACK_MIND_MAP: 'meeting:ack-mind-map',
   // renderer -> main: save the mind map's PNG export (bytes + suggested file name) through
   // a Save dialog; resolves { ok, error? }
-  MEETING_SAVE_MIND_MAP_PNG: 'meeting:save-mind-map-png'
+  MEETING_SAVE_MIND_MAP_PNG: 'meeting:save-mind-map-png',
+  // renderer -> main: build (or return the cached) transcript outline of a stopped session
+  // — topics, action items, speaker names; see generateOutline in outline.ts. Takes an
+  // optional { regenerate }. Resolves the MeetingOutline, or null on failure (the previous
+  // outline, if any, is kept). The main process also builds it by itself right after Stop.
+  MEETING_GENERATE_OUTLINE: 'meeting:generate-outline',
+  // main -> settings renderer: how far an outline generation is (OutlineProgress)
+  MEETING_OUTLINE_PROGRESS: 'meeting:outline-progress',
+  // renderer -> main: the user typed speaker names — (sessionId, { paragraphId: name }),
+  // merged into the session's speakerNames ('' = no name for that paragraph)
+  MEETING_SET_SPEAKER_NAMES: 'meeting:set-speaker-names'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
