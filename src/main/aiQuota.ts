@@ -1,4 +1,5 @@
 import type { AiQuotaNotice } from '@shared/types'
+import { cloudflareBudget, isCloudflareAi } from './cloudflareBudget'
 
 /**
  * Wispra Cloud's monthly allowance for AI text features (dictation cleanup, meeting
@@ -94,6 +95,8 @@ class AiQuota {
    * and forgets an old one as soon as a call succeeds again.
    */
   async fetch(url: string, init: RequestInit): Promise<Response> {
+    // Cloudflare Workers AI: kept inside its free daily allocation (see cloudflareBudget.ts).
+    if (isCloudflareAi(url)) return cloudflareBudget.fetch(url, init, (u, i) => fetch(u, i))
     const startedAt = Date.now()
     const response = await fetch(url, init)
     if (response.status === 402) {

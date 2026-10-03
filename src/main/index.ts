@@ -66,6 +66,7 @@ import {
 import { generateOutline } from './outline'
 import { outlineLanguage } from './outlineLogic'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
+import { useCloudflareBudgetFile } from './cloudflareBudget'
 import { transcribeFileAt } from './transcribeFile'
 import { aiQuota } from './aiQuota'
 import { detectTopic } from './topics'
@@ -145,6 +146,8 @@ async function main(): Promise<void> {
   meetingSessions.recoverOrphaned()
   // Mind map jobs the last run of the app left unfinished show up as "not finished — Continue".
   getMindMapJobs().restore()
+  // Today's count of Cloudflare Workers AI neurons, kept across restarts (see cloudflareBudget.ts).
+  useCloudflareBudgetFile(join(app.getPath('userData'), 'cloudflare-usage.json'))
   // Names Wispra picked up from the user's own History/Meetings help the recogniser (Lexicon.sttTerms)
   // and are not offered again as suggestions. Worked out in the background so the first dictation finds it ready.
   lexicon.setAutoTerms(() => autoVocab.terms())

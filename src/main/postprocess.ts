@@ -11,6 +11,7 @@ import type { ContentPlatform, DailyLimitInfo, MeetingContentResult, MeetingSegm
 import type { CorrectionHint } from './lexiconLogic'
 import { aiQuota } from './aiQuota'
 import { dailyLimitInfo, isDailyAllocation, parseRateLimit } from './rateLimit'
+import { cloudflareBudget } from './cloudflareBudget'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -1145,12 +1146,13 @@ export async function testCloudflare(accountId: string, apiToken: string): Promi
   const token = apiToken.trim()
   if (!id || !token) return { ok: false, error: 'Enter both the Account ID and the API token.' }
   try {
-    const response = await fetch(`${cloudflareAiBase(id)}/chat/completions`, {
+    // Counted like every Workers AI request, so even a test stays inside the free allocation.
+    const response = await cloudflareBudget.fetch(`${cloudflareAiBase(id)}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLOUDFLARE_CHAT_MODEL, messages: [{ role: 'user', content: 'Reply with OK.' }], max_tokens: 16 }),
       signal: AbortSignal.timeout(20_000)
-    })
+    }, (u, i) => fetch(u, i))
     if (response.ok) return { ok: true }
     if (response.status === 401 || response.status === 403) {
       return { ok: false, error: 'Cloudflare did not accept this token for Workers AI. Create it with "Create a Workers AI API Token" on the Workers AI page of the Cloudflare dashboard (permissions Workers AI Read and Edit).' }

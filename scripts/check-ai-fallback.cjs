@@ -11,6 +11,8 @@
  *
  *   A. The main-process code (bundled from src/ on the fly) with `fetch` replaced by a
  *      stub playing Groq and Cloudflare.
+ *      Also: Wispra's own count of Cloudflare neurons stops it before the free daily
+ *      allocation (10,000 per UTC day) is used up, so a Workers Paid account is not charged.
  *   B. The built Settings renderer with the real preload and stub IPC handlers: the
  *      Cloudflare fields on the Account page, and the "backup model" notes.
  */
@@ -60,7 +62,9 @@ async function partA() {
         export { runMindMap } from './src/main/mindMap'
         export { createMindMapJobs } from './src/main/mindMapJobs'
         export { generateOutline } from './src/main/outline'
-        export { LANGUAGES, DEFAULT_SETTINGS } from './src/shared/constants'`,
+        export { LANGUAGES, DEFAULT_SETTINGS } from './src/shared/constants'
+        export { CloudflareBudget, neuronsFor, useCloudflareBudgetFile } from './src/main/cloudflareBudget'
+        export { parseRateLimit } from './src/main/rateLimit'`,
       resolveDir: ROOT,
       loader: 'ts'
     },
@@ -73,6 +77,8 @@ async function partA() {
     logLevel: 'silent'
   })
   lib = require(outfile)
+  // A fresh count of today's Cloudflare neurons for this run.
+  lib.useCloudflareBudgetFile(path.join(TMP, 'cloudflare-usage.json'))
 
   // The fake providers. `exhausted` holds the routes whose daily limit is reached.
   let calls = []
@@ -217,6 +223,43 @@ async function partA() {
     reset([])
     test = await lib.testCloudflare('', CF_TOKEN)
     check('…an empty field is caught without sending anything', !test.ok && calls.length === 0, test)
+
+    // ── Staying inside Cloudflare's free daily allocation ──
+    check('neurons from tokens, as on the Cloudflare price page for gpt-oss-120b: 31,818 per million input, 68,182 per million output', Math.round(lib.neuronsFor(1_000_000, 0)) === 31818 && Math.round(lib.neuronsFor(0, 1_000_000)) === 68182 && Math.round(lib.neuronsFor(50_000, 20_000)) === 2955)
+    let clock = Date.UTC(2026, 9, 3, 20, 0, 0)
+    const file = path.join(TMP, 'budget-test.json')
+    let budget = new lib.CloudflareBudget(file, () => clock)
+    let sent = 0
+    // A big request (50,000 input tokens, up to 20,000 out) and a small one (1,500 in, up to 500 out), answered with matching usage.
+    const cfAnswer = async (_url, init) => {
+      sent++
+      const big = JSON.parse(init.body).max_tokens === 20_000
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }], usage: big ? { prompt_tokens: 50_000, completion_tokens: 20_000 } : { prompt_tokens: 1_500, completion_tokens: 400 } }), { status: 200 })
+    }
+    const req = { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(100_000) }], max_tokens: 20_000 }) }
+    const small = { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(3_000) }], max_tokens: 500 }) }
+    const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/v1/chat/completions`
+    for (let i = 0; i < 3; i++) await budget.fetch(cfUrl, req, cfAnswer)
+    check('each answer is counted from the token counts Cloudflare reports', sent === 3 && Math.round(budget.usedToday()) === 8864, { used: Math.round(budget.usedToday()) })
+    let blocked = await budget.fetch(cfUrl, small, cfAnswer)
+    check('a request that still fits under the free allocation (with the safety margin) is sent', blocked.ok && sent === 4 && Math.round(budget.usedToday()) === 8939, { used: Math.round(budget.usedToday()) })
+    blocked = await budget.fetch(cfUrl, req, cfAnswer)
+    const blockedText = await blocked.text()
+    const read = lib.parseRateLimit(null, blockedText)
+    check('past the estimated free allocation Wispra sends nothing more and answers "daily limit" itself', blocked.status === 429 && sent === 4 && read.scope === 'day' && read.unit === 'neurons' && read.limit === 10000 && read.used === Math.round(budget.usedToday()) && budget.usedToday() <= 10000, { status: blocked.status, sent, read })
+    check('…and says when it resets: 00:00 UTC, like Cloudflare', read.retryAfterMs === Date.UTC(2026, 9, 4) - clock, { waitMs: read.retryAfterMs })
+    const afterRestart = new lib.CloudflareBudget(file, () => clock)
+    check('the count for the day survives a restart of the app', Math.round(afterRestart.usedToday()) === Math.round(budget.usedToday()))
+    clock = Date.UTC(2026, 9, 4, 0, 0, 5)
+    const next = await afterRestart.fetch(cfUrl, req, cfAnswer)
+    check('a new UTC day starts from zero', next.ok && sent === 5 && Math.round(afterRestart.usedToday()) === 2955, { used: Math.round(afterRestart.usedToday()) })
+
+    // The whole chain: the budget is spent → the mind map stops at Cloudflare without calling it.
+    fs.writeFileSync(path.join(TMP, 'cloudflare-usage.json'), JSON.stringify({ day: new Date().toISOString().slice(0, 10), neurons: 9400 }))
+    lib.useCloudflareBudgetFile(path.join(TMP, 'cloudflare-usage.json'))
+    reset(['groq-120b', 'groq-20b'])
+    r = await lib.runMindMap(long, main(), 'vi', { backups: lib.resolveBackupRoutes(settings()) })
+    check('both Groq models out and the Cloudflare free allocation spent: the map stops with the daily limit (neurons) and Cloudflare is never called', !r.map && r.failure.reason === 'daily-limit' && r.failure.daily && r.failure.daily.unit === 'neurons' && r.failure.daily.limit === 10000 && calls.filter((c) => c.route === 'cloudflare').length === 0, { failure: r.failure && r.failure.daily, cfCalls: calls.filter((c) => c.route === 'cloudflare').length })
   } finally {
     console.error = quiet
     globalThis.fetch = realFetch

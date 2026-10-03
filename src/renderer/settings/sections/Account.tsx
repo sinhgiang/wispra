@@ -158,7 +158,9 @@ function AiBackupSection({ settings }: { settings: Settings }): React.JSX.Elemen
       <p className="ai-route-note">
         Mind maps, Transcript topics, summaries and posts: when Groq&apos;s gpt-oss-120b reaches its daily limit on your own
         key, Wispra goes on with Groq&apos;s smaller gpt-oss-20b (its own daily allowance), then with Cloudflare Workers AI if
-        it is set up below. Each result says when a backup model wrote it. Transcription always stays on Groq.
+        it is set up below. Each result says when a backup model wrote it. Transcription always stays on Groq. Wispra counts
+        its own Cloudflare use and stops for the day before the free daily allocation (10,000 neurons, reset at 00:00 UTC) is
+        used up, so an account on the Workers Paid plan is not charged because of Wispra.
       </p>
       {saved ? (
         <div className="ai-route-key ai-backup-key">
