@@ -12,6 +12,8 @@
  *
  *   A. The main-process code (bundled from src/ on the fly) with `fetch` replaced.
  *   B. The built Settings renderer with the real preload and stub IPC handlers.
+ *
+ * Covers the Mind map, the Transcript outline, the Website / social posts and the Summary.
  */
 const { app, BrowserWindow, ipcMain } = require('electron')
 const fs = require('fs')
@@ -56,7 +58,7 @@ async function partA() {
         export { parseRateLimit } from './src/main/rateLimit'
         export { createMindMapJobs } from './src/main/mindMapJobs'
         export { generateOutline } from './src/main/outline'
-        export { generateMeetingContent } from './src/main/postprocess'
+        export { generateMeetingContent, generateMeetingTitle } from './src/main/postprocess'
         export { LANGUAGES, WISPRA_API_BASE } from './src/shared/constants'`,
       resolveDir: ROOT,
       loader: 'ts'
@@ -197,6 +199,33 @@ async function partA() {
       onWait: () => waits++
     })
     check('posts, per-minute limit: still waited out and created', post && post.posts.length === 3 && calls.length === 2 && daily.length === 0, { calls: calls.length })
+
+    // ── Summary ──
+    const transcript = 'We agreed to launch in November. Linh rewrites the sign-up page by Friday.'
+    calls = []
+    answer = () => daily429(false)()
+    daily = []
+    waits = 0
+    let summary = await lib.generateMeetingTitle(transcript, 'groq', 'placeholder-own-groq-key', '', undefined, undefined, undefined, undefined, {
+      onDailyLimit: (info) => daily.push(info),
+      onWait: () => waits++
+    })
+    check('Summary: a daily limit is not waited out and is reported with its numbers', summary === null && calls.length === 1 && waits === 0 && daily.length === 1 && daily[0].used === 198051 && daily[0].limit === 200000 && daily[0].viaCloud === false, { calls: calls.length, waits })
+    calls = []
+    answer = () => daily429(true)()
+    daily = []
+    summary = await lib.generateMeetingTitle(transcript, 'proxy', '', '', undefined, undefined, 'placeholder-session-token', undefined, { onDailyLimit: (info) => daily.push(info) })
+    check('Summary through Wispra Cloud: the same, marked as the Wispra Cloud limit', summary === null && calls.length === 1 && daily.length === 1 && daily[0].viaCloud === true && calls[0].host === new URL(lib.WISPRA_API_BASE).host, { calls: calls.length })
+    calls = []
+    seen = 0
+    answer = () => (seen++ === 0 ? minute429() : null)
+    daily = []
+    waits = 0
+    summary = await lib.generateMeetingTitle(transcript, 'groq', 'placeholder-own-groq-key', '', undefined, undefined, undefined, undefined, {
+      onDailyLimit: (info) => daily.push(info),
+      onWait: () => waits++
+    })
+    check('Summary, per-minute limit: waited out, asked again, and the summary is made', summary && summary.title && calls.length === 2 && calls[1].at - calls[0].at >= 280 && waits === 1 && daily.length === 0, { calls: calls.length, waitedMs: calls[1] && calls[1].at - calls[0].at })
   } finally {
     console.error = quiet
     globalThis.fetch = realFetch
@@ -240,6 +269,16 @@ async function partB() {
     win.webContents.send(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, phase: 'outline', done: 0, total: 0, dailyLimit: daily(id === 'cloud') })
     await sleep(50)
     return null
+  })
+  // The Summary: one made right after Stop already hit the daily limit; Try again waits (per minute), then hits it again.
+  handle(IPC.MEETING_GET_SUMMARY_STATUS, (_event, id) => (id === 'one' ? { sessionId: id, dailyLimit: daily(false) } : null))
+  let summaryCalls = 0
+  handle(IPC.MEETING_GENERATE_SUMMARY, async (_event, id) => {
+    summaryCalls++
+    win.webContents.send(IPC.MEETING_SUMMARY_STATUS, { sessionId: id, waitingUntil: Date.now() + 1200 })
+    await sleep(1200)
+    win.webContents.send(IPC.MEETING_SUMMARY_STATUS, { sessionId: id, dailyLimit: daily(id === 'cloud') })
+    return false
   })
   handle(IPC.MEETING_GENERATE_CONTENT, async (_event, id, platform) => {
     win.webContents.send(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, dailyLimit: daily(id === 'cloud') })
@@ -293,6 +332,19 @@ async function partB() {
   await sleep(500)
   t = await textOf('.meeting-summary-view')
   check('Website tab: the same daily-limit message with Try again — not "per-minute", not "connection/API key"', /daily limit is reached/.test(t) && /198,051 of 200,000 tokens used today/.test(t) && /resets in about 18 min/.test(t) && /Try again/.test(t) && !/per-minute|connection/i.test(t), t)
+
+  // Summary tab.
+  await clickButton('Summary', TABS)
+  await sleep(400)
+  t = await textOf('.meeting-summary-view')
+  check('Summary tab: a summary that hit the daily limit after Stop says so — numbers, reset time, Try again — not "No summary available"', /daily limit is reached/.test(t) && /198,051 of 200,000 tokens used today/.test(t) && /resets in about 18 min/.test(t) && /Try again/.test(t) && !/No summary available|per-minute|connection/i.test(t), t)
+  await clickButton('Try again', `document.querySelector('.meeting-summary-view')`)
+  await sleep(400)
+  t = await textOf('.meeting-summary-view')
+  check('Summary tab, Try again: while the request waits for the per-minute limit it says so', summaryCalls === 1 && /Waiting for the AI provider's per-minute limit/.test(t), t)
+  await sleep(1400)
+  t = await textOf('.meeting-summary-view')
+  check('…and when it then stops at the daily limit, the daily-limit message is back with Try again', /daily limit is reached/.test(t) && /Try again/.test(t) && !/Waiting/.test(t), t)
 
   // Through Wispra Cloud: no advice to switch to Wispra Cloud.
   await openSession('cloud')

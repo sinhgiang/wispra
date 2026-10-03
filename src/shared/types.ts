@@ -588,6 +588,14 @@ export type ContentPlatform = 'website' | 'facebook' | 'instagram' | 'linkedin' 
  * 429): it waits and goes again at `waitingUntil` (ms since epoch), or — `rateLimited` —
  * it gave up because the limit was still reached after waiting (see generateMeetingContent).
  */
+/** The Summary's request hit the provider's limit — same fields as MeetingContentStatus, for the title + summary. */
+export interface MeetingSummaryStatus {
+  sessionId: string
+  waitingUntil?: number
+  rateLimited?: boolean
+  dailyLimit?: DailyLimitInfo
+}
+
 export interface MeetingContentStatus {
   sessionId: string
   platform: ContentPlatform

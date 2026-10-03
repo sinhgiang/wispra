@@ -471,7 +471,9 @@ export async function generateMeetingTitle(
   localLlmModel?: string,
   proxyToken?: string,
   /** Target language for the summary, from the session's languageConfig.summary — "auto" or undefined mirrors the transcript's own language (prior behavior). */
-  summaryLanguage?: string
+  summaryLanguage?: string,
+  /** The provider's limits: a per-minute one is waited out, a daily one reported (same as for posts). */
+  hooks: ContentRequestHooks = {}
 ): Promise<MeetingTitleResult | null> {
   const trimmed = transcript.trim()
   if (!trimmed) return null
@@ -507,7 +509,7 @@ export async function generateMeetingTitle(
       : `${trimmed.slice(0, SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}`
 
   try {
-    const response = await aiQuota.fetch(`${base}/chat/completions`, {
+    const response = await sendWaitingOutRateLimits(() => aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -530,7 +532,8 @@ export async function generateMeetingTitle(
         response_format: { type: 'json_object' }
       }),
       signal: AbortSignal.timeout(MEETING_TITLE_TIMEOUT_MS)
-    })
+    }), hooks, provider === 'proxy', 'title generation')
+    if (!response) return null
     if (!response.ok) {
       console.error(`[meeting] title generation: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
       return null
@@ -676,6 +679,41 @@ export function rateLimitWaitMs(retryAfter: string | null, body: string): number
   return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, parseRateLimit(retryAfter, body).retryAfterMs)
 }
 
+/**
+ * Sends a chat request through `send`, waiting out the provider's per-minute limit
+ * (HTTP 429) and sending it again, within `hooks.budgetMs` of waiting in total. A daily
+ * limit is never waited out — it can take hours: it is reported through
+ * hooks.onDailyLimit. Returns the final response, or null when it gave up on a limit.
+ */
+async function sendWaitingOutRateLimits(
+  send: () => Promise<Response>,
+  hooks: ContentRequestHooks,
+  viaCloud: boolean,
+  what: string
+): Promise<Response | null> {
+  const budgetMs = hooks.budgetMs ?? CONTENT_RATE_LIMIT_BUDGET_MS
+  let waited = 0
+  for (;;) {
+    const response = await send()
+    if (response.status !== 429) return response
+    const body = await response.text().catch(() => '')
+    console.error(`[meeting] ${what}: HTTP 429 — ${body.slice(0, 300)}`)
+    const limit = parseRateLimit(response.headers.get('retry-after'), body)
+    if (limit.scope === 'day') {
+      hooks.onDailyLimit?.(dailyLimitInfo(limit, viaCloud))
+      return null
+    }
+    const wait = Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, limit.retryAfterMs)
+    if (waited + wait > budgetMs) {
+      hooks.onRateLimited?.()
+      return null
+    }
+    waited += wait
+    hooks.onWait?.(Date.now() + wait)
+    await new Promise((resolve) => setTimeout(resolve, wait))
+  }
+}
+
 export interface ContentRequestHooks {
   /** The provider said "too many requests": the request goes again at `untilMs`. */
   onWait?: (untilMs: number) => void
@@ -734,42 +772,28 @@ export async function generateMeetingContent(
     // The provider's per-minute limit (HTTP 429) is waited out and the request sent again —
     // a mind map being built with the same key can use up the allowance for a while —
     // within a total waiting budget; past it, the caller is told why there is no result.
-    const budgetMs = hooks.budgetMs ?? CONTENT_RATE_LIMIT_BUDGET_MS
-    let waited = 0
-    let response: Response
-    for (;;) {
-      response = await aiQuota.fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: withTargetLanguage(CONTENT_PROMPTS[platform], targetLanguage) },
-            { role: 'user', content }
-          ],
-          max_tokens: CONTENT_MAX_TOKENS[platform],
-          temperature: 0.5,
-          response_format: { type: 'json_object' }
+    const response = await sendWaitingOutRateLimits(
+      () =>
+        aiQuota.fetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: withTargetLanguage(CONTENT_PROMPTS[platform], targetLanguage) },
+              { role: 'user', content }
+            ],
+            max_tokens: CONTENT_MAX_TOKENS[platform],
+            temperature: 0.5,
+            response_format: { type: 'json_object' }
+          }),
+          signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
         }),
-        signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
-      })
-      if (response.status !== 429) break
-      const body = await response.text().catch(() => '')
-      console.error(`[meeting] ${platform} content generation: HTTP 429 — ${body.slice(0, 300)}`)
-      const limit = parseRateLimit(response.headers.get('retry-after'), body)
-      if (limit.scope === 'day') {
-        hooks.onDailyLimit?.(dailyLimitInfo(limit, provider === 'proxy'))
-        return null
-      }
-      const wait = Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, limit.retryAfterMs)
-      if (waited + wait > budgetMs) {
-        hooks.onRateLimited?.()
-        return null
-      }
-      waited += wait
-      hooks.onWait?.(Date.now() + wait)
-      await new Promise((resolve) => setTimeout(resolve, wait))
-    }
+      hooks,
+      provider === 'proxy',
+      `${platform} content generation`
+    )
+    if (!response) return null
     if (!response.ok) {
       console.error(`[meeting] ${platform} content generation: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
       return null

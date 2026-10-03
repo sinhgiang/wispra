@@ -19,7 +19,7 @@ import type {
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
-import type { DailyLimitInfo, MindMapJobStatus } from '@shared/types'
+import type { DailyLimitInfo, MeetingSummaryStatus, MindMapJobStatus } from '@shared/types'
 import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
@@ -455,6 +455,8 @@ export function MeetingPanel(): React.JSX.Element {
   const [pastSummary, setPastSummary] = useState('')
   /** True while a manual "Try again" summary regeneration is in flight for the session being viewed — the Summary tab has no automatic reopen-to-retry like the content tabs since it never auto-fires again after the initial post-Stop attempt. */
   const [summaryGenerating, setSummaryGenerating] = useState(false)
+  /** The viewed session's summary request and the provider's limits: waiting (per minute), gave up, or stopped at the daily limit. */
+  const [summaryStatus, setSummaryStatus] = useState<MeetingSummaryStatus | null>(null)
   /** Which view the past-session panel is showing: raw transcript, AI summary, or one of the on-demand-generated platform tabs. */
   const [pastView, setPastView] = useState<PastView>('transcript')
   /** On-demand-generated ready-to-post content for the session being viewed, cached on the session itself once generated (see setContent in meetingSessions.ts). */
@@ -784,6 +786,9 @@ export function MeetingPanel(): React.JSX.Element {
     window.api.onMeetingMindMapProgress((progress) => {
       setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
     })
+    window.api.onMeetingSummaryStatus((status) => {
+      if (viewingPastIdRef.current === status.sessionId) setSummaryStatus(status)
+    })
     window.api.onMeetingContentStatus((status) => {
       const key = `${status.sessionId}/${status.platform}`
       if (status.rateLimited) contentRateLimitedRef.current.add(key)
@@ -852,6 +857,7 @@ export function MeetingPanel(): React.JSX.Element {
     setGeneratingPlatforms({})
     setFailedPlatforms({})
     setContentWaiting({})
+    setSummaryStatus(null)
     setSummaryGenerating(false)
     setVariantIndex({ facebook: 0, instagram: 0, linkedin: 0, twitter: 0 })
     setChatInput('')
@@ -877,6 +883,10 @@ export function MeetingPanel(): React.JSX.Element {
       setPastOutline(full.outline)
       setPastSpeakerNames(full.speakerNames ?? {})
       setPastLoadedId(id)
+      // A summary made right after Stop may have hit the provider's limit before this tab was open.
+      void window.api.getMeetingSummaryStatus(id).then((status) => {
+        if (!cancelled && viewingPastIdRef.current === id) setSummaryStatus(status ?? null)
+      })
     })
     return () => {
       cancelled = true
@@ -1089,6 +1099,7 @@ export function MeetingPanel(): React.JSX.Element {
   // pastTitle, so there's nothing else to update here on success or failure.
   const retrySummary = (): void => {
     if (viewingPastId === null || summaryGenerating) return
+    setSummaryStatus(null)
     setSummaryGenerating(true)
     void window.api.generateMeetingSummary(viewingPastId).then(() => {
       setSummaryGenerating(false)
@@ -1699,8 +1710,14 @@ export function MeetingPanel(): React.JSX.Element {
                     <div className="meeting-transcript-empty">
                       <div>
                         {pastStatus === 'summarizing' || summaryGenerating
-                          ? 'Summarizing…'
-                          : 'No summary available for this session.'}
+                          ? summaryStatus?.waitingUntil && summaryStatus.waitingUntil > Date.now()
+                            ? WAITING_TEXT
+                            : 'Summarizing…'
+                          : summaryStatus?.dailyLimit
+                            ? `${dailyLimitText(summaryStatus.dailyLimit)} ${dailyLimitAdvice(summaryStatus.dailyLimit, 'Try again')}`
+                            : summaryStatus?.rateLimited
+                              ? RATE_LIMITED_TEXT
+                              : 'No summary available for this session.'}
                       </div>
                       {/* The allowance ran out (now, or when the recording ended): say why there is no summary. */}
                       {pastStatus !== 'summarizing' && !summaryGenerating && quotaMessage}

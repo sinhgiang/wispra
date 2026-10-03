@@ -12,7 +12,7 @@ System-wide voice dictation desktop app (Windows + macOS). Press the global hotk
 - `npm run dev` — start the app in dev mode (electron-vite)
 - `npm run typecheck` — TypeScript check for all processes
 - `npm run check:content-rate-limit` — automated check (same setup as check:content-retry, plus generateMeetingContent against a stub `fetch`): a Website/social request that gets HTTP 429 waits as the provider asks and tries again, the tab says it is waiting for the per-minute limit, and a limit that never clears is reported as such
-- `npm run check:daily-limit` — automated check (same setup, plus the AI calls against a stub provider): the provider's daily limit (Groq TPD/RPD) is not waited out and the Mind map, Transcript and Website/social tabs say "daily limit" with the numbers and the reset time; a per-minute limit is still waited out
+- `npm run check:daily-limit` — automated check (same setup, plus the AI calls against a stub provider): the provider's daily limit (Groq TPD/RPD) is not waited out and the Mind map, Transcript, Summary and Website/social tabs say "daily limit" with the numbers and the reset time; a per-minute limit is still waited out
 - `npm run build` — bundle main/preload/renderer
 - `npm run check:transcript-columns` — automated check (same setup, plus the outline functions against a fake AI): the Transcript tab's four columns — topics, action items, speaker names, the By topic / List switch, narrow windows, dark theme
 - `npm run check:content-retry` — automated check (builds, then runs the Meeting tab in Electron with stub IPC, no API key): opening the Mind map / Website / social tabs calls no AI and shows a "Create …" button; pressing it calls the generator once, a failure offers "Try again" once more

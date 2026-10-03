@@ -189,6 +189,12 @@ export const IPC = {
   // regenerateSessionSummary in main/index.ts. Resolves true/false; the actual
   // title/summary update (on success) arrives via MEETING_SESSION_UPDATED below.
   MEETING_GENERATE_SUMMARY: 'meeting:generate-summary',
+  // main -> settings renderer: the summary request is waiting for the provider's per-minute
+  // limit, gave up on it, or stopped at its daily limit (MeetingSummaryStatus)
+  MEETING_SUMMARY_STATUS: 'meeting:summary-status',
+  // renderer -> main: the last such status of a session's summary (MeetingSummaryStatus | null) —
+  // a summary made right after Stop may have failed before the Summary tab was open
+  MEETING_GET_SUMMARY_STATUS: 'meeting:get-summary-status',
   // main -> settings renderer: a session's title/summary/status changed (e.g. the
   // AI-generated title finished after Stop) — carries the full updated MeetingSession
   MEETING_SESSION_UPDATED: 'meeting:session-updated',
