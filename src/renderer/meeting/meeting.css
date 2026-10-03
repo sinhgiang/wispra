@@ -933,6 +933,36 @@
   padding-top: 40px;
 }
 
+/* An empty Mind map / Website / social tab: content is created only when this is pressed. */
+.meeting-create-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.meeting-create-btn {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--r-sm);
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.meeting-create-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  filter: brightness(1.08);
+}
+.meeting-create-note {
+  max-width: 380px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .meeting-retry-btn {
   display: inline-block;
   margin-top: 12px;
