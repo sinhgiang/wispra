@@ -12,10 +12,10 @@ System-wide voice dictation desktop app (Windows + macOS). Press the global hotk
 - `npm run dev` — start the app in dev mode (electron-vite)
 - `npm run typecheck` — TypeScript check for all processes
 - `npm run build` — bundle main/preload/renderer
-- `npm run check:cloud-switch` — automated check (same setup, plus the routing code against a stub `fetch`): the Account page's Wispra Cloud / own-key choice changes only `provider` and never removes or shows a saved key; AI text, transcription and the Transcribe tab go through Wispra Cloud or straight to Groq accordingly
-- `npm run check:content-retry` — automated check (builds, then runs the Meeting tab in Electron with stub IPC, no API key): a failing Website/social content tab calls the generator once, and "Try again" once more
 - `npm run check:mind-map-background` — automated check (same setup, plus the job code against a fake slow / rate-limited provider): the mind map job survives leaving the tab, the session and the page, continues after a failure or an app restart without redoing finished parts, and stops with a reason at its time limits
 - `npm run check:ai-quota` — automated check (same setup, plus the main-process AI functions against a fake server answering HTTP 402): every AI text feature when Wispra Cloud's monthly AI allowance is used up
+- `npm run check:cloud-switch` — automated check (same setup, plus the routing code against a stub `fetch`): the Account page's Wispra Cloud / own-key choice changes only `provider` and never removes or shows a saved key; AI text, transcription and the Transcribe tab go through Wispra Cloud or straight to Groq accordingly
+- `npm run check:content-retry` — automated check (builds, then runs the Meeting tab in Electron with stub IPC, no API key): a failing Website/social content tab calls the generator once, and "Try again" once more
 - `npm run build:win` — build Windows NSIS installer
 - `npm run build:mac` — build macOS DMG (requires a Mac)
 - `node scripts/generate-icons.js` — regenerate PNG icons in `resources/`
