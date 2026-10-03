@@ -106,6 +106,8 @@ export function MindMapView({
   stopped,
   quotaMessage,
   regenerateTitle,
+  canCreate,
+  onCreate,
   onRetry,
   onRegenerate,
   onShowInTranscript
@@ -124,6 +126,10 @@ export function MindMapView({
   /** What to show when it stopped because Wispra Cloud's monthly AI allowance is used up. */
   quotaMessage: ReactNode
   regenerateTitle: string
+  /** False until it is known whether this session already has a job — until then no "Create" button is offered. */
+  canCreate: boolean
+  /** Starts building the map: opening the tab never does. */
+  onCreate: () => void
   onRetry: () => void
   onRegenerate: () => void
   onShowInTranscript: (node: MindMapTreeNode, color: string) => void
@@ -535,6 +541,16 @@ export function MindMapView({
               <button type="button" className="meeting-retry-btn" onClick={onRetry}>
                 {stoppedText(stopped).action}
               </button>
+            </>
+          ) : canCreate ? (
+            <>
+              <button type="button" className="meeting-create-btn" onClick={onCreate}>
+                Create mind map
+              </button>
+              <div className="mm-overlay-step">
+                The whole recording as a map of its topics, decisions, action items and open questions. It is built in the
+                background and saved with the recording.
+              </div>
             </>
           ) : null}
         </div>
