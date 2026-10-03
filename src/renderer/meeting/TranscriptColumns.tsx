@@ -349,14 +349,6 @@ export function TranscriptColumns({
           {hasOutline && byTopic && <span className="txc-col-actions">{actionsHeader}</span>}
         </div>
 
-        {canCreate && !hasOutline && !generating && !failed && blocks.length > 0 && (
-          <div className="txc-status txc-create" role="status">
-            <span>Topics and action items have not been made for this recording yet.</span>
-            <button type="button" className="meeting-create-btn" onClick={onCreate}>
-              Create topics and action items
-            </button>
-          </div>
-        )}
         {(generating || (failed && !generating)) && (
           <div className={generating ? 'txc-status' : 'txc-status txc-status-failed'} role="status">
             {generating ? (
@@ -381,6 +373,14 @@ export function TranscriptColumns({
           </div>
         )}
 
+        {canCreate && !hasOutline && !generating && !failed && blocks.length > 0 && (
+          <div className="txc-status txc-create" role="status">
+            <span>Topics and action items have not been made for this recording yet.</span>
+            <button type="button" className="meeting-create-btn" onClick={onCreate}>
+              Create topics and action items
+            </button>
+          </div>
+        )}
         {loading ? null : blocks.length === 0 ? (
           <div className="meeting-transcript-empty">No speech was transcribed in this session.</div>
         ) : (
