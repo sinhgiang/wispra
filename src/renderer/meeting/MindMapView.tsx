@@ -48,7 +48,9 @@ function stoppedText(job: MindMapJobStatus): { title: string; text: string; acti
   const kept = job.total > 1 && job.done > 0
   const keptText = kept ? ` ${job.done} of ${job.total} parts are done and kept — it goes on from there.` : ''
   const action = kept ? 'Continue' : 'Try again'
-  switch (job.reason) {
+  // A job stopped by 0.6.1 recorded the provider's "Failed to generate JSON" as a refusal.
+  const reason = job.reason === 'refused' && /failed to generate json/i.test(job.detail ?? '') ? 'bad-answer' : job.reason
+  switch (reason) {
     case 'interrupted':
       return { title: 'The mind map was not finished', text: `Wispra was closed while it was being built.${keptText}`, action }
     case 'time-limit':
@@ -67,8 +69,21 @@ function stoppedText(job: MindMapJobStatus): { title: string; text: string; acti
       return { title: 'No AI access', text: 'Add your API key, or sign in on the Account tab, then try again.', action }
     case 'quota':
       return { title: 'The mind map was not built', text: `This month's AI allowance is used up.${keptText}`, action }
-    case 'refused':
-      return { title: 'The AI provider refused the request', text: `Check your API key or plan.${keptText}`, action }
+    case 'bad-answer':
+      return {
+        title: 'The AI returned a result that could not be used',
+        text: `Its answer for one part of the recording came back broken, several times in a row — this is not a problem with your API key or plan.${keptText}`,
+        action
+      }
+    case 'refused': {
+      // Only "not authorised" answers point at the key; anything else is shown as the provider put it.
+      const keyProblem = /^HTTP 40[13]\b/.test(job.detail ?? '')
+      return {
+        title: 'The AI provider refused the request',
+        text: `${keyProblem ? 'Check your API key or plan.' : 'It did not accept the request — see its message below.'}${keptText}`,
+        action
+      }
+    }
     default:
       return { title: 'Could not build the mind map', text: `Check your connection/API key, then try again.${keptText}`, action }
   }

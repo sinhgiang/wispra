@@ -81,7 +81,11 @@ async function partA() {
     const system = body.messages[0].content
     const user = body.messages[1].content
     const kind = system.startsWith('You are organising one part') ? 'part' : system.startsWith('You are tidying') ? 'merge' : 'single'
-    calls.push({ kind, system, maxTokens: body.max_tokens })
+    calls.push({ kind, system, maxTokens: body.max_tokens, jsonMode: !!body.response_format })
+    // Groq's answer when the model's output fails its JSON mode check (see callJson in mindMap.ts).
+    if (script.badJson && script.badJson(kind, body)) {
+      return new Response(JSON.stringify({ error: { message: "Failed to generate JSON. Please adjust your prompt. See 'failed_generation' for more details.", type: 'invalid_request_error', code: 'json_validate_failed', failed_generation: '{"topics": [' } }), { status: 400 })
+    }
     await sleep(3)
     const refs = [...user.matchAll(/^\[(\d+)\]/gm)].map((m) => Number(m[1]))
     const answer = script[kind] ? script[kind](refs, user) : null
@@ -120,6 +124,15 @@ async function partA() {
 
     script = { single: () => ({ topics: [], actions: [{ text: 'x', ref: 1 }] }) }
     check('an answer without topics is a failure, not an empty outline', (await run(short)) === null && calls.length === 1, { calls: calls.length })
+
+    // The outline shares callJson with the mind map, so it gets the mind map's JSON retry (T-0024).
+    let refusals = 0
+    script = {
+      single: () => ({ topics: [{ title: 'Kết quả mở bán', start: 1 }], actions: [], speakers: [] }),
+      badJson: (kind) => kind === 'single' && refusals++ < 2
+    }
+    outline = await run(short)
+    check('HTTP 400 "Failed to generate JSON" on the outline: asked again (the last time without JSON mode) and the outline is built', outline !== null && outline.topics.length === 1 && calls.map((c) => (c.jsonMode ? 'json' : 'plain')).join() === 'json,json,plain', calls.map((c) => (c.jsonMode ? 'json' : 'plain')))
 
     // A long recording: about 2 h 13 min, 200 paragraphs → parts + one merge call.
     const long = makeSegments('b', 200, 620)

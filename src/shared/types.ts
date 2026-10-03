@@ -508,11 +508,12 @@ export interface MindMapProgress {
  * - timeout: the provider did not answer in time
  * - offline: the provider could not be reached
  * - no-key: no API key / not signed in
+ * - bad-answer: the AI's answer could not be used (broken or empty JSON), retries and smaller parts included
  * - refused: the provider rejected the request (bad key, no access)
  * - quota: Wispra Cloud's monthly AI allowance is used up (see aiQuota.ts)
  * - failed: anything else (server error, unusable answer)
  */
-export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'timeout' | 'offline' | 'no-key' | 'refused' | 'quota' | 'failed'
+export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'timeout' | 'offline' | 'no-key' | 'bad-answer' | 'refused' | 'quota' | 'failed'
 
 /**
  * A session's mind map job as the renderer sees it (see mindMapJobs.ts). The job runs in

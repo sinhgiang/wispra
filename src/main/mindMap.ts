@@ -51,6 +51,13 @@ const CALL_RETRIES = 1
 const MAX_RATE_LIMIT_WAIT_MS = 20_000
 /** Times one call waits out a rate limit (HTTP 429) before giving up. */
 const MAX_RATE_LIMIT_WAITS = 3
+/**
+ * Answers one call may get that cannot be read as JSON before it gives up. The first two
+ * tries ask in JSON mode; the last asks without it and takes the JSON out of the text —
+ * a provider that validates JSON mode (Groq answers HTTP 400 "Failed to generate JSON")
+ * then has nothing to reject.
+ */
+const MAX_BAD_ANSWERS = 3
 
 export const TRANSCRIPT_FORMAT =
   'The transcript is given as one tagged line per paragraph: "[ref] (h:mm:ss) text" — ref is that paragraph\'s reference number.'
@@ -134,6 +141,40 @@ export interface JsonCallControl {
 }
 
 const TOO_LARGE = /too large|reduce (?:your|the) (?:message|prompt)|context[_ ]length|maximum context/i
+/** The provider's JSON mode gave up on what the model wrote (Groq: code "json_validate_failed"). Not a problem with the key, the plan or the request. */
+const JSON_MODE_FAILED = /json_validate_failed|failed to generate json|failed_generation/i
+
+/** The JSON object in a model's answer — the whole text, or what sits between its first "{" and last "}" (code fences, a sentence before or after). Null when there is none. */
+export function parseJsonObject(text: string | undefined): Record<string, unknown> | null {
+  if (!text) return null
+  const trimmed = text.trim()
+  const candidates = [trimmed]
+  const from = trimmed.indexOf('{')
+  const to = trimmed.lastIndexOf('}')
+  if (from >= 0 && to > from && (from > 0 || to < trimmed.length - 1)) candidates.push(trimmed.slice(from, to + 1))
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null
+}
+
+/** What the model had written when the provider's JSON mode rejected it ("failed_generation" in the error body) — often usable as it is. */
+function failedGeneration(body: string): string | undefined {
+  try {
+    const error = (JSON.parse(body) as { error?: unknown })?.error
+    // The Wispra Cloud proxy passes the provider's body on as a string inside "error".
+    if (typeof error === 'string') return failedGeneration(error)
+    const text = (error as { failed_generation?: unknown } | undefined)?.failed_generation
+    return typeof text === 'string' ? text : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** The message inside a provider's error body ({"error": {"message": "…"}} or {"error": "…"}), shortened. */
 function errorDetail(body: string): string {
@@ -152,9 +193,11 @@ function errorDetail(body: string): string {
 }
 
 /**
- * One JSON-mode chat call. Retries once on a failure that can pass (timeout, 5xx,
- * cut-off JSON) and waits out a rate limit; a refused request (bad key, bad input) is
- * not retried. Returns the parsed object, or null — never throws.
+ * One JSON-mode chat call. Retries once on a failure that can pass (timeout, 5xx) and
+ * waits out a rate limit; a refused request (bad key, bad input) is not retried. An
+ * answer that cannot be read as JSON — including the provider's own "could not generate
+ * JSON" — is asked for again, the last time without JSON mode (see MAX_BAD_ANSWERS).
+ * Returns the parsed object, or null — never throws.
  *
  * With `control` (a background run) a rate limit is waited out for as long as the
  * provider asks, as many times as it takes — until control.deadline; without it, a few
@@ -180,7 +223,15 @@ export async function callJson(
     return giveUp()
   }
   let rateLimitWaits = 0
+  let badAnswers = 0
+  /** Notes an unreadable answer; true while the call may ask again. */
+  const mayAskAgain = (detail: string, status?: number): boolean => {
+    failure = { kind: 'bad-answer', status, detail }
+    return ++badAnswers < MAX_BAD_ANSWERS && !outOfTime()
+  }
   for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
+    // The last try for a readable answer goes without JSON mode.
+    const jsonMode = badAnswers < MAX_BAD_ANSWERS - 1
     try {
       const response = await aiQuota.fetch(`${target.base}/chat/completions`, {
         method: 'POST',
@@ -193,7 +244,7 @@ export async function callJson(
           ],
           max_tokens: maxTokens,
           temperature: 0.3,
-          response_format: { type: 'json_object' }
+          ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
         }),
         signal: AbortSignal.timeout(
           control ? Math.max(1000, Math.min(MIND_MAP_CALL_TIMEOUT_MS, control.deadline - Date.now())) : MIND_MAP_CALL_TIMEOUT_MS
@@ -203,6 +254,16 @@ export async function callJson(
         const body = await response.text().catch(() => '')
         console.error(`[meeting] mind map ${what}: HTTP ${response.status} — ${body.slice(0, 500)}`)
         const detail = errorDetail(body)
+        if (response.status === 400 && JSON_MODE_FAILED.test(body)) {
+          // The model's JSON did not pass the provider's check. What it wrote comes back
+          // in the error and is often fine once the text around it is dropped.
+          const salvaged = parseJsonObject(failedGeneration(body))
+          if (salvaged) return salvaged
+          if (!mayAskAgain(detail, 400)) return giveUp()
+          await control?.gate?.()
+          attempt--
+          continue
+        }
         // A request bigger than the provider's per-minute allowance (or the model's
         // context) can never pass, however long we wait: the caller cuts the part in two.
         if (response.status === 413 || ((response.status === 429 || response.status === 400) && TOO_LARGE.test(body))) {
@@ -237,16 +298,13 @@ export async function callJson(
       }
       const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> }
       const raw = data.choices?.[0]?.message?.content?.trim()
-      if (!raw) {
-        console.error(`[meeting] mind map ${what}: empty response content`)
-        failure = { kind: 'bad-answer', detail: 'The AI returned an empty answer.' }
-        continue
-      }
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-      failure = { kind: 'bad-answer', detail: 'The AI answer was not valid JSON.' }
-      const parsed: unknown = JSON.parse(cleaned)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
-      console.error(`[meeting] mind map ${what}: response was not a JSON object`)
+      const parsed = parseJsonObject(raw)
+      if (parsed) return parsed
+      console.error(`[meeting] mind map ${what}: ${raw ? 'response was not a JSON object' : 'empty response content'}`)
+      if (!mayAskAgain(raw ? 'The AI answer was not valid JSON.' : 'The AI returned an empty answer.')) return giveUp()
+      await control?.gate?.()
+      attempt--
+      continue
     } catch (err) {
       console.error(`[meeting] mind map ${what} failed:`, err)
       const name = (err as { name?: string } | null)?.name
@@ -285,7 +343,7 @@ export interface MindMapLimits {
 
 /** Why a run ended without a map — see MindMapStopReason for what each means to the user. */
 export interface MindMapRunFailure {
-  reason: Exclude<MindMapStopReason, 'interrupted' | 'no-key'>
+  reason: Exclude<MindMapStopReason, 'interrupted' | 'no-key' | 'quota'>
   detail?: string
 }
 
@@ -322,6 +380,8 @@ function toRunFailure(failure: JsonCallFailure | null, totalDeadline: number): M
       return { reason: 'refused', detail: [failure.status && `HTTP ${failure.status}`, detail].filter(Boolean).join(' — ') || undefined }
     case 'too-large':
       return { reason: 'refused', detail: detail ?? 'The request is too large for this AI provider.' }
+    case 'bad-answer':
+      return { reason: 'bad-answer', detail }
     default:
       return { reason: 'failed', detail: [failure?.status && `HTTP ${failure.status}`, detail].filter(Boolean).join(' — ') || undefined }
   }
@@ -400,7 +460,7 @@ export async function runMindMap(
     const outline = parseOutline(raw, lines, 2)
     if (outline.topics.length === 0) {
       console.error('[meeting] mind map outline: response JSON had no topics')
-      return { map: null, failure: { reason: 'failed', detail: 'The AI answer had no topics.' } }
+      return { map: null, failure: { reason: 'bad-answer', detail: 'The AI answer had no topics.' } }
     }
     return {
       map: assembleMindMap({
@@ -426,18 +486,26 @@ export async function runMindMap(
   let done = outlines.filter(Boolean).length
   report({ phase: 'outline', done, total: parts.length })
 
-  /** Outlines one stretch of the transcript; a stretch the provider calls too large is cut in two (twice at most). */
+  /**
+   * Outlines one stretch of the transcript. A stretch the provider calls too large, or
+   * whose answer could not be read even after the retries, is cut in two (twice at
+   * most): a shorter stretch needs a shorter answer, which is far less likely to break.
+   */
   const outlineLines = async (part: TranscriptLine[], label: string, deadline: number, depth: number): Promise<Outline | null> => {
+    const control = controlFor(deadline)
+    let own: JsonCallFailure | null = null
     const raw = await callJson(
       target,
       `${PART_PROMPT}\n${languageRule(language, 'transcript')}`,
       `${label}\n\n${transcriptOf(part)}`,
       PART_MAX_TOKENS,
       label,
-      controlFor(deadline)
+      // Parts run side by side: keep this stretch's own failure apart from the others'.
+      { ...control, onFailure: (failure) => ((own = failure), control.onFailure?.(failure)) }
     )
     if (raw) return parseOutline(raw, part, 1)
-    if (lastFailure?.kind !== 'too-large' || part.length < 2 || depth >= 2) return null
+    const kind = (own as JsonCallFailure | null)?.kind
+    if ((kind !== 'too-large' && kind !== 'bad-answer') || part.length < 2 || depth >= 2) return null
     const joined: Outline = { topics: [], decisions: [], actions: [], questions: [] }
     for (const half of splitIntoParts(part, linesLength(part) / 2, 2)) {
       const outline = await outlineLines(half, label, deadline, depth + 1)
@@ -486,7 +554,7 @@ export async function runMindMap(
   }
   if (all.topics.length === 0) {
     console.error('[meeting] mind map: no part produced a topic')
-    return { map: null, failure: { reason: 'failed', detail: 'The AI found no topics in the recording.' } }
+    return { map: null, failure: { reason: 'bad-answer', detail: 'The AI found no topics in the recording.' } }
   }
 
   report({ phase: 'merge', done: parts.length, total: parts.length })
@@ -502,7 +570,7 @@ export async function runMindMap(
   const branches = groupTopics(merged, all.topics)
   if (!branches) {
     console.error('[meeting] mind map merge: response JSON had no usable branches')
-    return { map: null, failure: { reason: 'failed', detail: 'The AI answer for the final step was not usable.' } }
+    return { map: null, failure: { reason: 'bad-answer', detail: 'The AI answer for the final step was not usable.' } }
   }
   return {
     map: assembleMindMap({
