@@ -10,6 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "check:daily-limit": "electron-vite build && electron scripts/check-daily-limit.cjs",
     "check:transcript-columns": "electron-vite build && electron scripts/check-transcript-columns.cjs",
     "check:mind-map-background": "electron-vite build && electron scripts/check-mind-map-background.cjs",
     "check:cloud-switch": "electron-vite build && electron scripts/check-cloud-switch.cjs",

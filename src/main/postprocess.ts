@@ -1,7 +1,8 @@
 import { GROQ_API_BASE, LANGUAGES, OPENAI_API_BASE, WISPRA_API_BASE } from '@shared/constants'
-import type { ContentPlatform, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
+import type { ContentPlatform, DailyLimitInfo, MeetingContentResult, MeetingSegment, Mode, SttProvider } from '@shared/types'
 import type { CorrectionHint } from './lexiconLogic'
 import { aiQuota } from './aiQuota'
+import { dailyLimitInfo, parseRateLimit } from './rateLimit'
 
 // Use capable models that handle Vietnamese diacritics correctly.
 // llama-3.3-70b-versatile was retired by Groq (now 404s) — moved to gpt-oss-120b.
@@ -470,7 +471,9 @@ export async function generateMeetingTitle(
   localLlmModel?: string,
   proxyToken?: string,
   /** Target language for the summary, from the session's languageConfig.summary — "auto" or undefined mirrors the transcript's own language (prior behavior). */
-  summaryLanguage?: string
+  summaryLanguage?: string,
+  /** The provider's limits: a per-minute one is waited out, a daily one reported (same as for posts). */
+  hooks: ContentRequestHooks = {}
 ): Promise<MeetingTitleResult | null> {
   const trimmed = transcript.trim()
   if (!trimmed) return null
@@ -506,7 +509,7 @@ export async function generateMeetingTitle(
       : `${trimmed.slice(0, SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}\n\n[...]\n\n${trimmed.slice(-SUMMARY_MAX_TRANSCRIPT_CHARS / 2)}`
 
   try {
-    const response = await aiQuota.fetch(`${base}/chat/completions`, {
+    const response = await sendWaitingOutRateLimits(() => aiQuota.fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -529,7 +532,8 @@ export async function generateMeetingTitle(
         response_format: { type: 'json_object' }
       }),
       signal: AbortSignal.timeout(MEETING_TITLE_TIMEOUT_MS)
-    })
+    }), hooks, provider === 'proxy', 'title generation')
+    if (!response) return null
     if (!response.ok) {
       console.error(`[meeting] title generation: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
       return null
@@ -672,11 +676,42 @@ export const CONTENT_RATE_LIMIT_BUDGET_MS = 3 * 60_000
  * passes Groq's message on but not its headers — else 5 seconds.
  */
 export function rateLimitWaitMs(retryAfter: string | null, body: string): number {
-  const header = Number(retryAfter)
-  if (Number.isFinite(header) && header > 0) return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, header * 1000)
-  const said = /try again in\s+(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s/i.exec(body)
-  if (said) return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, (Number(said[1] ?? 0) * 60 + Number(said[2])) * 1000)
-  return 5000
+  return Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, parseRateLimit(retryAfter, body).retryAfterMs)
+}
+
+/**
+ * Sends a chat request through `send`, waiting out the provider's per-minute limit
+ * (HTTP 429) and sending it again, within `hooks.budgetMs` of waiting in total. A daily
+ * limit is never waited out — it can take hours: it is reported through
+ * hooks.onDailyLimit. Returns the final response, or null when it gave up on a limit.
+ */
+async function sendWaitingOutRateLimits(
+  send: () => Promise<Response>,
+  hooks: ContentRequestHooks,
+  viaCloud: boolean,
+  what: string
+): Promise<Response | null> {
+  const budgetMs = hooks.budgetMs ?? CONTENT_RATE_LIMIT_BUDGET_MS
+  let waited = 0
+  for (;;) {
+    const response = await send()
+    if (response.status !== 429) return response
+    const body = await response.text().catch(() => '')
+    console.error(`[meeting] ${what}: HTTP 429 — ${body.slice(0, 300)}`)
+    const limit = parseRateLimit(response.headers.get('retry-after'), body)
+    if (limit.scope === 'day') {
+      hooks.onDailyLimit?.(dailyLimitInfo(limit, viaCloud))
+      return null
+    }
+    const wait = Math.min(CONTENT_MAX_RATE_LIMIT_WAIT_MS, limit.retryAfterMs)
+    if (waited + wait > budgetMs) {
+      hooks.onRateLimited?.()
+      return null
+    }
+    waited += wait
+    hooks.onWait?.(Date.now() + wait)
+    await new Promise((resolve) => setTimeout(resolve, wait))
+  }
 }
 
 export interface ContentRequestHooks {
@@ -684,6 +719,8 @@ export interface ContentRequestHooks {
   onWait?: (untilMs: number) => void
   /** The result is null because the limit was still reached after waiting `budgetMs` in total. */
   onRateLimited?: () => void
+  /** The result is null because the provider's DAILY limit is reached — not waited out. */
+  onDailyLimit?: (info: DailyLimitInfo) => void
   /** Total waiting allowed (default CONTENT_RATE_LIMIT_BUDGET_MS); a test passes less. */
   budgetMs?: number
 }
@@ -735,37 +772,28 @@ export async function generateMeetingContent(
     // The provider's per-minute limit (HTTP 429) is waited out and the request sent again —
     // a mind map being built with the same key can use up the allowance for a while —
     // within a total waiting budget; past it, the caller is told why there is no result.
-    const budgetMs = hooks.budgetMs ?? CONTENT_RATE_LIMIT_BUDGET_MS
-    let waited = 0
-    let response: Response
-    for (;;) {
-      response = await aiQuota.fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: withTargetLanguage(CONTENT_PROMPTS[platform], targetLanguage) },
-            { role: 'user', content }
-          ],
-          max_tokens: CONTENT_MAX_TOKENS[platform],
-          temperature: 0.5,
-          response_format: { type: 'json_object' }
+    const response = await sendWaitingOutRateLimits(
+      () =>
+        aiQuota.fetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: withTargetLanguage(CONTENT_PROMPTS[platform], targetLanguage) },
+              { role: 'user', content }
+            ],
+            max_tokens: CONTENT_MAX_TOKENS[platform],
+            temperature: 0.5,
+            response_format: { type: 'json_object' }
+          }),
+          signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
         }),
-        signal: AbortSignal.timeout(CONTENT_TIMEOUT_MS[platform])
-      })
-      if (response.status !== 429) break
-      const body = await response.text().catch(() => '')
-      console.error(`[meeting] ${platform} content generation: HTTP 429 — ${body.slice(0, 300)}`)
-      const wait = rateLimitWaitMs(response.headers.get('retry-after'), body)
-      if (waited + wait > budgetMs) {
-        hooks.onRateLimited?.()
-        return null
-      }
-      waited += wait
-      hooks.onWait?.(Date.now() + wait)
-      await new Promise((resolve) => setTimeout(resolve, wait))
-    }
+      hooks,
+      provider === 'proxy',
+      `${platform} content generation`
+    )
+    if (!response) return null
     if (!response.ok) {
       console.error(`[meeting] ${platform} content generation: HTTP ${response.status} — ${(await response.text().catch(() => '')).slice(0, 500)}`)
       return null

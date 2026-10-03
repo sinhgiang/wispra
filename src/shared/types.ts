@@ -489,6 +489,21 @@ export interface MeetingOutline {
   generatedAt: string
 }
 
+/**
+ * The AI provider's DAILY limit was reached (Groq: tokens or requests per day). Unlike the
+ * per-minute limit it is not waited out — it can take hours — so the UI says so with the
+ * numbers. See parseRateLimit in rateLimit.ts.
+ */
+export interface DailyLimitInfo {
+  unit: 'tokens' | 'requests'
+  used?: number
+  limit?: number
+  /** When the provider says it accepts requests again (ms since epoch). */
+  resetAt: number
+  /** The limit is Wispra Cloud's (its server's key), not the user's own key. */
+  viaCloud: boolean
+}
+
 /** Progress of one mind map generation: a long recording is outlined part by part, then the parts are merged. */
 export interface MindMapProgress {
   sessionId: string
@@ -498,6 +513,8 @@ export interface MindMapProgress {
   total: number
   /** Set while the run is holding back for the AI provider's per-minute limit: when it goes on (ms since epoch). */
   waitingUntil?: number
+  /** Set when the run stopped at the provider's daily limit (mind map: with reason "daily-limit"; transcript outline: before it reports failure). */
+  dailyLimit?: DailyLimitInfo
 }
 
 /**
@@ -505,6 +522,7 @@ export interface MindMapProgress {
  * - interrupted: the app was closed while it ran
  * - time-limit: the whole run took longer than MIND_MAP_TOTAL_TIME_LIMIT_MS
  * - rate-limit: one part spent its whole time budget waiting for the provider's per-minute limit
+ * - daily-limit: the provider's daily limit is reached — see dailyLimit on the status
  * - timeout: the provider did not answer in time
  * - offline: the provider could not be reached
  * - no-key: no API key / not signed in
@@ -513,7 +531,7 @@ export interface MindMapProgress {
  * - quota: Wispra Cloud's monthly AI allowance is used up (see aiQuota.ts)
  * - failed: anything else (server error, unusable answer)
  */
-export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'timeout' | 'offline' | 'no-key' | 'bad-answer' | 'refused' | 'quota' | 'failed'
+export type MindMapStopReason = 'interrupted' | 'time-limit' | 'rate-limit' | 'daily-limit' | 'timeout' | 'offline' | 'no-key' | 'bad-answer' | 'refused' | 'quota' | 'failed'
 
 /**
  * A session's mind map job as the renderer sees it (see mindMapJobs.ts). The job runs in
@@ -570,11 +588,21 @@ export type ContentPlatform = 'website' | 'facebook' | 'instagram' | 'linkedin' 
  * 429): it waits and goes again at `waitingUntil` (ms since epoch), or — `rateLimited` —
  * it gave up because the limit was still reached after waiting (see generateMeetingContent).
  */
+/** The Summary's request hit the provider's limit — same fields as MeetingContentStatus, for the title + summary. */
+export interface MeetingSummaryStatus {
+  sessionId: string
+  waitingUntil?: number
+  rateLimited?: boolean
+  dailyLimit?: DailyLimitInfo
+}
+
 export interface MeetingContentStatus {
   sessionId: string
   platform: ContentPlatform
   waitingUntil?: number
   rateLimited?: boolean
+  /** The request stopped at the provider's daily limit — not waited out. */
+  dailyLimit?: DailyLimitInfo
 }
 
 /** Ready-to-post content generated from a meeting transcript, one field per platform. Cached on the session once generated so re-opening a tab doesn't re-call the LLM. */

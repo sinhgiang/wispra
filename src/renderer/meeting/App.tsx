@@ -19,7 +19,8 @@ import type {
 import { LANGUAGES } from '@shared/constants'
 import { MeetingRecorder, type MeetingChunk } from './recorder'
 import { MindMapView } from './MindMapView'
-import type { MindMapJobStatus } from '@shared/types'
+import type { DailyLimitInfo, MeetingSummaryStatus, MindMapJobStatus } from '@shared/types'
+import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
 import { TranscriptColumns, type ActionsView } from './TranscriptColumns'
@@ -319,6 +320,7 @@ function renderSummaryBlocks(summary: string): ReactElement[] {
 /** One line saying where a session's mind map job is — the tooltip of its marks in the session list and on the tab. */
 function mindMapJobLabel(job: MindMapJobStatus): string {
   if (job.state === 'done') return 'The mind map is ready'
+  if (job.state === 'stopped' && job.reason === 'daily-limit') return "The mind map stopped at the AI provider's daily limit — open the Mind map tab for when it resets"
   if (job.state === 'stopped') {
     return job.total > 1 ? `The mind map is not finished (${job.done} of ${job.total} parts done) — open the Mind map tab to continue` : 'The mind map is not finished — open the Mind map tab to try again'
   }
@@ -326,7 +328,7 @@ function mindMapJobLabel(job: MindMapJobStatus): string {
   return job.total > 1 ? `Building the mind map — ${job.done} of ${job.total} parts done` : 'Building the mind map'
 }
 /** How an AI call failed: Wispra Cloud's monthly AI allowance is used up ('quota'), or anything else ('error'). */
-type FailureKind = 'error' | 'quota' | 'rate-limit'
+type FailureKind = 'error' | 'quota' | 'rate-limit' | 'daily-limit'
 
 /** Value of the chat error state when the last question failed because the allowance is used up. */
 const CHAT_ERROR_QUOTA = '\u0000ai-quota'
@@ -453,6 +455,8 @@ export function MeetingPanel(): React.JSX.Element {
   const [pastSummary, setPastSummary] = useState('')
   /** True while a manual "Try again" summary regeneration is in flight for the session being viewed — the Summary tab has no automatic reopen-to-retry like the content tabs since it never auto-fires again after the initial post-Stop attempt. */
   const [summaryGenerating, setSummaryGenerating] = useState(false)
+  /** The viewed session's summary request and the provider's limits: waiting (per minute), gave up, or stopped at the daily limit. */
+  const [summaryStatus, setSummaryStatus] = useState<MeetingSummaryStatus | null>(null)
   /** Which view the past-session panel is showing: raw transcript, AI summary, or one of the on-demand-generated platform tabs. */
   const [pastView, setPastView] = useState<PastView>('transcript')
   /** On-demand-generated ready-to-post content for the session being viewed, cached on the session itself once generated (see setContent in meetingSessions.ts). */
@@ -495,6 +499,10 @@ export function MeetingPanel(): React.JSX.Element {
   const [contentWaiting, setContentWaiting] = useState<Partial<Record<ContentPlatform, number>>>({})
   /** "sessionId/platform" of requests that gave up because of the provider's per-minute limit — read when their answer arrives. */
   const contentRateLimitedRef = useRef(new Set<string>())
+  /** "sessionId/platform" of requests stopped at the provider's daily limit, with its numbers — read when their answer arrives. */
+  const contentDailyRef = useRef(new Map<string, DailyLimitInfo>())
+  /** The daily limit behind a platform tab's failure, when that was the reason. */
+  const [contentDaily, setContentDaily] = useState<Partial<Record<ContentPlatform, DailyLimitInfo>>>({})
   /**
    * Wispra Cloud's "this month's AI allowance is used up" notice (see AiQuotaNotice),
    * pushed by the main process the moment the server says so. A failure that follows
@@ -778,9 +786,13 @@ export function MeetingPanel(): React.JSX.Element {
     window.api.onMeetingMindMapProgress((progress) => {
       setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
     })
+    window.api.onMeetingSummaryStatus((status) => {
+      if (viewingPastIdRef.current === status.sessionId) setSummaryStatus(status)
+    })
     window.api.onMeetingContentStatus((status) => {
       const key = `${status.sessionId}/${status.platform}`
       if (status.rateLimited) contentRateLimitedRef.current.add(key)
+      if (status.dailyLimit) contentDailyRef.current.set(key, status.dailyLimit)
       if (viewingPastIdRef.current !== status.sessionId) return
       setContentWaiting((prev) => ({ ...prev, [status.platform]: status.waitingUntil }))
     })
@@ -845,6 +857,7 @@ export function MeetingPanel(): React.JSX.Element {
     setGeneratingPlatforms({})
     setFailedPlatforms({})
     setContentWaiting({})
+    setSummaryStatus(null)
     setSummaryGenerating(false)
     setVariantIndex({ facebook: 0, instagram: 0, linkedin: 0, twitter: 0 })
     setChatInput('')
@@ -870,6 +883,10 @@ export function MeetingPanel(): React.JSX.Element {
       setPastOutline(full.outline)
       setPastSpeakerNames(full.speakerNames ?? {})
       setPastLoadedId(id)
+      // A summary made right after Stop may have hit the provider's limit before this tab was open.
+      void window.api.getMeetingSummaryStatus(id).then((status) => {
+        if (!cancelled && viewingPastIdRef.current === id) setSummaryStatus(status ?? null)
+      })
     })
     return () => {
       cancelled = true
@@ -997,7 +1014,10 @@ export function MeetingPanel(): React.JSX.Element {
       if (!result) {
         // The main process says "rate limited" before this answer arrives (see onMeetingContentStatus).
         const rateLimited = contentRateLimitedRef.current.delete(`${id}/${platform}`)
-        setFailedPlatforms((prev) => ({ ...prev, [platform]: rateLimited ? 'rate-limit' : failureKind(startedAt) }))
+        const daily = contentDailyRef.current.get(`${id}/${platform}`)
+        contentDailyRef.current.delete(`${id}/${platform}`)
+        setContentDaily((prev) => ({ ...prev, [platform]: daily }))
+        setFailedPlatforms((prev) => ({ ...prev, [platform]: daily ? 'daily-limit' : rateLimited ? 'rate-limit' : failureKind(startedAt) }))
         return
       }
       setPastContent((prev) => {
@@ -1079,6 +1099,7 @@ export function MeetingPanel(): React.JSX.Element {
   // pastTitle, so there's nothing else to update here on success or failure.
   const retrySummary = (): void => {
     if (viewingPastId === null || summaryGenerating) return
+    setSummaryStatus(null)
     setSummaryGenerating(true)
     void window.api.generateMeetingSummary(viewingPastId).then(() => {
       setSummaryGenerating(false)
@@ -1689,8 +1710,14 @@ export function MeetingPanel(): React.JSX.Element {
                     <div className="meeting-transcript-empty">
                       <div>
                         {pastStatus === 'summarizing' || summaryGenerating
-                          ? 'Summarizing…'
-                          : 'No summary available for this session.'}
+                          ? summaryStatus?.waitingUntil && summaryStatus.waitingUntil > Date.now()
+                            ? WAITING_TEXT
+                            : 'Summarizing…'
+                          : summaryStatus?.dailyLimit
+                            ? `${dailyLimitText(summaryStatus.dailyLimit)} ${dailyLimitAdvice(summaryStatus.dailyLimit, 'Try again')}`
+                            : summaryStatus?.rateLimited
+                              ? RATE_LIMITED_TEXT
+                              : 'No summary available for this session.'}
                       </div>
                       {/* The allowance ran out (now, or when the recording ended): say why there is no summary. */}
                       {pastStatus !== 'summarizing' && !summaryGenerating && quotaMessage}
@@ -1723,6 +1750,8 @@ export function MeetingPanel(): React.JSX.Element {
                         <>
                           {failedPlatforms.website === 'quota' && quotaMessage ? (
                             quotaMessage
+                          ) : failedPlatforms.website === 'daily-limit' && contentDaily.website ? (
+                            <div>{`${dailyLimitText(contentDaily.website)} ${dailyLimitAdvice(contentDaily.website, 'Try again')}`}</div>
                           ) : failedPlatforms.website === 'rate-limit' ? (
                             <div>{RATE_LIMITED_TEXT}</div>
                           ) : (
@@ -1770,6 +1799,8 @@ export function MeetingPanel(): React.JSX.Element {
                           <>
                             {failedPlatforms[pastView] === 'quota' && quotaMessage ? (
                               quotaMessage
+                            ) : failedPlatforms[pastView] === 'daily-limit' && contentDaily[pastView] ? (
+                              <div>{`${dailyLimitText(contentDaily[pastView]!)} ${dailyLimitAdvice(contentDaily[pastView]!, 'Try again')}`}</div>
                             ) : failedPlatforms[pastView] === 'rate-limit' ? (
                               <div>{RATE_LIMITED_TEXT}</div>
                             ) : (

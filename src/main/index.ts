@@ -16,6 +16,7 @@ import type {
   MeetingContent,
   MeetingContentResult,
   MeetingContentStatus,
+  MeetingSummaryStatus,
   MeetingLanguageConfig,
   McpLinkStatus,
   MeetingMindMap,
@@ -380,16 +381,31 @@ function discardMeetingSession(): void {
  * truncated/unparseable JSON) so callers can tell "never generated" apart from
  * "tried and failed". Must never throw.
  */
+/** The last limit status of each session's summary request, until the next request — see MEETING_GET_SUMMARY_STATUS. */
+const summaryStatuses = new Map<string, MeetingSummaryStatus>()
+
 async function requestMeetingSummary(session: MeetingSession): Promise<boolean> {
+  const id = session.id
+  const report = (status: MeetingSummaryStatus): void => {
+    summaryStatuses.set(id, status)
+    broadcast(IPC.MEETING_SUMMARY_STATUS, status)
+  }
+  summaryStatuses.delete(id)
   try {
     const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
     const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
     const transcript = session.segments.map((s) => s.text).join(' ')
     const result = await generateMeetingTitle(
       transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken,
-      session.languageConfig?.summary
+      session.languageConfig?.summary,
+      {
+        onWait: (waitingUntil) => report({ sessionId: id, waitingUntil }),
+        onRateLimited: () => report({ sessionId: id, rateLimited: true }),
+        onDailyLimit: (dailyLimit) => report({ sessionId: id, dailyLimit })
+      }
     )
     if (!result) return false
+    summaryStatuses.delete(id)
     meetingSessions.finishSummary(session.id, { title: result.title, summary: result.summary })
     return true
   } catch (err) {
@@ -452,7 +468,8 @@ async function generateSessionContent(
       session.languageConfig?.[platform],
       {
         onWait: (waitingUntil) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, waitingUntil } satisfies MeetingContentStatus),
-        onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus)
+        onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus),
+        onDailyLimit: (dailyLimit) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, dailyLimit } satisfies MeetingContentStatus)
       }
     )
     if (!result) return null
@@ -580,8 +597,13 @@ function generateSessionOutline(id: string, options?: { regenerate?: boolean }):
       const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
       const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
       if (!target) return null
-      const outline = await generateOutline(session.segments, target, language, (progress) =>
-        broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress)
+      const outline = await generateOutline(
+        session.segments,
+        target,
+        language,
+        (progress) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress),
+        // Sent before the failure, so the Transcript tab can say it was the daily limit.
+        (dailyLimit) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, phase: 'outline', done: 0, total: 0, dailyLimit } satisfies OutlineProgress)
       )
       if (!outline) return null
       meetingSessions.setOutline(id, outline)
@@ -704,6 +726,7 @@ function wireIpc(): void {
     generateSessionContent(id, platform)
   )
   ipcMain.handle(IPC.MEETING_GENERATE_SUMMARY, (_event, id: string) => regenerateSessionSummary(id))
+  ipcMain.handle(IPC.MEETING_GET_SUMMARY_STATUS, (_event, id: string) => summaryStatuses.get(String(id)) ?? null)
   ipcMain.handle(IPC.MEETING_CHAT_SEND, (_event, id: string, question: string) => answerMeetingChatQuestion(id, question))
   ipcMain.handle(
     IPC.MEETING_GENERATE_MIND_MAP,

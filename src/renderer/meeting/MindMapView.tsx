@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type { MeetingMindMap, MeetingSegment, MindMapJobStatus } from '@shared/types'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
+import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 import { createMindMap, mindMapNodeColor, type MindMapController, type MindMapLayoutNode } from './mindMapRenderer'
 
 /** Levels shown when the map opens: the centre and the main branches only — the user opens the rest. */
@@ -51,6 +52,14 @@ function stoppedText(job: MindMapJobStatus): { title: string; text: string; acti
   // A job stopped by 0.6.1 recorded the provider's "Failed to generate JSON" as a refusal.
   const reason = job.reason === 'refused' && /failed to generate json/i.test(job.detail ?? '') ? 'bad-answer' : job.reason
   switch (reason) {
+    case 'daily-limit':
+      return {
+        title: "Stopped by the AI provider's daily limit",
+        text: job.dailyLimit
+          ? `${dailyLimitText(job.dailyLimit)}${keptText} ${dailyLimitAdvice(job.dailyLimit, action)}`
+          : `The AI provider's daily limit is reached.${keptText} Wait until it resets, then press ${action}.`,
+        action
+      }
     case 'interrupted':
       return { title: 'The mind map was not finished', text: `Wispra was closed while it was being built.${keptText}`, action }
     case 'time-limit':

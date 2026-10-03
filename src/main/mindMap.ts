@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
-import type { MindMapStopReason } from '@shared/types'
+import type { DailyLimitInfo, MindMapStopReason } from '@shared/types'
+import { dailyLimitInfo, parseRateLimit } from './rateLimit'
 import {
   MIND_MAP_CALL_TIMEOUT_MS,
   MIND_MAP_CONCURRENCY,
@@ -7,6 +8,7 @@ import {
   MIND_MAP_MAX_RATE_LIMIT_WAIT_MS,
   MIND_MAP_PART_TIME_LIMIT_MS,
   MIND_MAP_TOTAL_TIME_LIMIT_MS,
+  WISPRA_API_BASE,
   MIND_MAP_PART_CHARS,
   MIND_MAP_SINGLE_PASS_CHARS
 } from '@shared/constants'
@@ -122,16 +124,18 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 /** Why a JSON call gave up. */
 export interface JsonCallFailure {
-  kind: 'rate-limit' | 'too-large' | 'timeout' | 'offline' | 'server' | 'refused' | 'bad-answer' | 'deadline'
+  kind: 'rate-limit' | 'daily-limit' | 'too-large' | 'timeout' | 'offline' | 'server' | 'refused' | 'bad-answer' | 'deadline'
   status?: number
   /** The provider's own message, shortened. */
   detail?: string
+  /** kind "daily-limit": the numbers and the reset time. */
+  daily?: DailyLimitInfo
 }
 
 /** What a long-running caller hands to callJson so the call fits into its run. */
 export interface JsonCallControl {
-  /** Give up at this time (ms since epoch), whatever the call is doing. */
-  deadline: number
+  /** Give up at this time (ms since epoch), whatever the call is doing. Without one, a per-minute limit gets a few short waits, as for a call with no control. */
+  deadline?: number
   /** Awaited before every request; resolves when the request may be sent. */
   gate?: () => Promise<void>
   /** The provider asked to wait this long (HTTP 429) — the caller holds its other calls back too. */
@@ -216,7 +220,8 @@ export async function callJson(
     control?.onFailure?.(failure)
     return null
   }
-  const outOfTime = (): boolean => !!control && Date.now() >= control.deadline
+  const deadline = control?.deadline
+  const outOfTime = (): boolean => deadline !== undefined && Date.now() >= deadline
   await control?.gate?.()
   if (outOfTime()) {
     failure = { kind: 'deadline' }
@@ -247,7 +252,7 @@ export async function callJson(
           ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
         }),
         signal: AbortSignal.timeout(
-          control ? Math.max(1000, Math.min(MIND_MAP_CALL_TIMEOUT_MS, control.deadline - Date.now())) : MIND_MAP_CALL_TIMEOUT_MS
+          deadline !== undefined ? Math.max(1000, Math.min(MIND_MAP_CALL_TIMEOUT_MS, deadline - Date.now())) : MIND_MAP_CALL_TIMEOUT_MS
         )
       })
       if (!response.ok) {
@@ -264,6 +269,15 @@ export async function callJson(
           attempt--
           continue
         }
+        // A daily limit (Groq: tokens or requests per day) can take hours to clear: it is
+        // reported with its numbers instead of waited out, like a per-minute one would be.
+        if (response.status === 429) {
+          const limit = parseRateLimit(response.headers.get('retry-after'), body)
+          if (limit.scope === 'day') {
+            failure = { kind: 'daily-limit', status: 429, detail, daily: dailyLimitInfo(limit, target.base.startsWith(WISPRA_API_BASE)) }
+            return giveUp()
+          }
+        }
         // A request bigger than the provider's per-minute allowance (or the model's
         // context) can never pass, however long we wait: the caller cuts the part in two.
         if (response.status === 413 || ((response.status === 429 || response.status === 400) && TOO_LARGE.test(body))) {
@@ -276,9 +290,9 @@ export async function callJson(
           // long recording: wait as told and try again, without using up the retry above.
           const retryAfter = Number(response.headers.get('retry-after'))
           const asked = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 5000
-          if (control) {
+          if (control && deadline !== undefined) {
             const wait = Math.min(MIND_MAP_MAX_RATE_LIMIT_WAIT_MS, asked)
-            if (Date.now() + wait >= control.deadline) return giveUp()
+            if (Date.now() + wait >= deadline) return giveUp()
             control.onRateLimit?.(wait)
             await sleep(wait)
             await control.gate?.()
@@ -345,6 +359,8 @@ export interface MindMapLimits {
 export interface MindMapRunFailure {
   reason: Exclude<MindMapStopReason, 'interrupted' | 'no-key' | 'quota'>
   detail?: string
+  /** reason "daily-limit": the numbers and the reset time. */
+  daily?: DailyLimitInfo
 }
 
 export interface MindMapRunOptions {
@@ -367,6 +383,7 @@ export type MindMapRunResult = { map: MeetingMindMap; failure?: undefined } | { 
 
 function toRunFailure(failure: JsonCallFailure | null, totalDeadline: number): MindMapRunFailure {
   const detail = failure?.detail || undefined
+  if (failure?.kind === 'daily-limit') return { reason: 'daily-limit', detail, daily: failure.daily }
   if (Date.now() >= totalDeadline) return { reason: 'time-limit', detail }
   switch (failure?.kind) {
     case 'rate-limit':

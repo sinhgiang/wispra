@@ -16,6 +16,7 @@ import type {
   MeetingChatMessage,
   MeetingContentResult,
   MeetingContentStatus,
+  MeetingSummaryStatus,
   MeetingLanguageConfig,
   MeetingMindMap,
   MeetingOutline,
@@ -236,6 +237,10 @@ const api = {
   // resolves true on success, false on failure. On success the actual title/summary
   // update arrives separately via onMeetingSessionUpdated.
   generateMeetingSummary: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.MEETING_GENERATE_SUMMARY, id),
+  getMeetingSummaryStatus: (id: string): Promise<MeetingSummaryStatus | null> => ipcRenderer.invoke(IPC.MEETING_GET_SUMMARY_STATUS, id),
+  onMeetingSummaryStatus: (cb: (status: MeetingSummaryStatus) => void): void => {
+    ipcRenderer.on(IPC.MEETING_SUMMARY_STATUS, (_e, status: MeetingSummaryStatus) => cb(status))
+  },
   // In-session AI chat: ask a question about this session's own transcript (works
   // while still recording or after Stop). Resolves the assistant's MeetingChatMessage,
   // or null on failure — the caller persists nothing and shows a transient error.
