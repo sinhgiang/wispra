@@ -11,6 +11,7 @@ System-wide voice dictation desktop app (Windows + macOS). Press the global hotk
 
 - `npm run dev` — start the app in dev mode (electron-vite)
 - `npm run typecheck` — TypeScript check for all processes
+- `npm run check:content-rate-limit` — automated check (same setup as check:content-retry, plus generateMeetingContent against a stub `fetch`): a Website/social request that gets HTTP 429 waits as the provider asks and tries again, the tab says it is waiting for the per-minute limit, and a limit that never clears is reported as such
 - `npm run build` — bundle main/preload/renderer
 - `npm run check:content-retry` — automated check (builds, then runs the Meeting tab in Electron with stub IPC, no API key): opening the Mind map / Website / social tabs calls no AI and shows a "Create …" button; pressing it calls the generator once, a failure offers "Try again" once more
 - `npm run check:mind-map-background` — automated check (same setup, plus the job code against a fake slow / rate-limited provider): the mind map job survives leaving the tab, the session and the page, continues after a failure or an app restart without redoing finished parts, and stops with a reason at its time limits

@@ -181,6 +181,9 @@ export const IPC = {
   // renderer -> main: generate (or return the cached) ready-to-post content for
   // one platform of a stopped session — see generateMeetingContent in postprocess.ts
   MEETING_GENERATE_CONTENT: 'meeting:generate-content',
+  // main -> settings renderer: a content request is waiting for the provider's per-minute
+  // limit, or gave up because of it (MeetingContentStatus)
+  MEETING_CONTENT_STATUS: 'meeting:content-status',
   // renderer -> main: user pressed "Try again" on a stopped session's Summary tab
   // after the automatic post-Stop title/summary generation failed — see
   // regenerateSessionSummary in main/index.ts. Resolves true/false; the actual

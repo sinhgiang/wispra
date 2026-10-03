@@ -15,6 +15,7 @@ import type {
   MeetingChatMessage,
   MeetingContent,
   MeetingContentResult,
+  MeetingContentStatus,
   MeetingLanguageConfig,
   McpLinkStatus,
   MeetingMindMap,
@@ -440,7 +441,11 @@ async function generateSessionContent(
     const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
     const result = await generateMeetingContent(
       platform, transcript, provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken,
-      session.languageConfig?.[platform]
+      session.languageConfig?.[platform],
+      {
+        onWait: (waitingUntil) => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, waitingUntil } satisfies MeetingContentStatus),
+        onRateLimited: () => broadcast(IPC.MEETING_CONTENT_STATUS, { sessionId: id, platform, rateLimited: true } satisfies MeetingContentStatus)
+      }
     )
     if (!result) return null
 
