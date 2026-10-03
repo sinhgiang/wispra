@@ -89,6 +89,13 @@ export interface Settings {
   autoLearnVocabulary: boolean
   /** Opt-in: push History/Meetings/Lexicon to Supabase (see src/main/sync.ts). Requires being signed in. */
   cloudSyncEnabled: boolean
+  /**
+   * ISO time this install first ran a version that limits automatic AI to new recordings.
+   * Only recordings made from then on get AI work started by itself (the Transcript's
+   * topics and action items on first open, if Stop did not make them); older ones wait for
+   * the user's "Create" button. Set once at startup, never changed after.
+   */
+  autoAiSince: string
   /** Incremented when defaults change, so migrations can upgrade old saved settings. */
   settingsVersion: number
 }

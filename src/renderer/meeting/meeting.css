@@ -943,6 +943,17 @@
   padding-right: 4px;
 }
 
+/* An older recording's Transcript: topics and action items only when asked for. */
+.txc-create {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.txc-create .meeting-create-btn {
+  flex: none;
+}
+
 .meeting-transcript-empty {
   color: var(--text-3);
   font-size: 13px;

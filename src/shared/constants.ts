@@ -80,6 +80,7 @@ export const DEFAULT_SETTINGS: Settings = {
   learningEnabled: true,
   autoLearnVocabulary: true,
   cloudSyncEnabled: false,
+  autoAiSince: '',
   settingsVersion: 2
 }
 

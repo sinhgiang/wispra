@@ -907,6 +907,22 @@ export function MeetingPanel(): React.JSX.Element {
   // the one being built right after Stop (the call joins it), a first build for an
   // older session, or (regenerate) a rebuild. On success the outline also arrives via
   // onMeetingSessionUpdated; both paths keep one reference.
+  /** When this install first ran a version that limits automatic AI to new recordings (Settings.autoAiSince); null until read. */
+  const [autoAiSince, setAutoAiSince] = useState<string | null>(null)
+  useEffect(() => {
+    void window.api.getSettings().then((settings) => setAutoAiSince(settings?.autoAiSince ?? ''))
+  }, [])
+  /** Whether a recording made at `createdAt` may get AI work started by itself. Unknown → no. */
+  const autoAiFor = useCallback(
+    (createdAt: string): boolean => {
+      if (!autoAiSince) return false
+      const since = Date.parse(autoAiSince)
+      const made = Date.parse(createdAt)
+      return Number.isFinite(since) && Number.isFinite(made) && made >= since
+    },
+    [autoAiSince]
+  )
+
   const requestOutline = useCallback((regenerate: boolean): void => {
     const id = viewingPastIdRef.current
     if (id === null) return
@@ -921,16 +937,20 @@ export function MeetingPanel(): React.JSX.Element {
     })
   }, [])
 
-  // The Transcript tab's topics and action items: sessions recorded from now on get
-  // them right after Stop; an older session gets them the first time it is opened.
+  // The Transcript tab's topics and action items: a recording made since this version
+  // was first started gets them right after Stop — and, if that did not happen (the app
+  // was closed, or it failed), on first open. An older recording gets them only when the
+  // user presses "Create topics and action items": many old recordings would otherwise
+  // spend the AI provider's daily allowance just by being looked at.
   // One attempt per opening — a failure is remembered (outlineFailed) and only "Try
   // again" makes another call.
   useEffect(() => {
     if (viewingPastId === null || pastView !== 'transcript') return
     if (pastLoadedId !== viewingPastId) return
     if (pastOutline || outlineGenerating || outlineFailed || pastSegments.length === 0) return
+    if (!autoAiFor(pastCreatedAt)) return
     requestOutline(false)
-  }, [pastView, viewingPastId, pastLoadedId, pastOutline, outlineGenerating, outlineFailed, pastSegments, requestOutline])
+  }, [pastView, viewingPastId, pastLoadedId, pastOutline, outlineGenerating, outlineFailed, pastSegments, pastCreatedAt, autoAiFor, requestOutline])
 
   // A chat answer or a mind map node was picked to be shown in the transcript: that
   // highlight replaces the clicked action item's (toggleActionHighlight does the reverse).
@@ -1705,6 +1725,8 @@ export function MeetingPanel(): React.JSX.Element {
                   generating={outlineGenerating}
                   progress={outlineProgress}
                   failed={outlineFailed}
+                  canCreate={autoAiSince !== null && !autoAiFor(pastCreatedAt)}
+                  onCreate={() => requestOutline(false)}
                   scrollRef={pastTranscriptRef}
                   onActionsViewChange={setActionsView}
                   onAction={toggleActionHighlight}

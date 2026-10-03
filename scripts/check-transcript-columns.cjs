@@ -241,7 +241,9 @@ async function partB() {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, fn)
   }
-  handle(IPC.GET_SETTINGS, () => ({ modes: [], vocabulary: [], templates: [], appContextRules: [] }))
+  // Recordings here count as made after this install first ran the version that limits automatic AI
+  // to new recordings (Settings.autoAiSince), so their Transcript topics start by themselves.
+  handle(IPC.GET_SETTINGS, () => ({ modes: [], vocabulary: [], templates: [], appContextRules: [], autoAiSince: '2026-01-01T00:00:00.000Z' }))
   handle(IPC.MEETING_GET_STATE, () => 'idle')
   handle(IPC.MEETING_GET_SPACES, () => [])
   handle(IPC.MEETING_GET_SESSIONS, () => sessions.map(({ segments, outline, ...summary }) => summary))

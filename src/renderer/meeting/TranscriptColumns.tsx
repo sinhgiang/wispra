@@ -163,6 +163,8 @@ export function TranscriptColumns({
   generating,
   progress,
   failed,
+  canCreate,
+  onCreate,
   scrollRef,
   onActionsViewChange,
   onAction,
@@ -184,6 +186,9 @@ export function TranscriptColumns({
   progress: OutlineProgress | null
   /** The last attempt to build the outline failed (there may still be an earlier outline to show). */
   failed: boolean
+  /** An older recording without topics yet: nothing is made by itself, a "Create" button is offered instead. */
+  canCreate: boolean
+  onCreate: () => void
   scrollRef: RefObject<HTMLDivElement | null>
   onActionsViewChange: (view: ActionsView) => void
   onAction: (action: { key: string; startSegmentId: string; endSegmentId: string }) => void
@@ -376,6 +381,14 @@ export function TranscriptColumns({
           </div>
         )}
 
+        {canCreate && !hasOutline && !generating && !failed && blocks.length > 0 && (
+          <div className="txc-status txc-create" role="status">
+            <span>Topics and action items have not been made for this recording yet.</span>
+            <button type="button" className="meeting-create-btn" onClick={onCreate}>
+              Create topics and action items
+            </button>
+          </div>
+        )}
         {loading ? null : blocks.length === 0 ? (
           <div className="meeting-transcript-empty">No speech was transcribed in this session.</div>
         ) : (
