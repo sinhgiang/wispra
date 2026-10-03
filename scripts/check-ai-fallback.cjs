@@ -34,7 +34,10 @@ const CF_ACCOUNT = 'placeholder-account-id'
 const CF_TOKEN = 'placeholder-cloudflare-token'
 const TPD = (model) =>
   `Rate limit reached for model \`${model}\` in organization \`org_placeholder\` service tier \`on_demand\` on tokens per day (TPD): Limit 200000, Used 199500, Requested 4300. Please try again in 3h2m10s.`
-const CF_ALLOCATION = 'AiError: 3036: Account limited: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare\'s Workers Paid plan if you would like to continue usage.'
+/** Cloudflare's documented answer when the free daily allocation is used up (Workers AI error table: code 3036, HTTP 429). */
+const CF_ALLOCATION_BODY = JSON.stringify({ errors: [{ code: 3036, message: "You have used up your daily free allocation of 10,000 neurons. Please upgrade to Cloudflare's Workers Paid plan if you would like to continue usage." }], success: false })
+/** Cloudflare's documented "capacity temporarily exceeded" (code 3040, HTTP 429): busy, not a daily limit. */
+const CF_CAPACITY_BODY = JSON.stringify({ errors: [{ code: 3040, message: 'Capacity temporarily exceeded, please try again.' }], success: false })
 
 const results = []
 const check = (name, ok, detail) => {
@@ -64,7 +67,7 @@ async function partA() {
         export { generateOutline } from './src/main/outline'
         export { LANGUAGES, DEFAULT_SETTINGS } from './src/shared/constants'
         export { CloudflareBudget, neuronsFor, useCloudflareBudgetFile } from './src/main/cloudflareBudget'
-        export { parseRateLimit } from './src/main/rateLimit'`,
+        export { parseRateLimit, isDailyAllocation } from './src/main/rateLimit'`,
       resolveDir: ROOT,
       loader: 'ts'
     },
@@ -85,6 +88,7 @@ async function partA() {
   let exhausted = new Set()
   let minuteOnce = null
   let cfStatus = 429
+  let cfCapacityOnce = false
   const realFetch = globalThis.fetch
   globalThis.fetch = async (url, init) => {
     const u = new URL(String(url))
@@ -102,8 +106,12 @@ async function partA() {
       minuteOnce = null
       return reply(429, JSON.stringify({ error: { message: 'Rate limit reached on tokens per minute (TPM): Limit 8000. Please try again in 0.3s.' } }), { 'retry-after': '0.3' })
     }
+    if (route === 'cloudflare' && cfCapacityOnce) {
+      cfCapacityOnce = false
+      return reply(429, CF_CAPACITY_BODY)
+    }
     if (exhausted.has(route)) {
-      if (route === 'cloudflare') return reply(cfStatus, JSON.stringify({ errors: [{ message: CF_ALLOCATION }], success: false }))
+      if (route === 'cloudflare') return reply(cfStatus, CF_ALLOCATION_BODY)
       return reply(429, JSON.stringify({ error: { message: TPD(body.model), code: 'rate_limit_exceeded' } }))
     }
     const refs = [...user.matchAll(/^\[(\d+)\]/gm)].map((m) => Number(m[1]))
@@ -158,10 +166,19 @@ async function partA() {
     reset(['groq-120b', 'groq-20b', 'cloudflare'])
     r = await lib.runMindMap(long, main(), 'vi', { backups: lib.resolveBackupRoutes(settings()) })
     check('all three at their daily limit: the run stops with "daily-limit" and Cloudflare\'s numbers', !r.map && r.failure.reason === 'daily-limit' && r.failure.daily && r.failure.daily.unit === 'neurons', r.failure)
+    // Only Cloudflare's documented answer (HTTP 429, code 3036) counts as its daily limit.
+    check('Cloudflare daily limit = exactly its documented error: HTTP 429 with code 3036', lib.isDailyAllocation(429, CF_ALLOCATION_BODY) && lib.isDailyAllocation(429, JSON.stringify({ errors: [{ message: 'AiError: 3036: Account limited.' }] })))
+    check('…not the same text with another status, not code 3040 (busy), not any error that merely says "daily" or "neurons"', !lib.isDailyAllocation(400, CF_ALLOCATION_BODY) && !lib.isDailyAllocation(429, CF_CAPACITY_BODY) && !lib.isDailyAllocation(429, JSON.stringify({ errors: [{ code: 1000, message: 'Neurons report for your daily usage is unavailable.' }] })) && !lib.isDailyAllocation(400, JSON.stringify({ errors: [{ code: 5007, message: 'No such model @cf/daily/neurons or task' }] })))
+    const capacity = lib.parseRateLimit(null, CF_CAPACITY_BODY)
+    check('code 3040 (capacity temporarily exceeded) is read as a short wait, not a daily limit', capacity.scope === 'minute', capacity)
     reset(['groq-120b', 'groq-20b', 'cloudflare'])
     cfStatus = 400
     r = await lib.runMindMap(long, main(), 'vi', { backups: lib.resolveBackupRoutes(settings()) })
-    check('…also when Cloudflare reports the used-up allocation with another status than 429', !r.map && r.failure.reason === 'daily-limit', r.failure)
+    check('a Cloudflare HTTP 400 with daily-sounding words is NOT taken for the daily limit (the run reports a refusal)', !r.map && r.failure.reason === 'refused', r.failure && r.failure.reason)
+    reset(['groq-120b', 'groq-20b'])
+    cfCapacityOnce = true
+    r = await lib.runMindMap(long, main(), 'vi', { backups: lib.resolveBackupRoutes(settings()) })
+    check('Cloudflare busy once (3040): waited out, and the map is still built on Cloudflare', !!r.map && r.map.backupModel === 'Cloudflare Workers AI (gpt-oss-120b)' && calls.filter((c) => c.route === 'cloudflare' && c.status === 429).length === 1, { cf429: calls.filter((c) => c.route === 'cloudflare' && c.status === 429).length })
 
     reset([], 'groq-120b')
     r = await lib.runMindMap(long, main(), 'vi', { backups: lib.resolveBackupRoutes(settings()) })
@@ -343,6 +360,7 @@ async function partB() {
   // ── Account page ──
   await goTo('Account')
   let text = await js(`(document.querySelector('.ai-backup') || { innerText: '' }).innerText`)
+  check('Account page: use a Workers Free account only, paid plans can be billed', /Use a Cloudflare account on the Workers Free plan only/.test(text) && /billed/.test(text), text.slice(0, 400))
   check('Account page explains the backups: gpt-oss-20b, then Cloudflare; transcription stays on Groq', /gpt-oss-20b/.test(text) && /Cloudflare Workers AI/.test(text) && /Transcription always stays on Groq/.test(text), text.slice(0, 200))
   check('both fields are hidden (password) fields', (await js(`[...document.querySelectorAll('.ai-backup input')].map((i) => i.type).join()`)) === 'password,password')
   testResult = { ok: false, error: 'Cloudflare did not accept this token for Workers AI.' }
@@ -360,6 +378,14 @@ async function partB() {
   await clickText('Remove', `document.querySelector('.ai-backup')`)
   await sleep(500)
   check('"Remove" clears both', patches[1] === 'cloudflareAccountId,cloudflareApiToken (cleared)' && settings.cloudflareAccountId === '' && (await js(`document.querySelectorAll('.ai-backup input').length`)) === 2, patches)
+
+  // No backups for OpenAI or a local server: the section is not shown.
+  for (const provider of ['openai', 'local']) {
+    settings = { ...settings, provider }
+    await goTo('Account')
+    check(`provider ${provider}: the backup section is hidden`, (await js(`!document.querySelector('.ai-backup')`)) && (await js(`!!document.querySelector('.ai-route')`)))
+  }
+  settings = { ...settings, provider: 'groq' }
 
   // ── The notes ──
   await goTo('Meeting')

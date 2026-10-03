@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
 import type { DailyLimitInfo, MindMapStopReason } from '@shared/types'
-import { dailyLimitInfo, isDailyAllocation, parseRateLimit } from './rateLimit'
+import { dailyLimitInfo, parseRateLimit } from './rateLimit'
 import {
   MIND_MAP_CALL_TIMEOUT_MS,
   MIND_MAP_CONCURRENCY,
@@ -272,7 +272,7 @@ export async function callJson(
         }
         // A daily limit (Groq: tokens or requests per day) can take hours to clear: it is
         // reported with its numbers instead of waited out, like a per-minute one would be.
-        if (response.status === 429 || isDailyAllocation(body)) {
+        if (response.status === 429) {
           const limit = parseRateLimit(response.headers.get('retry-after'), body)
           if (limit.scope === 'day') {
             failure = { kind: 'daily-limit', status: 429, detail, daily: dailyLimitInfo(limit, target.base.startsWith(WISPRA_API_BASE)) }

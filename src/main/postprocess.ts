@@ -767,17 +767,7 @@ async function sendWaitingOutRateLimits(
   let waited = 0
   for (;;) {
     const response = await send()
-    if (response.status !== 429) {
-      if (!response.ok) {
-        const text = await response.clone().text().catch(() => '')
-        if (isDailyAllocation(text)) {
-          console.error(`[meeting] ${what}: HTTP ${response.status} — ${text.slice(0, 300)}`)
-          hooks.onDailyLimit?.(dailyLimitInfo(parseRateLimit(response.headers.get('retry-after'), text), viaCloud))
-          return null
-        }
-      }
-      return response
-    }
+    if (response.status !== 429) return response
     const body = await response.text().catch(() => '')
     console.error(`[meeting] ${what}: HTTP 429 — ${body.slice(0, 300)}`)
     const limit = parseRateLimit(response.headers.get('retry-after'), body)
@@ -1160,7 +1150,7 @@ export async function testCloudflare(accountId: string, apiToken: string): Promi
     if (response.status === 404 || response.status === 400) {
       return { ok: false, error: `Cloudflare answered HTTP ${response.status} — check the Account ID.` }
     }
-    if (isDailyAllocation(await response.text().catch(() => ''))) {
+    if (isDailyAllocation(response.status, await response.text().catch(() => ''))) {
       return { ok: false, error: "This Cloudflare account has used today's free Workers AI allocation. Try again after 00:00 UTC." }
     }
     return { ok: false, error: `Cloudflare answered HTTP ${response.status}.` }

@@ -133,11 +133,14 @@ function AiRouteChoice({ settings, signedIn }: { settings: Settings; signedIn: b
  * (automatic, same key), then Cloudflare Workers AI once an account id and token are
  * saved here. The two values are tested before saving and never shown again.
  */
-function AiBackupSection({ settings }: { settings: Settings }): React.JSX.Element {
+function AiBackupSection({ settings }: { settings: Settings }): React.JSX.Element | null {
   const saved = !!(settings.cloudflareAccountId && settings.cloudflareApiToken)
   const [accountId, setAccountId] = useState('')
   const [token, setToken] = useState('')
   const [status, setStatus] = useState<{ kind: 'busy' | 'err'; text: string } | null>(null)
+
+  // No backups for OpenAI or a local server (see resolveBackupRoutes): nothing to set up here.
+  if (settings.provider === 'openai' || settings.provider === 'local') return null
 
   async function testAndSave(): Promise<void> {
     setStatus({ kind: 'busy', text: 'Testing with Cloudflare…' })
@@ -158,9 +161,12 @@ function AiBackupSection({ settings }: { settings: Settings }): React.JSX.Elemen
       <p className="ai-route-note">
         Mind maps, Transcript topics, summaries and posts: when Groq&apos;s gpt-oss-120b reaches its daily limit on your own
         key, Wispra goes on with Groq&apos;s smaller gpt-oss-20b (its own daily allowance), then with Cloudflare Workers AI if
-        it is set up below. Each result says when a backup model wrote it. Transcription always stays on Groq. Wispra counts
-        its own Cloudflare use and stops for the day before the free daily allocation (10,000 neurons, reset at 00:00 UTC) is
-        used up, so an account on the Workers Paid plan is not charged because of Wispra.
+        it is set up below. Each result says when a backup model wrote it. Transcription always stays on Groq.
+      </p>
+      <p className="ai-route-note ai-backup-warning">
+        <strong>Use a Cloudflare account on the Workers Free plan only</strong> (no payment method). On Workers Paid, use beyond
+        the free 10,000 neurons a day is billed. Wispra estimates its own use and stops for the day before that (the count
+        resets at 00:00 UTC), but it cannot see what other Workers on the same account use.
       </p>
       {saved ? (
         <div className="ai-route-key ai-backup-key">
