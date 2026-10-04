@@ -102,31 +102,40 @@ const HALLUCINATION_PHRASES = [
 const HALLUCINATION_SENTENCES = new Set(['kết thúc video'])
 
 /**
- * Whisper's optional "prompt" field. Two effects, both documented by OpenAI's own
- * prompting guide: (1) the model tends to mirror the prompt's writing style, so a
- * fully-accented, punctuated Vietnamese prompt makes fully-accented, punctuated
- * Vietnamese output more likely — this directly helps disambiguate unclear/tonal
- * speech instead of guessing at the nearest plausible-sounding word; (2) listing
- * proper nouns/jargon primes the model to recognize them correctly during
- * transcription itself, rather than relying on the AI cleanup step to guess a fix
- * after the fact (which can't recover a word that was misheard as something else
- * entirely). Kept short — Whisper only attends to roughly the last 224 tokens of it.
+ * Whisper's optional "prompt" field: only the user's names and terms, as a plain list
+ * ("Sơn, Kima API, Wispra."), so the model recognises them while transcribing. Never a
+ * sentence of instructions: Whisper reads the prompt as text that came before the audio,
+ * and on silence or noise it writes that text out again as if it had been said — the
+ * earlier prompts ("Đây là bản ghi âm tiếng Việt, có dấu…", "Các từ/tên riêng cần giữ
+ * nguyên: …") came back in meetings and dictations as "Các từ và các nội dung cần giữ
+ * nguyên." Nothing the speaker did not say may reach the text. The `language` field (sent
+ * separately) already tells Whisper the language. Kept short — Whisper only attends to
+ * roughly the last 224 tokens of it.
  */
-function buildSttPrompt(language: string, vocabulary?: string[]): string | undefined {
-  const parts: string[] = []
-  if (language === 'vi') {
-    parts.push(
-      'Đây là bản ghi âm tiếng Việt, có dấu đầy đủ, viết hoa đầu câu và tên riêng, có dấu chấm và dấu phẩy rõ ràng.'
-    )
-  }
-  if (vocabulary && vocabulary.length > 0) {
-    const terms = vocabulary.slice(0, STT_PROMPT_MAX_TERMS).join(', ')
-    parts.push(
-      language === 'vi' ? `Các từ/tên riêng cần giữ nguyên: ${terms}.` : `Keep these terms spelled exactly: ${terms}.`
-    )
-  }
-  const prompt = parts.join(' ').trim()
-  return prompt.length > 0 ? prompt : undefined
+export function buildSttPrompt(_language: string, vocabulary?: string[]): string | undefined {
+  const terms = (vocabulary ?? []).map((t) => t.trim()).filter(Boolean).slice(0, STT_PROMPT_MAX_TERMS)
+  return terms.length > 0 ? `${terms.join(', ')}.` : undefined
+}
+
+/**
+ * Sentences earlier versions of the prompt were echoed as, in the forms Whisper wrote them
+ * ("Các từ và các nội dung cần giữ nguyên.", "Đây là bản ghi âm tiếng Việt, có dấu đầy đủ…").
+ * The prompt no longer contains them; these stay as a last net, matched as whole sentences.
+ */
+const OLD_PROMPT_ECHOES = [
+  /^các từ\s.{0,60}cần giữ nguyên(?!\p{L})/u,
+  /^đây là bản ghi âm tiếng việt(?!\p{L})/u,
+  /^keep these terms spelled exactly(?!\p{L})/u
+]
+
+/**
+ * A sentence that is nothing but terms from the prompt's list ("Kima API, Wispra.") — what
+ * Whisper writes when it echoes a term list on silence. Needs at least two words.
+ */
+function isTermListEcho(sentence: string, promptTokens: Set<string>): boolean {
+  if (promptTokens.size === 0) return false
+  const words = wordTokens(sentence)
+  return words.length >= 2 && words.every((w) => promptTokens.has(w))
 }
 
 /** Splits on sentence-ending punctuation or newlines, keeping each piece trimmed. */
@@ -332,11 +341,12 @@ function stripGibberish(sentence: string): string {
  * times verbatim — Whisper's other common failure mode on silence/noise is looping the same line
  * over and over regardless of wording.
  */
-function filterKnownHallucinations(text: string, sttPrompt?: string): string {
+export function filterKnownHallucinations(text: string, sttPrompt?: string): string {
   const seen = new Map<string, number>()
   const kept: string[] = []
   const promptWords = sttPrompt ? distinctiveWords(sttPrompt) : new Set<string>()
   const promptSentences = sttPrompt ? splitSentences(sttPrompt).map(wordTokens) : []
+  const promptTokens = new Set(sttPrompt ? wordTokens(sttPrompt) : [])
 
   for (const rawSentence of splitSentences(text)) {
     const sentence = stripGibberish(rawSentence)
@@ -346,6 +356,7 @@ function filterKnownHallucinations(text: string, sttPrompt?: string): string {
     if (HALLUCINATION_SENTENCES.has(normalized)) continue
     if (HALLUCINATION_PHRASES.some((p) => normalized.includes(p))) continue
     if (isPromptEcho(normalized, promptWords) || isGarbledPromptEcho(normalized, promptSentences)) continue
+    if (isTermListEcho(normalized, promptTokens) || OLD_PROMPT_ECHOES.some((re) => re.test(normalized))) continue
 
     const count = (seen.get(normalized) ?? 0) + 1
     seen.set(normalized, count)
