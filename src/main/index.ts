@@ -66,6 +66,7 @@ import {
 import { generateOutline } from './outline'
 import { joinOutlines, outlineLanguage, remainingSegments } from './outlineLogic'
 import { createLiveOutliner } from './liveOutline'
+import { spellVocabulary } from './vocabularySpelling'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { useCloudflareBudgetFile } from './cloudflareBudget'
 import { transcribeFileAt } from './transcribeFile'
@@ -820,8 +821,9 @@ function wireIpc(): void {
           durationSeconds, proxyToken, lexicon.sttTerms(vocabulary, spaceRelevance)
         )
         if (!asrText) return null
-        // The user's confirmed spellings are applied to what was heard, before any translation.
-        const text = lexicon.applyReplacements(asrText)
+        // The user's confirmed spellings and Custom vocabulary are applied to what was heard, before
+        // any translation (and again after it). Only words that were heard are respelled — none added.
+        const text = spellVocabulary(lexicon.applyReplacements(asrText), vocabulary)
         // Transcript language ("auto" = same as spoken) is independent of the target
         // languages for Summary/Website/etc — translate the plain transcription itself
         // only when the user explicitly picked a transcript language that actually
@@ -838,10 +840,11 @@ function wireIpc(): void {
         ) {
           return text
         }
-        return translateSegment(
+        const translated = await translateSegment(
           text, transcriptLanguage, provider, groqApiKey, openaiApiKey,
           localBaseUrl, localLlmModel, proxyToken
         )
+        return translated ? spellVocabulary(translated, vocabulary) : translated
       })
     }
   )
@@ -909,7 +912,8 @@ function wireIpc(): void {
 
       // 2b. Personal lexicon — spellings the user has confirmed (History → Edit, Learned tab).
       // Applied after template/command matching so those still see exactly what was said.
-      text = lexicon.applyReplacements(text)
+      // Custom vocabulary spelled as the user wrote it (also when the AI cleanup is off).
+      text = spellVocabulary(lexicon.applyReplacements(text), vocabulary)
 
       // 3. AI cleanup with smart mode routing (language → app → user rules).
       let effectiveMode = mode
@@ -1143,7 +1147,7 @@ function wireIpc(): void {
         settings: () => store.get(),
         getToken: () => auth.getValidToken(),
         sttTerms: (vocabulary) => lexicon.sttTerms(vocabulary),
-        applyReplacements: (text) => lexicon.applyReplacements(text)
+        applyReplacements: (text) => spellVocabulary(lexicon.applyReplacements(text), store.get().vocabulary)
       })
     }
   )
