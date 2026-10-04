@@ -92,6 +92,11 @@ export interface Settings {
    * on this computer, encrypted, and are never sent anywhere (see voiceprints.ts).
    */
   voiceRecognition: boolean
+  /**
+   * Meeting: grey, provisional words within about a second of being spoken, replaced by
+   * Groq's text when it arrives (liveWords.ts; Vietnamese, runs on this computer). On by default.
+   */
+  liveWords: boolean
   /** Also learn recurring names/brands/terms from History and meetings by itself (Learned tab). Only meaningful while learningEnabled is on. */
   autoLearnVocabulary: boolean
   /** Opt-in: push History/Meetings/Lexicon to Supabase (see src/main/sync.ts). Requires being signed in. */

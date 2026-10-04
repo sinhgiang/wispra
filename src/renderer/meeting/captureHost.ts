@@ -70,10 +70,15 @@ function sourceLabel(source: MeetingAudioSource): string {
 export function installCaptureHost(): void {
   if (installed) return
   installed = true
-  window.api.onMeetingCaptureStart(() => {
-    void window.api.getSettings().then((settings) => {
-      withPcm = settings?.voiceRecognition === true
-    })
+  window.api.onMeetingCaptureStart(async () => {
+    const settings = await window.api.getSettings().catch(() => null)
+    withPcm = settings?.voiceRecognition === true
+    // Live words (on unless turned off): the audio as it is spoken, and each chunk cut.
+    recorder.setLiveTap(
+      settings?.liveWords === false
+        ? null
+        : { onPcm: (pcm, atMs) => window.api.meetingLivePcm(pcm, atMs), onCut: (atMs) => window.api.meetingLiveCut(atMs) }
+    )
     recorder.start(onLevel, sendChunk, audioSource).catch((err: unknown) => {
       recorder.stop()
       const detail = err instanceof Error ? err.message : 'access denied or unavailable'

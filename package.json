@@ -15,6 +15,7 @@
     "check:transcript-columns": "electron-vite build && electron scripts/check-transcript-columns.cjs",
     "check:live-transcript": "electron-vite build && electron scripts/check-live-transcript.cjs",
     "check:voice-recognition": "electron-vite build && electron scripts/check-voice-recognition.cjs",
+    "check:live-words": "electron-vite build && electron scripts/check-live-words.cjs",
     "check:no-invented-text": "electron scripts/check-no-invented-text.cjs",
     "check:mind-map-background": "electron-vite build && electron scripts/check-mind-map-background.cjs",
     "check:cloud-switch": "electron-vite build && electron scripts/check-cloud-switch.cjs",

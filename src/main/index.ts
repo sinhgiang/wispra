@@ -67,6 +67,7 @@ import { generateOutline } from './outline'
 import { joinOutlines, outlineLanguage, remainingSegments } from './outlineLogic'
 import { createLiveOutliner } from './liveOutline'
 import { createVoiceprints, type Voiceprints } from './voiceprints'
+import { createLiveWords, type LiveWords } from './liveWords'
 import { namesToLearn } from './voiceLearning'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { useCloudflareBudgetFile } from './cloudflareBudget'
@@ -317,13 +318,19 @@ function wireMeetingController(): void {
     lastMeetingSpeechAt = Date.now()
     broadcast(IPC.MEETING_CAPTURE_START)
   })
-  meetingController.on('pause-capture', () => broadcast(IPC.MEETING_CAPTURE_PAUSE))
+  meetingController.on('pause-capture', () => {
+    getLiveWords().reset()
+    broadcast(IPC.MEETING_CAPTURE_PAUSE)
+  })
   meetingController.on('resume-capture', () => {
     // Don't count time spent paused against the silence budget.
     lastMeetingSpeechAt = Date.now()
     broadcast(IPC.MEETING_CAPTURE_RESUME)
   })
-  meetingController.on('stop-capture', () => broadcast(IPC.MEETING_CAPTURE_STOP))
+  meetingController.on('stop-capture', () => {
+    getLiveWords().reset()
+    broadcast(IPC.MEETING_CAPTURE_STOP)
+  })
 
   meetingSessions.onSegment((segment, sessionId) => {
     lastMeetingSpeechAt = Date.now()
@@ -592,6 +599,30 @@ function getMindMapJobs(): MindMapJobs {
   return mindMapJobs
 }
 
+/** Live words in Meeting (see liveWords.ts); created on first use, once the data folder is known. */
+let liveWords: LiveWords | null = null
+function getLiveWords(): LiveWords {
+  liveWords ??= createLiveWords({
+    dir: join(app.getPath('userData'), 'models'),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    loadAddon: () => require('sherpa-onnx-node'),
+    download: async (url) => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(600_000) })
+      if (!response.ok) throw new Error(`Could not download the live-words model (HTTP ${response.status}).`)
+      return new Uint8Array(await response.arrayBuffer())
+    },
+    // On unless turned off, and only while the recording's spoken language is Vietnamese or "auto":
+    // the model knows Vietnamese only.
+    active: () => {
+      if (store.get().liveWords === false) return false
+      const input = meetingSessions.getCurrent()?.languageConfig?.input ?? 'auto'
+      return input === 'vi' || input === 'auto'
+    },
+    onWords: (fromMs, text) => broadcast(IPC.MEETING_LIVE_WORDS, { sessionId: meetingSessions.getCurrentId(), fromMs, text })
+  })
+  return liveWords
+}
+
 /** Speaker recognition by voice (see voiceprints.ts); created on first use, once the data folder is known. */
 let voiceprints: Voiceprints | null = null
 function getVoiceprints(): Voiceprints {
@@ -758,6 +789,8 @@ function wireIpc(): void {
     ) => {
       meetingSessions.start(audioSource ?? 'mic', languageConfig, spaceId)
       meetingController.start()
+      getLiveWords().reset()
+      if (store.get().liveWords !== false) void getLiveWords().prepare()
     }
   )
   ipcMain.on(IPC.MEETING_PAUSE, () => meetingController.pause())
@@ -777,6 +810,11 @@ function wireIpc(): void {
   ipcMain.handle(IPC.MEETING_GET_STATE, (): MeetingState => meetingController.getState())
   ipcMain.handle(IPC.MEETING_GET_SESSIONS, () => meetingSessions.list())
   ipcMain.handle(IPC.MEETING_GET_SESSION, (_event, id: string) => meetingSessions.get(id))
+  // Live words: the audio as it is spoken (decoded on this computer) and the recorder's chunk cuts.
+  ipcMain.on(IPC.MEETING_LIVE_PCM, (_event, pcm: ArrayBuffer, atMs: number) => {
+    if (pcm instanceof ArrayBuffer || ArrayBuffer.isView(pcm)) getLiveWords().push(new Uint8Array(pcm as ArrayBuffer), Number(atMs) || 0)
+  })
+  ipcMain.on(IPC.MEETING_LIVE_CUT, (_event, atMs: number) => getLiveWords().cut(Number(atMs) || 0))
   ipcMain.handle(IPC.VOICE_GET_STATE, () => getVoiceprints().state())
   ipcMain.handle(IPC.VOICE_SET_ENABLED, async (_event, on: boolean) => {
     store.set({ voiceRecognition: on === true })

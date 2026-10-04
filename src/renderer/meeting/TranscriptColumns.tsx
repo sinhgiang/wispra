@@ -202,6 +202,7 @@ export function TranscriptColumns({
   live = false,
   liveStatus = null,
   emptyText = 'No speech was transcribed in this session.',
+  interim = '',
   onCopy
 }: {
   blocks: TranscriptBlock[]
@@ -233,6 +234,8 @@ export function TranscriptColumns({
   liveStatus?: LiveOutlineStatus | null
   /** Shown while there is no paragraph. */
   emptyText?: string
+  /** Live words: what is being said right now, provisional (grey) until its paragraph arrives. */
+  interim?: string
   /** "Copy transcript", shown at the end of the Transcript column's header. */
   onCopy?: () => void
 }): ReactElement {
@@ -446,7 +449,7 @@ export function TranscriptColumns({
             </button>
           </div>
         )}
-        {loading ? null : blocks.length === 0 ? (
+        {loading ? null : blocks.length === 0 && !interim ? (
           <div className="meeting-transcript-empty">{emptyText}</div>
         ) : (
           sections.map((section) => (
@@ -504,6 +507,16 @@ export function TranscriptColumns({
               })}
             </div>
           ))
+        )}
+        {interim && (
+          <div className="txc-cols txc-sec txc-interim-row" aria-live="polite">
+            <div className="txc-time">
+              <span className="txc-elapsed">now</span>
+            </div>
+            <p className="txc-text txc-interim" title="Provisional — replaced by the transcript in a moment">
+              {interim}
+            </p>
+          </div>
         )}
       </div>
 

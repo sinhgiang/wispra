@@ -461,6 +461,11 @@ export function MeetingPanel(): React.JSX.Element {
   const [liveSpeakerNames, setLiveSpeakerNames] = useState<Record<string, string>>({})
   /** Whether a finished part is being named right now, or naming stopped (daily limit, failures). */
   const [liveOutlineStatus, setLiveOutlineStatus] = useState<LiveOutlineStatus | null>(null)
+  /**
+   * Live words: provisional text of the stretches spoken since the last transcribed paragraph,
+   * by where each began (liveWords.ts). Each is dropped when Groq's paragraph for it arrives.
+   */
+  const [liveInterim, setLiveInterim] = useState<Array<{ fromMs: number; text: string }>>([])
   /** id of a past (already-stopped) session the user clicked in the sidebar, read-only. null = showing the current session instead. */
   const [viewingPastId, setViewingPastId] = useState<string | null>(null)
   const [pastSegments, setPastSegments] = useState<MeetingSegment[]>([])
@@ -667,6 +672,7 @@ export function MeetingPanel(): React.JSX.Element {
       setLiveSpeakerNames({})
       setLiveOutlineStatus(null)
       setActionHighlight(null)
+      setLiveInterim([])
       setLiveChat([])
       setChatInput('')
       setChatError(null)
@@ -724,6 +730,15 @@ export function MeetingPanel(): React.JSX.Element {
     }))
     off.push(window.api.onMeetingSegmentReady((segment) => {
       setLiveSegments((prev) => [...prev, segment])
+      // Groq's text for this stretch (and anything before it) replaces the provisional words.
+      setLiveInterim((prev) => prev.filter((w) => w.fromMs > segment.startMs + 300))
+    }))
+    off.push(window.api.onMeetingLiveWords((words) => {
+      if (words.sessionId !== currentSessionIdRef.current) return
+      setLiveInterim((prev) => {
+        const rest = prev.filter((w) => w.fromMs !== words.fromMs)
+        return words.text ? [...rest, { fromMs: words.fromMs, text: words.text }].sort((a, b) => a.fromMs - b.fromMs) : rest
+      })
     }))
     off.push(window.api.onMeetingSessionUpdated((session) => {
       // Keep the sidebar list's title/status in sync (e.g. the AI title lands a few
@@ -903,10 +918,13 @@ export function MeetingPanel(): React.JSX.Element {
   const [autoAiSince, setAutoAiSince] = useState<string | null>(null)
   /** Speaker recognition is on: the Start screen says so in one line. */
   const [voiceRecognitionOn, setVoiceRecognitionOn] = useState(false)
+  /** Live words while recording (grey provisional text) — the Start screen's switch. */
+  const [liveWordsOn, setLiveWordsOn] = useState(true)
   useEffect(() => {
     void window.api.getSettings().then((settings) => {
       setAutoAiSince(settings?.autoAiSince ?? '')
       setVoiceRecognitionOn(settings?.voiceRecognition === true)
+      setLiveWordsOn(settings?.liveWords !== false)
     })
     return window.api.onVoiceRecognitionChanged((state) => setVoiceRecognitionOn(state.enabled))
   }, [])
@@ -1963,6 +1981,7 @@ export function MeetingPanel(): React.JSX.Element {
                 onRegenerate={() => undefined}
                 onRenameSpeaker={renameLiveSpeaker}
                 emptyText={isPaused ? 'Paused — press Resume to keep going.' : 'Listening… transcribed text will appear here as you speak.'}
+                interim={liveInterim.map((w) => w.text).join(' ')}
               />
               <MeetingChatPanel
                 messages={liveChat}
@@ -2005,6 +2024,17 @@ export function MeetingPanel(): React.JSX.Element {
                   ))}
                 </div>
               </div>
+              <label className="meeting-live-words-toggle">
+                <input
+                  type="checkbox"
+                  checked={liveWordsOn}
+                  onChange={(e) => {
+                    setLiveWordsOn(e.target.checked)
+                    void window.api.setSettings({ liveWords: e.target.checked })
+                  }}
+                />
+                Show words as they are spoken (grey until the transcript replaces them; Vietnamese; worked out on this computer)
+              </label>
               {voiceRecognitionOn && (
                 <div className="meeting-voice-notice">
                   Wispra recognises speakers by their voice on this computer — nothing is sent anywhere. You can turn
