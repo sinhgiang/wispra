@@ -1701,6 +1701,12 @@ textarea:focus {
   color: var(--text-2);
 }
 
+/* What was used, without a limit to measure it against (Pro, unlimited accounts). */
+.usage-bar-label.usage-plain {
+  display: block;
+  margin-top: 6px;
+}
+
 /* ── Local provider fields ────────────────── */
 
 .local-fields {
