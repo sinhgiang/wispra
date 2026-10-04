@@ -2365,15 +2365,8 @@
   padding-top: 0;
 }
 
-.meeting-chat-panel.compact .meeting-chat-header,
 .meeting-chat-panel.compact .meeting-chat-messages {
   display: none;
-}
-
-.meeting-chat-header {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-2);
 }
 
 .meeting-chat-messages {
@@ -2384,13 +2377,6 @@
   flex-direction: column;
   gap: 10px;
   padding-right: 4px;
-}
-
-.meeting-chat-empty {
-  color: var(--text-3);
-  font-size: 12.5px;
-  line-height: 1.5;
-  padding: 8px 2px;
 }
 
 .meeting-chat-bubble {

@@ -172,7 +172,7 @@ function MeetingChatPanel({
   onSelectAnswer,
   compact = false
 }: {
-  /** Only the input row — used on the Mind map tab, where the map needs the room. */
+  /** Only the input row even when there are messages — used on the Mind map tab, where the map needs the room. */
   compact?: boolean
   messages: MeetingChatMessage[]
   input: string
@@ -189,33 +189,27 @@ function MeetingChatPanel({
       onSend()
     }
   }
+  // Until something is asked, only the question box and Send: the transcript above gets the room.
+  const inputOnly = compact || (messages.length === 0 && !sending)
   return (
-    <div className={compact ? 'meeting-chat-panel compact' : 'meeting-chat-panel'}>
-      <div className="meeting-chat-header">Ask about this recording</div>
+    <div className={inputOnly ? 'meeting-chat-panel compact' : 'meeting-chat-panel'}>
       <div className="meeting-chat-messages">
-        {messages.length === 0 && !sending ? (
-          <div className="meeting-chat-empty">
-            Ask anything about this recording — e.g. "What did we decide about the budget?" — and the relevant part
-            of the transcript will be highlighted.
+        {messages.map((m) => (
+          <div key={m.id} className={m.role === 'user' ? 'meeting-chat-bubble user' : 'meeting-chat-bubble assistant'}>
+            <p>{m.text}</p>
+            {m.role === 'assistant' && m.startSegmentId && m.endSegmentId && (
+              <button
+                type="button"
+                className={
+                  m.id === highlightId ? 'meeting-chat-highlight-btn active' : 'meeting-chat-highlight-btn'
+                }
+                onClick={() => onSelectAnswer(m)}
+              >
+                {m.id === highlightId ? 'Highlighted in transcript' : 'Show in transcript'}
+              </button>
+            )}
           </div>
-        ) : (
-          messages.map((m) => (
-            <div key={m.id} className={m.role === 'user' ? 'meeting-chat-bubble user' : 'meeting-chat-bubble assistant'}>
-              <p>{m.text}</p>
-              {m.role === 'assistant' && m.startSegmentId && m.endSegmentId && (
-                <button
-                  type="button"
-                  className={
-                    m.id === highlightId ? 'meeting-chat-highlight-btn active' : 'meeting-chat-highlight-btn'
-                  }
-                  onClick={() => onSelectAnswer(m)}
-                >
-                  {m.id === highlightId ? 'Highlighted in transcript' : 'Show in transcript'}
-                </button>
-              )}
-            </div>
-          ))
-        )}
+        ))}
         {sending && (
           <div className="meeting-chat-bubble assistant meeting-chat-thinking" aria-label="Thinking…">
             <span className="meeting-chat-dot" />
@@ -1951,8 +1945,6 @@ export function MeetingPanel(): React.JSX.Element {
                 emptyText={isPaused ? 'Paused — press Resume to keep going.' : 'Listening… transcribed text will appear here as you speak.'}
               />
               <MeetingChatPanel
-                // Only the question box until something is asked: the table needs the room while recording.
-                compact={liveChat.length === 0 && !chatSending}
                 messages={liveChat}
                 input={chatInput}
                 onInputChange={setChatInput}
