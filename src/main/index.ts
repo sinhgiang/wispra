@@ -6,6 +6,7 @@ import { IPC } from '@shared/ipc'
 import type {
   AccountInfo,
   AiQuotaNotice,
+  DictationRetryResult,
   ApiKeyTestResult,
   ContentPlatform,
   FileTranscribeResult,
@@ -66,10 +67,12 @@ import {
 import { generateOutline } from './outline'
 import { joinOutlines, outlineLanguage, remainingSegments } from './outlineLogic'
 import { createLiveOutliner } from './liveOutline'
+import { createDictationAudio, type DictationAudio } from './dictationAudio'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { useCloudflareBudgetFile } from './cloudflareBudget'
 import { transcribeFileAt } from './transcribeFile'
 import { aiQuota } from './aiQuota'
+import { accountInfoFrom, hasAiAllowanceLeft } from './accountInfo'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -148,6 +151,8 @@ async function main(): Promise<void> {
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
   // before wireIpc() below (no IPC could otherwise start a session).
   meetingSessions.recoverOrphaned()
+  // A dictation that was being recorded or transcribed when the app last quit: listed in History to try again.
+  getDictationAudio().recover()
   // Mind map jobs the last run of the app left unfinished show up as "not finished — Continue".
   getMindMapJobs().restore()
   // Today's count of Cloudflare Workers AI neurons, kept across restarts (see cloudflareBudget.ts).
@@ -247,7 +252,7 @@ async function main(): Promise<void> {
 function toggleDictation(): void {
   // Manual toggle (hotkey or overlay click): always cancel any pending continuous restart.
   if (controller.getState() === 'recording') manualStopRequested = true
-  controller.toggle(store.get().autoStopMinutes * 60_000)
+  controller.toggle()
 }
 
 let targetWindow: string | null = null
@@ -292,7 +297,10 @@ function wireController(): void {
       if (payload.message) notify('Wispra', payload.message)
     }
   })
-  controller.on('start-recording', () => broadcast(IPC.RECORDING_START))
+  controller.on('start-recording', () => {
+    getDictationAudio().begin()
+    broadcast(IPC.RECORDING_START)
+  })
   controller.on('stop-recording', () => broadcast(IPC.RECORDING_STOP))
 }
 
@@ -586,6 +594,58 @@ function getMindMapJobs(): MindMapJobs {
   return mindMapJobs
 }
 
+/** Dictation audio saved on disk (see dictationAudio.ts); created on first use, once the data folder is known. */
+let dictationAudio: DictationAudio | null = null
+function getDictationAudio(): DictationAudio {
+  dictationAudio ??= createDictationAudio(join(app.getPath('userData'), 'dictation-audio'), () =>
+    broadcast(IPC.DICTATION_PENDING_CHANGED, dictationAudio?.pending() ?? [])
+  )
+  return dictationAudio
+}
+
+const retrying = new Set<string>()
+/**
+ * History → "Try again" on a saved dictation: transcribes the file with the current
+ * settings, applies the user's spellings and (when on) the AI cleanup of the active mode,
+ * saves the text in History and copies it to the clipboard — it is not typed, since the
+ * app it was meant for is no longer known. The file is removed on success, kept on failure.
+ */
+async function retryDictation(id: string): Promise<DictationRetryResult> {
+  const saved = getDictationAudio().pending().find((p) => p.id === id)
+  if (!saved) return { ok: false, error: 'This recording is no longer saved.' }
+  if (retrying.has(id)) return { ok: false, error: 'Already being transcribed.' }
+  retrying.add(id)
+  try {
+    const { provider, groqApiKey, openaiApiKey, language, aiPostProcess, modes, activeMode, vocabulary, localBaseUrl, localSttModel, localLlmModel } = store.get()
+    const mode = modes.find((m) => m.id === activeMode)
+    const effectiveLang = mode?.language && mode.language !== 'auto' ? mode.language : language
+    const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+    const durationSeconds = Math.round(saved.seconds)
+    const { text: rawText } = await transcribe(
+      getDictationAudio().read(id), provider, groqApiKey, openaiApiKey, effectiveLang, 'audio/wav',
+      localBaseUrl, localSttModel, durationSeconds, proxyToken, lexicon.sttTerms(vocabulary)
+    )
+    if (!rawText) {
+      getDictationAudio().markFailed(id, 'No speech detected')
+      return { ok: false, error: 'No speech detected in this recording.' }
+    }
+    let text = lexicon.applyReplacements(rawText)
+    if (aiPostProcess && !(provider === 'proxy' && aiQuota.shouldSkipCleanup())) {
+      text = await postProcess(text, provider, groqApiKey, openaiApiKey, mode, lexicon.llmTerms(vocabulary), localBaseUrl, localLlmModel, undefined, proxyToken, lexicon.hintsFor(text))
+    }
+    history.add(text, { language: language === 'auto' ? undefined : language, durationSeconds, topic: detectTopic(text), rawText, learning: store.get().learningEnabled })
+    clipboard.writeText(text)
+    getDictationAudio().remove(id)
+    return { ok: true, text }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'Transcription failed'
+    getDictationAudio().markFailed(id, reason)
+    return { ok: false, error: reason }
+  } finally {
+    retrying.delete(id)
+  }
+}
+
 /** Names the topics of a recording in progress (see liveOutline.ts). */
 const liveOutliner = createLiveOutliner({
   getSession: (id) => meetingSessions.get(id),
@@ -705,7 +765,7 @@ async function saveMindMapPng(png: ArrayBuffer, suggestedName: string): Promise<
 function wireIpc(): void {
   ipcMain.on(IPC.TOGGLE_DICTATION, () => toggleDictation())
   // Silence auto-stop: does NOT set manualStopRequested so continuous mode can restart.
-  ipcMain.on(IPC.SILENCE_STOP, () => controller.toggle(store.get().autoStopMinutes * 60_000))
+  ipcMain.on(IPC.SILENCE_STOP, () => controller.toggle())
   ipcMain.on(IPC.OPEN_SETTINGS, () => openSettingsWindow())
 
   // --- meeting mode (step 3: real transcription per chunk, pause/resume, persistence) ---
@@ -846,7 +906,33 @@ function wireIpc(): void {
     }
   )
 
-  ipcMain.on(IPC.AUDIO_CAPTURED, (_event, audio: ArrayBuffer, durationSeconds: number, mimeType: string) => {
+  // The overlay streams the recording here as it is made; it is on disk before anything is sent.
+  ipcMain.on(IPC.DICTATION_AUDIO_CHUNK, (_event, pcm: ArrayBuffer) => {
+    if (pcm instanceof ArrayBuffer || ArrayBuffer.isView(pcm)) getDictationAudio().append(new Uint8Array(pcm as ArrayBuffer))
+  })
+  ipcMain.on(IPC.DICTATION_AUDIO_END, (_event, info: { hasSpeech?: boolean } | undefined) => {
+    const saved = getDictationAudio().finish()
+    if (!saved) return controller.recordingFailed('Recording produced no audio')
+    // Silent recording: never sent — Whisper invents text for silence — and nothing to keep.
+    if (!info?.hasSpeech) {
+      getDictationAudio().remove(saved.id)
+      return controller.recordingFailed('No speech detected')
+    }
+    runDictation(getDictationAudio().read(saved.id), Math.round(saved.seconds), saved.id)
+  })
+
+  ipcMain.handle(IPC.DICTATION_GET_PENDING, () => getDictationAudio().pending())
+  ipcMain.handle(IPC.DICTATION_DELETE, (_event, id: string) => getDictationAudio().remove(String(id)))
+  ipcMain.handle(IPC.DICTATION_RETRY, (_event, id: string) => retryDictation(String(id)))
+
+  /**
+   * Transcribes a finished dictation (saved as `savedId`) and types it. The saved file is
+   * removed once the text is in History; when anything fails on the way it is kept and
+   * listed in History with the reason, so nothing said is lost and "Try again" can finish it.
+   */
+  function runDictation(audioBytes: Uint8Array, durationSeconds: number, savedId: string): void {
+    const audio = audioBytes
+    const mimeType = 'audio/wav'
     const {
       provider, groqApiKey, openaiApiKey, language, aiPostProcess,
       modes, activeMode, vocabulary, localBaseUrl, localSttModel, localLlmModel,
@@ -855,6 +941,22 @@ function wireIpc(): void {
     } = store.get()
 
     void controller.handleAudio(async () => {
+      try {
+        await dictate()
+        getDictationAudio().remove(savedId)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : 'Transcription failed'
+        // Whisper heard nothing usable: trying again would give the same.
+        if (reason === 'No speech detected') {
+          getDictationAudio().remove(savedId)
+          throw err
+        }
+        getDictationAudio().markFailed(savedId, reason)
+        throw new Error(`${reason} — the recording is saved: open History to try again.`)
+      }
+    })
+
+    async function dictate(): Promise<void> {
       const mode = modes.find((m) => m.id === activeMode)
       const effectiveLang = mode?.language && mode.language !== 'auto' ? mode.language : language
       const proxyToken = provider === 'proxy' ? await auth.getValidToken() ?? undefined : undefined
@@ -864,8 +966,8 @@ function wireIpc(): void {
       const appRelevance = contexts.relevance({ app: appName })
 
       const { text: rawText, detectedLanguage } = await transcribe(
-        new Uint8Array(audio), provider, groqApiKey, openaiApiKey,
-        effectiveLang, mimeType || 'audio/webm', localBaseUrl, localSttModel,
+        audio, provider, groqApiKey, openaiApiKey,
+        effectiveLang, mimeType, localBaseUrl, localSttModel,
         durationSeconds, proxyToken, lexicon.sttTerms(vocabulary, appRelevance)
       )
       if (!rawText) throw new Error('No speech detected')
@@ -1014,10 +1116,14 @@ function wireIpc(): void {
       pendingDoneAnimation = true
       if (continuousMode && !manualStopRequested) pendingContinuousRestart = true
       manualStopRequested = false
-    })
-  })
+    }
+  }
 
   ipcMain.on(IPC.RECORDING_FAILED, (_event, message: string) => {
+    // Whatever was recorded before the failure is kept, to be transcribed from History.
+    const saved = getDictationAudio().finish()
+    if (saved && saved.seconds >= 1) getDictationAudio().markFailed(saved.id, message || 'Recording failed')
+    else if (saved) getDictationAudio().remove(saved.id)
     controller.recordingFailed(message || 'Recording failed')
   })
 
@@ -1227,31 +1333,9 @@ function wireIpc(): void {
       if (!response.ok) {
         return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
       }
-      const data = (await response.json()) as {
-        plan: string
-        usageSeconds: number
-        limitSeconds: number | null
-        subscribeUrl: string | null
-        // Sent only by servers that meter AI text; older ones leave these out.
-        aiTokensUsed?: unknown
-        aiTokensLimit?: unknown
-        aiTokensResetAt?: unknown
-      }
-      const info: AccountInfo = {
-        email: state.email,
-        avatarUrl: state.avatarUrl,
-        plan: data.plan === 'pro' ? 'pro' : 'free',
-        usageSeconds: data.usageSeconds ?? 0,
-        limitSeconds: data.limitSeconds,
-        subscribeUrl: data.subscribeUrl ?? null,
-      }
-      if (typeof data.aiTokensUsed === 'number' && typeof data.aiTokensLimit === 'number' && data.aiTokensLimit > 0) {
-        info.aiTokensUsed = data.aiTokensUsed
-        info.aiTokensLimit = data.aiTokensLimit
-        if (typeof data.aiTokensResetAt === 'string') info.aiTokensResetAt = data.aiTokensResetAt
-        // The server now reports allowance left (upgrade, or a new month): drop a stale notice.
-        if (data.aiTokensUsed < data.aiTokensLimit) aiQuota.clear()
-      }
+      const info = accountInfoFrom(await response.json(), state)
+      // The server now reports allowance left (upgrade, a new month, or no limit): drop a stale notice.
+      if (info.aiTokensUsed !== undefined && hasAiAllowanceLeft(info)) aiQuota.clear()
       return info
     } catch {
       return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }

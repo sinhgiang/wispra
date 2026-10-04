@@ -52,6 +52,7 @@ export interface Settings {
   language: string
   launchAtLogin: boolean
   /** Auto-stop recording after this many minutes. */
+  /** No longer used: a dictation has no time limit (kept so older settings files still load). */
   autoStopMinutes: number
   autoUpdate: boolean
   aiPostProcess: boolean
@@ -269,13 +270,33 @@ export interface ApiKeyTestResult {
 }
 
 /** Wispra cloud account info (returned when user is signed in). */
+/** A dictation whose audio is saved but not turned into text yet (see dictationAudio.ts). */
+export interface PendingDictation {
+  id: string
+  /** ISO timestamp of when it was recorded. */
+  createdAt: string
+  /** Length of the saved audio. */
+  seconds: number
+  /** Why it could not be transcribed. */
+  error: string
+}
+
+/** The answer to "Try again" on a saved dictation. */
+export interface DictationRetryResult {
+  ok: boolean
+  text?: string
+  error?: string
+}
+
 export interface AccountInfo {
   email: string
   plan: 'free' | 'pro'
   /** Seconds used this month. */
   usageSeconds: number
-  /** Monthly limit in seconds, or null if unlimited (Pro). */
+  /** Monthly limit in seconds, or null when there is none (Pro, or an unlimited account). */
   limitSeconds: number | null
+  /** The account is exempt from Wispra Cloud's monthly limits, whatever its plan. */
+  unlimited?: boolean
   /** Polar.sh checkout URL for upgrading. */
   subscribeUrl: string | null
   /** Google profile photo URL. */
@@ -285,6 +306,7 @@ export interface AccountInfo {
    * map) as the server reports it. Absent when the server does not send it yet.
    */
   aiTokensUsed?: number
+  /** Absent when the account has no AI text limit (or the server does not send one). */
   aiTokensLimit?: number
   /** ISO timestamp of the next reset. */
   aiTokensResetAt?: string

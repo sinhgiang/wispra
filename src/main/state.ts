@@ -19,21 +19,22 @@ export class DictationController extends EventEmitter {
   private state: AppState = 'idle'
   /** Guards the gap between requesting stop and audio arriving. */
   private stopRequested = false
-  private autoStopTimer: NodeJS.Timeout | null = null
   private errorTimer: NodeJS.Timeout | null = null
 
   getState(): AppState {
     return this.state
   }
 
-  /** Hotkey press / overlay click: start or stop a session. */
-  toggle(autoStopMs: number): void {
+  /**
+   * Hotkey press / overlay click: start or stop a session. A recording runs until the user
+   * stops it — there is no time limit (the audio streams to a file, see dictationAudio.ts).
+   */
+  toggle(): void {
     if (this.state === 'idle' || this.state === 'error') {
       this.clearErrorTimer()
       this.setState('recording')
       this.stopRequested = false
       this.emit('start-recording')
-      this.autoStopTimer = setTimeout(() => this.requestStop(), autoStopMs)
     } else if (this.state === 'recording') {
       this.requestStop()
     }
@@ -43,7 +44,6 @@ export class DictationController extends EventEmitter {
   private requestStop(): void {
     if (this.state !== 'recording' || this.stopRequested) return
     this.stopRequested = true
-    this.clearAutoStopTimer()
     this.emit('stop-recording')
   }
 
@@ -53,7 +53,6 @@ export class DictationController extends EventEmitter {
    */
   async handleAudio(work: () => Promise<void>): Promise<void> {
     if (this.state !== 'recording') return // stale delivery after a failure
-    this.clearAutoStopTimer()
     this.stopRequested = false
     this.setState('processing')
     try {
@@ -67,7 +66,6 @@ export class DictationController extends EventEmitter {
   /** Recording could not start or crashed in the renderer. */
   recordingFailed(message: string): void {
     if (this.state !== 'recording') return
-    this.clearAutoStopTimer()
     this.stopRequested = false
     this.fail(message)
   }
@@ -84,13 +82,6 @@ export class DictationController extends EventEmitter {
     this.state = state
     const payload: StatePayload = { state, message }
     this.emit('state-changed', payload)
-  }
-
-  private clearAutoStopTimer(): void {
-    if (this.autoStopTimer) {
-      clearTimeout(this.autoStopTimer)
-      this.autoStopTimer = null
-    }
   }
 
   private clearErrorTimer(): void {

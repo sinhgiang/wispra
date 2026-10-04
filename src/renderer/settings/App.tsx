@@ -14,6 +14,7 @@ import { AccountSection } from './sections/Account'
 import { TemplatesSection } from './sections/Templates'
 import { StatisticsSection } from './sections/Statistics'
 import { MeetingPanel } from '../meeting/App'
+import { PendingDictations } from './sections/PendingDictations'
 import './settings.css'
 import '../meeting/meeting.css'
 
@@ -140,6 +141,7 @@ export function App(): React.JSX.Element {
         </main>
       ) : tab === 'history' ? (
         <main key="history">
+          <PendingDictations />
           <StatisticsSection />
           <HistorySection />
         </main>

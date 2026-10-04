@@ -9,8 +9,20 @@ export const IPC = {
   RECORDING_STOP: 'recording:stop',
 
   // overlay renderer -> main
-  AUDIO_CAPTURED: 'recording:audio-captured',
   RECORDING_FAILED: 'recording:failed',
+  // overlay -> main: the next second or so of the dictation, as 16 kHz mono 16-bit PCM
+  // (ArrayBuffer); main writes it to the recording's file as it arrives (dictationAudio.ts)
+  DICTATION_AUDIO_CHUNK: 'dictation:audio-chunk',
+  // overlay -> main: the recording ended — { hasSpeech }; main transcribes the saved file
+  DICTATION_AUDIO_END: 'dictation:audio-end',
+  // renderer -> main: dictations saved but not transcribed (PendingDictation[])
+  DICTATION_GET_PENDING: 'dictation:get-pending',
+  // renderer -> main: transcribe a saved dictation again (id) → DictationRetryResult
+  DICTATION_RETRY: 'dictation:retry',
+  // renderer -> main: delete a saved dictation (id)
+  DICTATION_DELETE: 'dictation:delete',
+  // main -> renderer: the list of saved dictations changed (PendingDictation[])
+  DICTATION_PENDING_CHANGED: 'dictation:pending-changed',
   TOGGLE_DICTATION: 'dictation:toggle',
   OPEN_SETTINGS: 'settings:open',
 
