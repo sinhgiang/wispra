@@ -67,6 +67,7 @@ processing: main calls Groq API (src/main/transcribe.ts, 30s timeout + 1 retry)
 - Every chat-completion call goes through `aiQuota.fetch` (`src/main/aiQuota.ts`), never bare `fetch`: it recognises Wispra Cloud's "AI allowance used up" answer (HTTP 402 with `code: "ai_quota_exceeded"`) so the UI can say so. Never retry that answer, and dictation must still type the raw text.
 - Where transcription and AI text go is `settings.provider` alone: `proxy` = Wispra Cloud (signed-in session; the only route counted toward the account's minutes and AI allowance), `groq` / `openai` / `local` = straight to that provider. The user picks it on the Account page (`AiRouteChoice` in `Account.tsx`); switching must never clear a saved key, and a key's value is never rendered. Every feature reads the provider at call time — never cache it.
 - OS login item goes through `loginItem.ts` only. An unpackaged (dev) run shares the installed app's default registry value name, so it must never sync at startup or on unrelated settings changes; it only writes its own `Wispra (dev)` entry when the user flips "Launch at login".
+- Releases follow `.claude/skills/release/SKILL.md`. Every published version gets user-facing English release notes and a `screenshot.png` asset (sample content only) on its GitHub release — the website's Updates page is built from them, so no version goes without an Updates entry.
 
 ## Manual test checklist (run before ending a work session)
 
