@@ -503,6 +503,26 @@ export interface MeetingOutline {
   language: string
   /** ISO timestamp. */
   generatedAt: string
+  /**
+   * Set while the outline is not finished: the paragraph (its first segment) where the
+   * part still to be named begins. The topics above cover the transcript up to there
+   * only. A recording in progress always has one (see liveOutline.ts); after Stop the
+   * rest is named and this is removed — or kept, when that failed, until "Try again".
+   */
+  openFromSegmentId?: string
+}
+
+/** How naming the topics of a recording in progress is going (see liveOutline.ts). */
+export interface LiveOutlineStatus {
+  sessionId: string
+  /** A finished part of the recording is being named right now. */
+  working: boolean
+  /** The provider's daily limit was reached: nothing more is named while this recording runs. */
+  dailyLimit?: DailyLimitInfo
+  /** Naming stopped for this recording after repeated failures; the rest is named after Stop. */
+  failed?: boolean
+  /** The backup model now answering, after the main model reached its daily limit. */
+  backupModel?: string
 }
 
 /**

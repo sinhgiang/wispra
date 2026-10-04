@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ReactElement, type RefObject } from 'react'
-import type { MeetingOutline, OutlineProgress } from '@shared/types'
+import type { LiveOutlineStatus, MeetingOutline, OutlineProgress } from '@shared/types'
 import { formatElapsed } from './mindMapData'
 import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 
@@ -30,6 +30,8 @@ interface Section {
   key: string
   /** Undefined while there is no outline: the transcript is then one untitled section. */
   title?: string
+  /** The paragraphs no topic covers yet: the part still being spoken, or not named yet. */
+  pending?: boolean
   hue: number
   blocks: TranscriptBlock[]
   endMs: number
@@ -59,26 +61,37 @@ function buildSections(
   blocks: TranscriptBlock[],
   outline: MeetingOutline | undefined,
   speakerNames: Record<string, string>,
-  durationMs: number
+  durationMs: number,
+  live: boolean
 ): { sections: Section[]; actions: ActionItem[]; speakerOf: Map<string, { label: string; named: boolean }> } {
   const blockIndexOf = new Map<string, number>()
   blocks.forEach((b, i) => b.segmentIds.forEach((id) => blockIndexOf.set(id, i)))
   const endOf = (index: number): number => (index + 1 < blocks.length ? blocks[index + 1].startMs : Math.max(durationMs, blocks[index]?.startMs ?? 0))
 
+  // Where the paragraphs without a topic begin: nowhere under a finished outline; at the
+  // outline's open part while it is being made; everywhere while recording without one.
+  const openIndex = outline
+    ? outline.openFromSegmentId
+      ? (blockIndexOf.get(outline.openFromSegmentId) ?? blocks.length)
+      : blocks.length
+    : live
+      ? 0
+      : blocks.length
+
   // Topics → the paragraph each one starts at. Every paragraph belongs to the last topic that starts at or before it.
   const starts: Array<{ title: string; index: number }> = []
   for (const topic of outline?.topics ?? []) {
     const index = blockIndexOf.get(topic.startSegmentId)
-    if (index !== undefined && !starts.some((s) => s.index === index)) starts.push({ title: topic.title, index })
+    if (index !== undefined && index < openIndex && !starts.some((s) => s.index === index)) starts.push({ title: topic.title, index })
   }
   starts.sort((a, b) => a.index - b.index)
   if (starts.length > 0) starts[0].index = 0
 
   const sections: Section[] =
-    starts.length === 0
+    starts.length === 0 && openIndex === blocks.length
       ? [{ key: 'all', hue: TOPIC_HUES[0], blocks, endMs: durationMs, actions: [] }]
       : starts.map((start, i) => {
-          const end = i + 1 < starts.length ? starts[i + 1].index : blocks.length
+          const end = i + 1 < starts.length ? starts[i + 1].index : openIndex
           return {
             key: `${i}-${blocks[start.index].id}`,
             title: start.title,
@@ -88,6 +101,16 @@ function buildSections(
             actions: []
           }
         })
+  if (openIndex < blocks.length && (starts.length > 0 || openIndex === 0)) {
+    sections.push({
+      key: `open-${blocks[openIndex].id}`,
+      pending: true,
+      hue: TOPIC_HUES[starts.length % TOPIC_HUES.length],
+      blocks: blocks.slice(openIndex),
+      endMs: Math.max(durationMs, blocks[blocks.length - 1].startMs),
+      actions: []
+    })
+  }
 
   const actions: ActionItem[] = []
   ;(outline?.actions ?? []).forEach((action, i) => {
@@ -104,6 +127,7 @@ function buildSections(
     actions.push(item)
     let owner = 0
     for (let s = 0; s < starts.length; s++) if (starts[s].index <= index) owner = s
+    if (index >= openIndex && sections[sections.length - 1].pending) owner = sections.length - 1
     sections[owner].actions.push(item)
   })
   actions.sort((a, b) => a.startMs - b.startMs)
@@ -170,7 +194,10 @@ export function TranscriptColumns({
   onAction,
   onRetry,
   onRegenerate,
-  onRenameSpeaker
+  onRenameSpeaker,
+  live = false,
+  liveStatus = null,
+  emptyText = 'No speech was transcribed in this session.'
 }: {
   blocks: TranscriptBlock[]
   /** The session's paragraphs are not here yet (just opened) — show nothing rather than "no speech". */
@@ -196,10 +223,15 @@ export function TranscriptColumns({
   onRegenerate: () => void
   /** `ids` are the paragraphs to (re)name; an empty name removes the label. */
   onRenameSpeaker: (ids: string[], name: string) => void
+  /** A recording in progress: the four columns from the start, topics named as they finish (see liveOutline.ts). */
+  live?: boolean
+  liveStatus?: LiveOutlineStatus | null
+  /** Shown while there is no paragraph. */
+  emptyText?: string
 }): ReactElement {
   const { sections, actions, speakerOf } = useMemo(
-    () => buildSections(blocks, outline, speakerNames, durationMs),
-    [blocks, outline, speakerNames, durationMs]
+    () => buildSections(blocks, outline, speakerNames, durationMs, live),
+    [blocks, outline, speakerNames, durationMs, live]
   )
   /** Paragraph whose speaker label is being edited. */
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -207,7 +239,9 @@ export function TranscriptColumns({
   const [panelOpen, setPanelOpen] = useState(false)
   // Set right before the name input is dismissed with Escape, so the blur that follows is a cancel, not a commit.
   const skipBlurRef = useRef(false)
-  const hasOutline = !!outline
+  // The four columns: whenever there is an outline, and from the first second of a recording.
+  const hasOutline = !!outline || live
+  const partial = !!outline?.openFromSegmentId
   const byTopic = actionsView === 'topic'
 
   // Renaming a label renames that speaker everywhere it shows; a paragraph without one is named on its own.
@@ -321,7 +355,7 @@ export function TranscriptColumns({
           List
         </button>
       </span>
-      <button type="button" className="txc-icon-btn" title="Build the topics and action items again" aria-label="Rebuild topics and action items" onClick={onRegenerate} disabled={generating}>
+      <button type="button" className="txc-icon-btn" title="Build the topics and action items again" aria-label="Rebuild topics and action items" onClick={onRegenerate} disabled={generating || live}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" />
         </svg>
@@ -357,6 +391,15 @@ export function TranscriptColumns({
         {outline?.backupModel && !generating && (
           <div className="txc-backup-note">Topics and action items partly written by the backup model {outline.backupModel}.</div>
         )}
+        {live && (liveStatus?.dailyLimit || liveStatus?.failed) && (
+          <div className="txc-status txc-status-failed" role="status">
+            <span>
+              {liveStatus.dailyLimit
+                ? `${dailyLimitText(liveStatus.dailyLimit)} Topics are not named while this recording goes on; the rest is named after you press Stop.`
+                : 'Topics could not be named while recording — they are named after you press Stop.'}
+            </span>
+          </div>
+        )}
         {(generating || (failed && !generating)) && (
           <div className={generating ? 'txc-status' : 'txc-status txc-status-failed'} role="status">
             {generating ? (
@@ -369,7 +412,9 @@ export function TranscriptColumns({
                 <span>
                   {progress?.dailyLimit
                     ? `${dailyLimitText(progress.dailyLimit)} ${dailyLimitAdvice(progress.dailyLimit, 'Try again')}`
-                    : hasOutline
+                    : partial
+                      ? 'Could not name the rest of the recording — check your connection/API key, then try again.'
+                      : hasOutline
                       ? 'Could not rebuild the topics and action items — the previous ones are kept.'
                       : 'Could not find topics and action items — check your connection/API key, then try again.'}
                 </span>
@@ -390,10 +435,32 @@ export function TranscriptColumns({
           </div>
         )}
         {loading ? null : blocks.length === 0 ? (
-          <div className="meeting-transcript-empty">No speech was transcribed in this session.</div>
+          <div className="meeting-transcript-empty">{emptyText}</div>
         ) : (
           sections.map((section) => (
             <div key={section.key} className="txc-cols txc-sec" style={{ '--hue': section.hue } as React.CSSProperties}>
+              {section.pending && (
+                <div className="txc-topic txc-topic-pending" style={{ gridRow: `1 / span ${section.blocks.length}` }}>
+                  <div className="txc-topic-inner">
+                    <span className="txc-pending-label">
+                      {live && liveStatus?.working ? (
+                        <>
+                          <span className="txc-spinner" aria-hidden="true" /> Naming the part just finished…
+                        </>
+                      ) : live ? (
+                        'Named when this part ends'
+                      ) : generating ? (
+                        'Naming…'
+                      ) : (
+                        'Not named yet'
+                      )}
+                    </span>
+                    <span className="txc-range">
+                      {formatElapsed(section.blocks[0].startMs)} – {live ? 'now' : formatElapsed(section.endMs)}
+                    </span>
+                  </div>
+                </div>
+              )}
               {section.title !== undefined && (
                 <div className="txc-topic" style={{ gridRow: `1 / span ${section.blocks.length}` }}>
                   <div className="txc-topic-inner">
@@ -437,7 +504,11 @@ export function TranscriptColumns({
             </button>
           </div>
           <div className="txc-panel-list">
-            {actions.length === 0 ? <div className="txc-panel-empty">No action items were found in this recording.</div> : actions.map(actionButton)}
+            {actions.length === 0 ? (
+              <div className="txc-panel-empty">{live || partial ? 'No action items yet.' : 'No action items were found in this recording.'}</div>
+            ) : (
+              actions.map(actionButton)
+            )}
           </div>
         </aside>
       )}

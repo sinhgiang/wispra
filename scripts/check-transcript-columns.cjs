@@ -334,6 +334,9 @@ async function partB() {
   const bold = await js(`(() => { const sec = document.querySelectorAll('.txc-sec')[1]; const t = sec.querySelector('.txc-topic').getBoundingClientRect(); const ps = [...sec.querySelectorAll('.txc-text')]; return { weight: getComputedStyle(sec.querySelector('h3')).fontWeight, top: Math.round(ps[0].getBoundingClientRect().top - t.top), bottom: Math.round(ps[ps.length - 1].getBoundingClientRect().bottom - t.bottom) } })()`)
   check('the topic is bold and spans all paragraphs of its section', Number(bold.weight) >= 700 && Math.abs(bold.top) <= 4 && Math.abs(bold.bottom) <= 4, bold)
 
+  const chat = await js(`(() => { const panel = document.querySelector('.meeting-chat-panel'); const tx = document.querySelector('.txc').getBoundingClientRect(); const input = panel.querySelector('textarea'); return { text: panel.innerText.trim(), placeholder: input && input.placeholder, send: [...panel.querySelectorAll('button')].filter((b) => b.getClientRects().length).map((b) => b.textContent.trim()), panelHeight: Math.round(panel.getBoundingClientRect().height), tableHeight: Math.round(tx.height), gap: Math.round(panel.getBoundingClientRect().top - tx.bottom) } })()`)
+  check('under the table only the question box and Send — no heading, no hint — and the table takes the room', chat.text === 'Send' && /^Ask a question about this recording/.test(chat.placeholder || '') && chat.send.join() === 'Send' && chat.panelHeight < 60 && chat.gap < 30 && chat.tableHeight > 330, chat)
+
   // ── Clicking an action item ──
   await click(`[...document.querySelectorAll('.txc-act')].find((a) => a.textContent.includes('Nhắn lại 22 người'))`, 900)
   let h = await highlight()

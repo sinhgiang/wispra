@@ -64,7 +64,8 @@ import {
   withBackupRoutes
 } from './postprocess'
 import { generateOutline } from './outline'
-import { outlineLanguage } from './outlineLogic'
+import { joinOutlines, outlineLanguage, remainingSegments } from './outlineLogic'
+import { createLiveOutliner } from './liveOutline'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { useCloudflareBudgetFile } from './cloudflareBudget'
 import { transcribeFileAt } from './transcribeFile'
@@ -322,6 +323,8 @@ function wireMeetingController(): void {
   meetingSessions.onSegment((segment, sessionId) => {
     lastMeetingSpeechAt = Date.now()
     broadcast(IPC.MEETING_SEGMENT_READY, segment, sessionId)
+    // The Transcript table names finished topics while the recording goes on.
+    liveOutliner.onSegment(sessionId)
   })
   meetingSessions.onMeta((session) => {
     broadcast(IPC.MEETING_SESSION_UPDATED, session)
@@ -366,7 +369,12 @@ function wireMeetingController(): void {
  * identically instead of duplicating this chain three times.
  */
 function stopMeetingSession(): void {
-  void meetingSessions.stop().then((session) => {
+  const id = meetingSessions.getCurrentId()
+  // Topics being named right now: their answer is saved once Stop has written the session.
+  const live = id ? liveOutliner.end(id) : Promise.resolve(undefined)
+  void meetingSessions.stop().then(async (session) => {
+    const late = await live
+    if (session && late) meetingSessions.setOutline(session.id, late)
     if (session) void finalizeMeetingSession(session)
   })
 }
@@ -378,6 +386,8 @@ function stopMeetingSession(): void {
  * as it recorded) is deleted immediately via meetingSessions.discard().
  */
 function discardMeetingSession(): void {
+  const id = meetingSessions.getCurrentId()
+  if (id) void liveOutliner.end(id)
   meetingSessions.discard()
 }
 
@@ -576,6 +586,20 @@ function getMindMapJobs(): MindMapJobs {
   return mindMapJobs
 }
 
+/** Names the topics of a recording in progress (see liveOutline.ts). */
+const liveOutliner = createLiveOutliner({
+  getSession: (id) => meetingSessions.get(id),
+  resolveTarget: async () => {
+    const { provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel } = store.get()
+    const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
+    return resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
+  },
+  resolveBackups: () => resolveBackupRoutes(store.get()),
+  language: (session) => outlineLanguage(session.languageConfig, LANGUAGES.map((l) => l.code)),
+  saveOutline: (id, outline) => meetingSessions.setOutline(id, outline),
+  notify: (status) => broadcast(IPC.MEETING_LIVE_OUTLINE_STATUS, status)
+})
+
 /**
  * Builds (or returns the cached) mind map of a stopped session, triggered when the
  * renderer first opens its Mind map tab, by "Continue"/"Try again", or by Regenerate.
@@ -606,7 +630,9 @@ function generateSessionOutline(id: string, options?: { regenerate?: boolean }):
   if (running) return running
   const session = meetingSessions.get(id)
   if (!session || session.status === 'recording') return Promise.resolve(null)
-  if (session.outline && !options?.regenerate) return Promise.resolve(session.outline)
+  if (session.outline && !session.outline.openFromSegmentId && !options?.regenerate) return Promise.resolve(session.outline)
+  // Topics named while recording: only the rest is outlined, then joined to them.
+  const { segments, named } = options?.regenerate ? { segments: session.segments, named: undefined } : remainingSegments(session.segments, session.outline)
 
   const language = outlineLanguage(session.languageConfig, LANGUAGES.map((l) => l.code))
   const job = (async (): Promise<MeetingOutline | null> => {
@@ -615,8 +641,8 @@ function generateSessionOutline(id: string, options?: { regenerate?: boolean }):
       const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
       const target = resolveChatTarget(provider, groqApiKey, openaiApiKey, localBaseUrl, localLlmModel, proxyToken)
       if (!target) return null
-      const outline = await generateOutline(
-        session.segments,
+      const tail = await generateOutline(
+        segments,
         target,
         language,
         (progress) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, ...progress } satisfies OutlineProgress),
@@ -624,7 +650,8 @@ function generateSessionOutline(id: string, options?: { regenerate?: boolean }):
         (dailyLimit) => broadcast(IPC.MEETING_OUTLINE_PROGRESS, { sessionId: id, phase: 'outline', done: 0, total: 0, dailyLimit } satisfies OutlineProgress),
         resolveBackupRoutes(store.get())
       )
-      if (!outline) return null
+      if (!tail) return null
+      const outline = named ? joinOutlines(named, tail) : tail
       meetingSessions.setOutline(id, outline)
       return outline
     } catch (err) {
@@ -751,6 +778,10 @@ function wireIpc(): void {
     IPC.MEETING_GENERATE_MIND_MAP,
     (_event, id: string, options?: { regenerate?: boolean; language?: string }) => generateSessionMindMap(id, options)
   )
+  ipcMain.handle(IPC.MEETING_GET_LIVE_OUTLINE_STATUS, () => {
+    const id = meetingSessions.getCurrentId()
+    return id ? liveOutliner.status(id) : null
+  })
   ipcMain.handle(IPC.MEETING_GENERATE_OUTLINE, (_event, id: string, options?: { regenerate?: boolean }) =>
     generateSessionOutline(id, options)
   )

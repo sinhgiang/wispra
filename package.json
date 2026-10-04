@@ -13,6 +13,7 @@
     "check:daily-limit": "electron-vite build && electron scripts/check-daily-limit.cjs",
     "check:ai-fallback": "electron-vite build && electron scripts/check-ai-fallback.cjs",
     "check:transcript-columns": "electron-vite build && electron scripts/check-transcript-columns.cjs",
+    "check:live-transcript": "electron-vite build && electron scripts/check-live-transcript.cjs",
     "check:mind-map-background": "electron-vite build && electron scripts/check-mind-map-background.cjs",
     "check:cloud-switch": "electron-vite build && electron scripts/check-cloud-switch.cjs",
     "check:auto-ai-new-only": "electron-vite build && electron scripts/check-auto-ai-new-only.cjs",

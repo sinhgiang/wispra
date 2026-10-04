@@ -260,6 +260,18 @@ export const MIND_MAP_SINGLE_PASS_CHARS = 14_000
  * one more call — unlike the summary's both-ends sampling, no stretch of a long meeting is skipped.
  */
 export const MIND_MAP_PART_CHARS = 12_000
+/**
+ * Topics of a recording in progress (liveOutline.ts): the part after the topics already
+ * named is sent to the AI once it is at least LIVE_OUTLINE_MIN_CHARS long (about two
+ * minutes of speech), and again each time it has grown by LIVE_OUTLINE_STEP_CHARS — only
+ * the topics followed by another one are kept, as those are finished. A part that reaches
+ * LIVE_OUTLINE_FORCE_CHARS without a change of subject is named as it stands.
+ */
+export const LIVE_OUTLINE_MIN_CHARS = 2_500
+export const LIVE_OUTLINE_STEP_CHARS = 2_500
+export const LIVE_OUTLINE_FORCE_CHARS = 7_500
+/** Failed calls in a row (not a daily limit) after which nothing more is named while the recording runs. */
+export const LIVE_OUTLINE_MAX_FAILURES = 3
 /** A recording is never cut into more parts than this; a very long one gets bigger parts instead. */
 export const MIND_MAP_MAX_PARTS = 24
 /** Parts outlined at the same time. */

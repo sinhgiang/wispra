@@ -1401,6 +1401,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The part no topic covers yet: still being spoken (recording), or not named yet. */
+.txc-topic-pending {
+  border-left-style: dashed;
+  border-left-color: var(--border-md);
+}
+
+.txc-pending-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-3);
+}
+
 .txc-time {
   min-width: 0;
   padding-top: 2px;
@@ -2350,15 +2365,8 @@
   padding-top: 0;
 }
 
-.meeting-chat-panel.compact .meeting-chat-header,
 .meeting-chat-panel.compact .meeting-chat-messages {
   display: none;
-}
-
-.meeting-chat-header {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-2);
 }
 
 .meeting-chat-messages {
@@ -2369,13 +2377,6 @@
   flex-direction: column;
   gap: 10px;
   padding-right: 4px;
-}
-
-.meeting-chat-empty {
-  color: var(--text-3);
-  font-size: 12.5px;
-  line-height: 1.5;
-  padding: 8px 2px;
 }
 
 .meeting-chat-bubble {

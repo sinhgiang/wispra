@@ -19,6 +19,12 @@ import type {
 const PARAGRAPH_GAP_MS = 2500
 /** Otherwise, force a paragraph break once the current one gets this long, so long continuous speech stays readable. */
 const PARAGRAPH_MAX_CHARS = 500
+/**
+ * Two chunks of one recording that start this close together are the same audio
+ * captured twice (two recorders running in one window), never two parts of the
+ * recording: consecutive chunks start a whole chunk apart.
+ */
+const DUPLICATE_CHUNK_START_MS = 300
 
 /**
  * Persists Meeting Mode sessions as one JSON file per session under
@@ -30,6 +36,8 @@ const PARAGRAPH_MAX_CHARS = 500
 class MeetingSessions {
   private current: MeetingSession | null = null
   private queue: Promise<void> = Promise.resolve()
+  /** Where each chunk accepted for the current session starts (ms along its timeline). */
+  private chunkStarts: number[] = []
   private listeners = new Set<(segment: MeetingSegment, sessionId: string) => void>()
   private metaListeners = new Set<(session: MeetingSession) => void>()
 
@@ -59,6 +67,7 @@ class MeetingSessions {
     }
     this.current = session
     this.queue = Promise.resolve()
+    this.chunkStarts = []
     this.persist(session)
     return session
   }
@@ -84,6 +93,12 @@ class MeetingSessions {
   ): void {
     const session = this.current
     if (!session) return
+    // The same stretch of audio sent a second time: transcribing it again would print it twice.
+    if (this.chunkStarts.some((start) => Math.abs(start - chunk.startMs) < DUPLICATE_CHUNK_START_MS)) {
+      console.warn(`[meeting] ignored a second copy of the chunk at ${chunk.startMs} ms`)
+      return
+    }
+    this.chunkStarts.push(chunk.startMs)
     // Recorded duration tracks actual capture time, not transcribed content — update it
     // unconditionally so a stretch of failed/empty transcriptions (network hiccup, no
     // signed-in account, pure silence) never makes a genuinely long recording read as 0:00.
