@@ -28,8 +28,10 @@ export function VocabularySection({ settings }: { settings: Settings }): React.J
     <section>
       <h2>Custom vocabulary</h2>
       <p className="hint">
-        Add proper nouns, names, or technical terms that AI cleanup should preserve exactly — e.g.
-        &ldquo;Nguyễn Văn A&rdquo;, &ldquo;GPT-4o&rdquo;. Only applies when AI cleanup is on.
+        Add proper nouns, names, or technical terms to spell exactly — e.g. &ldquo;Nguyễn Văn A&rdquo;,
+        &ldquo;GPT-4o&rdquo;. Speech recognition listens for them, and when it writes one differently
+        (&ldquo;git hub&rdquo;, &ldquo;Nguyen Van A&rdquo;) Wispra puts your spelling back — in Dictate,
+        Meeting and Transcribe, with or without AI cleanup. Only words that were said are respelled.
       </p>
 
       <div className="input-row" style={{ marginBottom: '10px' }}>
