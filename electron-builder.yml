@@ -8,6 +8,9 @@ files:
   - resources/**
   - package.json
 asar: true
+# Native speaker-recognition addon (sherpa-onnx): its .node and .dll/.dylib files must live outside the asar.
+asarUnpack:
+  - "**/node_modules/sherpa-onnx-*/**"
 win:
   target:
     - nsis
@@ -27,6 +30,9 @@ mac:
       arch: universal
   icon: resources/icon.png
   category: public.app-category.productivity
+  # The sherpa-onnx addon is installed for the build machine's architecture only; the universal app
+  # carries it as is (speaker recognition is then unavailable on the other architecture).
+  x64ArchFiles: "**/node_modules/sherpa-onnx-darwin-*/**"
   artifactName: ${productName}-${version}-${arch}.${ext}
   extendInfo:
     NSMicrophoneUsageDescription: Wispra needs microphone access to transcribe your speech.

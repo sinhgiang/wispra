@@ -85,6 +85,18 @@ export interface Settings {
   continuousMode: boolean
   /** Learn from corrections made in History and apply what was learned (Learned tab). */
   learningEnabled: boolean
+  /**
+   * Recognise Meeting speakers by voice: a voice named once (typed, or said in the recording)
+   * is labelled by itself in later meetings. On by default (the owner's decision, 2026-10-04);
+   * the user can turn it off on the Learned tab. A voice is biometric data: the vectors stay
+   * on this computer, encrypted, and are never sent anywhere (see voiceprints.ts).
+   */
+  voiceRecognition: boolean
+  /**
+   * Meeting: grey, provisional words within about a second of being spoken, replaced by
+   * Groq's text when it arrives (liveWords.ts; Vietnamese, runs on this computer). On by default.
+   */
+  liveWords: boolean
   /** Also learn recurring names/brands/terms from History and meetings by itself (Learned tab). Only meaningful while learningEnabled is on. */
   autoLearnVocabulary: boolean
   /** Opt-in: push History/Meetings/Lexicon to Supabase (see src/main/sync.ts). Requires being signed in. */
@@ -269,6 +281,28 @@ export interface ApiKeyTestResult {
 }
 
 /** Wispra cloud account info (returned when user is signed in). */
+/** A remembered voice as the Learned tab lists it (never its numbers). */
+export interface VoiceSummary {
+  id: string
+  name: string
+  /** How many stretches of speech it was learned from. */
+  samples: number
+  createdAt: string
+  updatedAt: string
+  lastMatchedAt?: string
+}
+
+/** Speaker recognition as the Learned tab shows it. */
+export interface VoiceRecognitionState {
+  enabled: boolean
+  /** The voice addon runs on this computer and the OS can encrypt what is kept. */
+  available: boolean
+  /** The speaker-embedding model: not downloaded, downloading, ready, or the download failed. */
+  model: 'missing' | 'downloading' | 'ready' | 'failed'
+  error?: string
+  voices: VoiceSummary[]
+}
+
 export interface AccountInfo {
   email: string
   plan: 'free' | 'pro'
@@ -407,6 +441,8 @@ export interface MeetingSegment {
    * mode, and only when one side clearly dominated (see voiceOf in meeting/voice.ts).
    */
   voice?: 'me' | 'others'
+  /** The remembered voice this segment's speech matched (speaker recognition, opt-in — see voiceprints.ts). */
+  voiceName?: string
 }
 
 export interface MeetingSession {

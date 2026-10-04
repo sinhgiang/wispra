@@ -1,6 +1,7 @@
 import type { MeetingAudioSource } from '@shared/types'
 import { ChunkCutter } from './chunkCutter'
 import { rmsOf, voiceOf } from './voice'
+import { attachLiveTap, type LiveTapTarget } from './liveTap'
 
 export interface MeetingChunk {
   blob: Blob
@@ -81,6 +82,15 @@ export class MeetingRecorder {
    * a measurement — nothing downstream of the mix depends on these.
    */
   private legs: { mic: AnalyserNode; system: AnalyserNode } | null = null
+
+  /** Live words (see liveTap.ts): where the audio goes as it is spoken, or null when off. */
+  private live: LiveTapTarget | null = null
+  private detachLive: (() => void) | null = null
+
+  /** Turns live words on (a target) or off (null); takes effect from the next start/resume/source switch. */
+  setLiveTap(target: LiveTapTarget | null): void {
+    this.live = target
+  }
 
   get isActive(): boolean {
     return this.running
@@ -340,12 +350,16 @@ export class MeetingRecorder {
     this.legs = null
     void this.mixContext?.close()
     this.mixContext = null
+    this.detachLive?.()
+    this.detachLive = null
     void this.audioContext?.close()
     this.audioContext = null
   }
 
   private beginSegment(startMs: number): void {
     if (!this.stream) return
+    // A new chunk: the live words start over from here (the previous chunk goes to Groq).
+    this.live?.onCut(startMs)
     const startedAt = new Date().toISOString()
     const rec = new MediaRecorder(this.stream, this.mimeType ? { mimeType: this.mimeType } : {})
     const chunks: Blob[] = []
@@ -383,6 +397,17 @@ export class MeetingRecorder {
     const analyser = this.audioContext.createAnalyser()
     analyser.fftSize = 256
     source.connect(analyser)
+    if (this.live) {
+      const ctx = this.audioContext
+      this.detachLive?.()
+      attachLiveTap(ctx, source, this.live, () => this.activeMs())
+        .then((detach) => {
+          // The context may have been closed (pause, source switch) while the tap was being set up.
+          if (this.audioContext === ctx) this.detachLive = detach
+          else detach()
+        })
+        .catch((err) => console.warn('[meeting] live words unavailable:', err))
+    }
     const data = new Uint8Array(analyser.frequencyBinCount)
     const legData = new Uint8Array(analyser.frequencyBinCount)
 

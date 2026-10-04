@@ -1,4 +1,4 @@
-import { app, clipboard, desktopCapturer, dialog, ipcMain, Notification, screen, session } from 'electron'
+import { app, clipboard, desktopCapturer, dialog, ipcMain, Notification, safeStorage, screen, session } from 'electron'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
@@ -66,6 +66,9 @@ import {
 import { generateOutline } from './outline'
 import { joinOutlines, outlineLanguage, remainingSegments } from './outlineLogic'
 import { createLiveOutliner } from './liveOutline'
+import { createVoiceprints, type Voiceprints } from './voiceprints'
+import { createLiveWords, type LiveWords } from './liveWords'
+import { namesToLearn } from './voiceLearning'
 import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { useCloudflareBudgetFile } from './cloudflareBudget'
 import { transcribeFileAt } from './transcribeFile'
@@ -148,6 +151,9 @@ async function main(): Promise<void> {
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
   // before wireIpc() below (no IPC could otherwise start a session).
   meetingSessions.recoverOrphaned()
+  // Speaker recognition is on unless the user turned it off: get its model ready in the background
+  // (downloaded once, about 28 MB), so the first meeting can already recognise voices.
+  if (store.get().voiceRecognition) void getVoiceprints().prepare()
   // Mind map jobs the last run of the app left unfinished show up as "not finished — Continue".
   getMindMapJobs().restore()
   // Today's count of Cloudflare Workers AI neurons, kept across restarts (see cloudflareBudget.ts).
@@ -312,13 +318,19 @@ function wireMeetingController(): void {
     lastMeetingSpeechAt = Date.now()
     broadcast(IPC.MEETING_CAPTURE_START)
   })
-  meetingController.on('pause-capture', () => broadcast(IPC.MEETING_CAPTURE_PAUSE))
+  meetingController.on('pause-capture', () => {
+    getLiveWords().reset()
+    broadcast(IPC.MEETING_CAPTURE_PAUSE)
+  })
   meetingController.on('resume-capture', () => {
     // Don't count time spent paused against the silence budget.
     lastMeetingSpeechAt = Date.now()
     broadcast(IPC.MEETING_CAPTURE_RESUME)
   })
-  meetingController.on('stop-capture', () => broadcast(IPC.MEETING_CAPTURE_STOP))
+  meetingController.on('stop-capture', () => {
+    getLiveWords().reset()
+    broadcast(IPC.MEETING_CAPTURE_STOP)
+  })
 
   meetingSessions.onSegment((segment, sessionId) => {
     lastMeetingSpeechAt = Date.now()
@@ -328,6 +340,7 @@ function wireMeetingController(): void {
   })
   meetingSessions.onMeta((session) => {
     broadcast(IPC.MEETING_SESSION_UPDATED, session)
+    learnVoices(session)
     // A finished meeting is more of the user's own words for automatic vocabulary learning.
     if (session.status === 'stopped') autoVocab.invalidate(true)
   })
@@ -586,6 +599,63 @@ function getMindMapJobs(): MindMapJobs {
   return mindMapJobs
 }
 
+/** Live words in Meeting (see liveWords.ts); created on first use, once the data folder is known. */
+let liveWords: LiveWords | null = null
+function getLiveWords(): LiveWords {
+  liveWords ??= createLiveWords({
+    dir: join(app.getPath('userData'), 'models'),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    loadAddon: () => require('sherpa-onnx-node'),
+    download: async (url) => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(600_000) })
+      if (!response.ok) throw new Error(`Could not download the live-words model (HTTP ${response.status}).`)
+      return new Uint8Array(await response.arrayBuffer())
+    },
+    // On unless turned off, and only while the recording's spoken language is Vietnamese or "auto":
+    // the model knows Vietnamese only.
+    active: () => {
+      if (store.get().liveWords === false) return false
+      const input = meetingSessions.getCurrent()?.languageConfig?.input ?? 'auto'
+      return input === 'vi' || input === 'auto'
+    },
+    onWords: (fromMs, text) => broadcast(IPC.MEETING_LIVE_WORDS, { sessionId: meetingSessions.getCurrentId(), fromMs, text })
+  })
+  return liveWords
+}
+
+/** Speaker recognition by voice (see voiceprints.ts); created on first use, once the data folder is known. */
+let voiceprints: Voiceprints | null = null
+function getVoiceprints(): Voiceprints {
+  voiceprints ??= createVoiceprints({
+    dir: join(app.getPath('userData'), 'voices'),
+    crypto: safeStorage.isEncryptionAvailable()
+      ? { encrypt: (plain) => safeStorage.encryptString(plain), decrypt: (data) => safeStorage.decryptString(data) }
+      : null,
+    // A native addon: loaded from node_modules (never bundled — see electron.vite.config.ts).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    loadAddon: () => require('sherpa-onnx-node'),
+    download: async (url) => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(300_000) })
+      if (!response.ok) throw new Error(`Could not download the voice model (HTTP ${response.status}).`)
+      return new Uint8Array(await response.arrayBuffer())
+    },
+    enabled: () => store.get().voiceRecognition,
+    onChange: () => broadcast(IPC.VOICE_STATE_CHANGED, getVoiceprints().state())
+  })
+  return voiceprints
+}
+
+/**
+ * Teaches speaker recognition the names this session gives: what the user typed on a
+ * paragraph (a typed name, or a removed label, always wins), and otherwise who the transcript
+ * says is speaking (the outline's speakers — a self-introduction). Never a name that was
+ * itself recognised by voice. Each segment teaches a name once (see voiceprints.learn).
+ */
+function learnVoices(session: MeetingSession): void {
+  if (!store.get().voiceRecognition || session.segments.length === 0) return
+  for (const [name, ids] of namesToLearn(session)) getVoiceprints().learn(session.id, ids, name)
+}
+
 /** Names the topics of a recording in progress (see liveOutline.ts). */
 const liveOutliner = createLiveOutliner({
   getSession: (id) => meetingSessions.get(id),
@@ -719,6 +789,8 @@ function wireIpc(): void {
     ) => {
       meetingSessions.start(audioSource ?? 'mic', languageConfig, spaceId)
       meetingController.start()
+      getLiveWords().reset()
+      if (store.get().liveWords !== false) void getLiveWords().prepare()
     }
   )
   ipcMain.on(IPC.MEETING_PAUSE, () => meetingController.pause())
@@ -738,7 +810,22 @@ function wireIpc(): void {
   ipcMain.handle(IPC.MEETING_GET_STATE, (): MeetingState => meetingController.getState())
   ipcMain.handle(IPC.MEETING_GET_SESSIONS, () => meetingSessions.list())
   ipcMain.handle(IPC.MEETING_GET_SESSION, (_event, id: string) => meetingSessions.get(id))
+  // Live words: the audio as it is spoken (decoded on this computer) and the recorder's chunk cuts.
+  ipcMain.on(IPC.MEETING_LIVE_PCM, (_event, pcm: ArrayBuffer, atMs: number) => {
+    if (pcm instanceof ArrayBuffer || ArrayBuffer.isView(pcm)) getLiveWords().push(new Uint8Array(pcm as ArrayBuffer), Number(atMs) || 0)
+  })
+  ipcMain.on(IPC.MEETING_LIVE_CUT, (_event, atMs: number) => getLiveWords().cut(Number(atMs) || 0))
+  ipcMain.handle(IPC.VOICE_GET_STATE, () => getVoiceprints().state())
+  ipcMain.handle(IPC.VOICE_SET_ENABLED, async (_event, on: boolean) => {
+    store.set({ voiceRecognition: on === true })
+    broadcast(IPC.SETTINGS_CHANGED, store.get())
+    if (on === true) await getVoiceprints().prepare()
+    return getVoiceprints().state()
+  })
+  ipcMain.handle(IPC.VOICE_FORGET, (_event, id: string) => getVoiceprints().forget(String(id)))
+  ipcMain.handle(IPC.VOICE_FORGET_ALL, () => getVoiceprints().forgetAll())
   ipcMain.handle(IPC.MEETING_DELETE_SESSION, (_event, id: string) => {
+    getVoiceprints().dropSession(String(id))
     const result = meetingSessions.delete(id)
     getMindMapJobs().forget(id)
     autoVocab.invalidate(true) // a deleted meeting no longer counts towards what was learned
@@ -796,7 +883,7 @@ function wireIpc(): void {
     (
       _event,
       audio: ArrayBuffer,
-      meta: { startMs: number; endMs: number; startedAt: string; mimeType: string; voice?: 'me' | 'others' }
+      meta: { startMs: number; endMs: number; startedAt: string; mimeType: string; voice?: 'me' | 'others'; pcm?: ArrayBuffer }
     ) => {
       const { provider, groqApiKey, openaiApiKey, localBaseUrl, localSttModel, localLlmModel, vocabulary } = store.get()
       // The session's own language choices (set on the Start-recording screen), NOT the
@@ -812,7 +899,13 @@ function wireIpc(): void {
       const transcriptLanguage = sessionLangConfig?.transcript ?? 'auto'
       const bytes = new Uint8Array(audio)
       const durationSeconds = Math.max(0, Math.round((meta.endMs - meta.startMs) / 1000))
-      meetingSessions.enqueueChunk(meta, async () => {
+      // Speaker recognition (opt-in): the chunk's voice vector, and the name of the voice it matches.
+      const { pcm, ...chunk } = meta
+      const sessionId = currentSession?.id
+      const embedding = pcm && sessionId && store.get().voiceRecognition ? getVoiceprints().embed(new Uint8Array(pcm)) : null
+      const voiceName = embedding ? (getVoiceprints().recognise(embedding) ?? undefined) : undefined
+      const keep = embedding && sessionId ? (segment: { id: string }) => getVoiceprints().keepSegment(sessionId, segment.id, embedding) : undefined
+      meetingSessions.enqueueChunk({ ...chunk, voiceName, onSegment: keep }, async () => {
         const proxyToken = provider === 'proxy' ? (await auth.getValidToken()) ?? undefined : undefined
         const { text: asrText, detectedLanguage } = await transcribe(
           bytes, provider, groqApiKey, openaiApiKey, inputLanguage,

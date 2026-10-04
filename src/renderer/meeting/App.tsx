@@ -380,6 +380,8 @@ interface ParagraphBlock {
   text: string
   /** "Both"-mode recordings: who the audio levels say was talking in this paragraph (see MeetingSegment.voice). A paragraph never mixes the two — a change of voice starts a new one. */
   voice?: 'me' | 'others'
+  /** The remembered voice most of this paragraph's segments matched (speaker recognition). */
+  voiceName?: string
   /** ids of every segment merged into this block — lets a chat answer's segment-id range (see MeetingChatMessage in shared/types.ts) resolve onto the paragraph block(s) it falls within, for transcript highlighting (see resolveHighlightBlockIds). */
   segmentIds: string[]
 }
@@ -390,15 +392,23 @@ const NO_BLOCKS: ParagraphBlock[] = []
 /** Merges consecutive segments into paragraph blocks (isNewParagraph starts a new one), each labeled with the elapsed time and wall-clock time it started. */
 function groupIntoParagraphs(segments: MeetingSegment[]): ParagraphBlock[] {
   const blocks: ParagraphBlock[] = []
+  const names: Array<Map<string, number>> = []
   for (const seg of segments) {
     const last = blocks[blocks.length - 1]
     if (seg.isNewParagraph || !last) {
       blocks.push({ id: seg.id, startedAt: seg.startedAt, startMs: seg.startMs, text: seg.text, segmentIds: [seg.id], voice: seg.voice })
+      names.push(new Map())
     } else {
       last.text += ' ' + seg.text
       last.segmentIds.push(seg.id)
     }
+    if (seg.voiceName) names[names.length - 1].set(seg.voiceName, (names[names.length - 1].get(seg.voiceName) ?? 0) + 1)
   }
+  // A paragraph is labelled with the voice most of its recognised segments matched.
+  blocks.forEach((block, i) => {
+    const top = [...names[i].entries()].sort((a, b) => b[1] - a[1])[0]
+    if (top) block.voiceName = top[0]
+  })
   return blocks
 }
 
@@ -451,6 +461,11 @@ export function MeetingPanel(): React.JSX.Element {
   const [liveSpeakerNames, setLiveSpeakerNames] = useState<Record<string, string>>({})
   /** Whether a finished part is being named right now, or naming stopped (daily limit, failures). */
   const [liveOutlineStatus, setLiveOutlineStatus] = useState<LiveOutlineStatus | null>(null)
+  /**
+   * Live words: provisional text of the stretches spoken since the last transcribed paragraph,
+   * by where each began (liveWords.ts). Each is dropped when Groq's paragraph for it arrives.
+   */
+  const [liveInterim, setLiveInterim] = useState<Array<{ fromMs: number; text: string }>>([])
   /** id of a past (already-stopped) session the user clicked in the sidebar, read-only. null = showing the current session instead. */
   const [viewingPastId, setViewingPastId] = useState<string | null>(null)
   const [pastSegments, setPastSegments] = useState<MeetingSegment[]>([])
@@ -657,6 +672,7 @@ export function MeetingPanel(): React.JSX.Element {
       setLiveSpeakerNames({})
       setLiveOutlineStatus(null)
       setActionHighlight(null)
+      setLiveInterim([])
       setLiveChat([])
       setChatInput('')
       setChatError(null)
@@ -714,6 +730,15 @@ export function MeetingPanel(): React.JSX.Element {
     }))
     off.push(window.api.onMeetingSegmentReady((segment) => {
       setLiveSegments((prev) => [...prev, segment])
+      // Groq's text for this stretch (and anything before it) replaces the provisional words.
+      setLiveInterim((prev) => prev.filter((w) => w.fromMs > segment.startMs + 300))
+    }))
+    off.push(window.api.onMeetingLiveWords((words) => {
+      if (words.sessionId !== currentSessionIdRef.current) return
+      setLiveInterim((prev) => {
+        const rest = prev.filter((w) => w.fromMs !== words.fromMs)
+        return words.text ? [...rest, { fromMs: words.fromMs, text: words.text }].sort((a, b) => a.fromMs - b.fromMs) : rest
+      })
     }))
     off.push(window.api.onMeetingSessionUpdated((session) => {
       // Keep the sidebar list's title/status in sync (e.g. the AI title lands a few
@@ -891,8 +916,17 @@ export function MeetingPanel(): React.JSX.Element {
   // onMeetingSessionUpdated; both paths keep one reference.
   /** When this install first ran a version that limits automatic AI to new recordings (Settings.autoAiSince); null until read. */
   const [autoAiSince, setAutoAiSince] = useState<string | null>(null)
+  /** Speaker recognition is on: the Start screen says so in one line. */
+  const [voiceRecognitionOn, setVoiceRecognitionOn] = useState(false)
+  /** Live words while recording (grey provisional text) — the Start screen's switch. */
+  const [liveWordsOn, setLiveWordsOn] = useState(true)
   useEffect(() => {
-    void window.api.getSettings().then((settings) => setAutoAiSince(settings?.autoAiSince ?? ''))
+    void window.api.getSettings().then((settings) => {
+      setAutoAiSince(settings?.autoAiSince ?? '')
+      setVoiceRecognitionOn(settings?.voiceRecognition === true)
+      setLiveWordsOn(settings?.liveWords !== false)
+    })
+    return window.api.onVoiceRecognitionChanged((state) => setVoiceRecognitionOn(state.enabled))
   }, [])
   /** Whether a recording made at `createdAt` may get AI work started by itself. Unknown → no. */
   const autoAiFor = useCallback(
@@ -1947,6 +1981,7 @@ export function MeetingPanel(): React.JSX.Element {
                 onRegenerate={() => undefined}
                 onRenameSpeaker={renameLiveSpeaker}
                 emptyText={isPaused ? 'Paused — press Resume to keep going.' : 'Listening… transcribed text will appear here as you speak.'}
+                interim={liveInterim.map((w) => w.text).join(' ')}
               />
               <MeetingChatPanel
                 messages={liveChat}
@@ -1989,6 +2024,23 @@ export function MeetingPanel(): React.JSX.Element {
                   ))}
                 </div>
               </div>
+              <label className="meeting-live-words-toggle">
+                <input
+                  type="checkbox"
+                  checked={liveWordsOn}
+                  onChange={(e) => {
+                    setLiveWordsOn(e.target.checked)
+                    void window.api.setSettings({ liveWords: e.target.checked })
+                  }}
+                />
+                Show words as they are spoken (grey until the transcript replaces them; Vietnamese; worked out on this computer)
+              </label>
+              {voiceRecognitionOn && (
+                <div className="meeting-voice-notice">
+                  Wispra recognises speakers by their voice on this computer — nothing is sent anywhere. You can turn
+                  this off, or forget voices, in Settings → Learned.
+                </div>
+              )}
               <div className="meeting-lang-panel">
                 <div className="meeting-lang-title">Languages</div>
                 <div className="meeting-lang-hint">

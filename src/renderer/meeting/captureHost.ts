@@ -16,6 +16,8 @@ import { MeetingRecorder, type MeetingChunk } from './recorder'
 const recorder = new MeetingRecorder()
 let installed = false
 let audioSource: MeetingAudioSource = 'mic'
+/** Speaker recognition is on: each chunk also goes to the main process as 16 kHz PCM (read at each Start). */
+let withPcm = false
 const levelListeners = new Set<(level: number) => void>()
 const resumeErrorListeners = new Set<(message: string) => void>()
 
@@ -23,14 +25,39 @@ const onLevel = (level: number): void => {
   for (const fn of levelListeners) fn(level)
 }
 
+/** A chunk's audio as 16 kHz mono 16-bit PCM — what the speaker-recognition model reads. Null when it cannot be decoded. */
+async function pcm16k(buffer: ArrayBuffer): Promise<ArrayBuffer | null> {
+  try {
+    const ctx = new AudioContext()
+    const decoded = await ctx.decodeAudioData(buffer.slice(0))
+    void ctx.close()
+    const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000)
+    const source = offline.createBufferSource()
+    source.buffer = decoded
+    source.connect(offline.destination)
+    source.start()
+    const samples = (await offline.startRendering()).getChannelData(0)
+    const out = new Int16Array(samples.length)
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]))
+      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    return out.buffer
+  } catch {
+    return null
+  }
+}
+
 function sendChunk(chunk: MeetingChunk): void {
-  void chunk.blob.arrayBuffer().then((buffer) => {
+  void chunk.blob.arrayBuffer().then(async (buffer) => {
+    const pcm = withPcm ? await pcm16k(buffer) : null
     window.api.meetingChunkCaptured(buffer, {
       startMs: chunk.startMs,
       endMs: chunk.endMs,
       startedAt: chunk.startedAt,
       mimeType: chunk.mimeType,
-      voice: chunk.voice
+      voice: chunk.voice,
+      ...(pcm ? { pcm } : {})
     })
   })
 }
@@ -43,7 +70,15 @@ function sourceLabel(source: MeetingAudioSource): string {
 export function installCaptureHost(): void {
   if (installed) return
   installed = true
-  window.api.onMeetingCaptureStart(() => {
+  window.api.onMeetingCaptureStart(async () => {
+    const settings = await window.api.getSettings().catch(() => null)
+    withPcm = settings?.voiceRecognition === true
+    // Live words (on unless turned off): the audio as it is spoken, and each chunk cut.
+    recorder.setLiveTap(
+      settings?.liveWords === false
+        ? null
+        : { onPcm: (pcm, atMs) => window.api.meetingLivePcm(pcm, atMs), onCut: (atMs) => window.api.meetingLiveCut(atMs) }
+    )
     recorder.start(onLevel, sendChunk, audioSource).catch((err: unknown) => {
       recorder.stop()
       const detail = err instanceof Error ? err.message : 'access denied or unavailable'

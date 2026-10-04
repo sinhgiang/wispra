@@ -12,6 +12,8 @@ export interface TranscriptBlock {
   segmentIds: string[]
   /** "Both"-mode recordings: who the audio levels say was talking (see MeetingSegment.voice). */
   voice?: 'me' | 'others'
+  /** Recognised by voice: the remembered voice this paragraph matched. */
+  voiceName?: string
 }
 
 /** How the action items column is arranged: next to the topic each belongs to, or as one list. */
@@ -63,7 +65,7 @@ function buildSections(
   speakerNames: Record<string, string>,
   durationMs: number,
   live: boolean
-): { sections: Section[]; actions: ActionItem[]; speakerOf: Map<string, { label: string; named: boolean }> } {
+): { sections: Section[]; actions: ActionItem[]; speakerOf: Map<string, { label: string; named: boolean; byVoice?: boolean }> } {
   const blockIndexOf = new Map<string, number>()
   blocks.forEach((b, i) => b.segmentIds.forEach((id) => blockIndexOf.set(id, i)))
   const endOf = (index: number): number => (index + 1 < blocks.length ? blocks[index + 1].startMs : Math.max(durationMs, blocks[index]?.startMs ?? 0))
@@ -133,7 +135,7 @@ function buildSections(
   actions.sort((a, b) => a.startMs - b.startMs)
 
   // Speaker label per paragraph: what the user typed, else the outline's name, else "You"/"Others".
-  const speakerOf = new Map<string, { label: string; named: boolean }>()
+  const speakerOf = new Map<string, { label: string; named: boolean; byVoice?: boolean }>()
   const aiName = new Map<number, string>()
   for (const speaker of outline?.speakers ?? []) {
     const from = blockIndexOf.get(speaker.startSegmentId)
@@ -147,8 +149,10 @@ function buildSections(
       if (typed) speakerOf.set(block.id, { label: typed, named: true })
       return
     }
+    // What is said in the recording first, then a remembered voice, then which side the sound came from.
     const name = aiName.get(i)
     if (name) speakerOf.set(block.id, { label: name, named: true })
+    else if (block.voiceName) speakerOf.set(block.id, { label: block.voiceName, named: true, byVoice: true })
     else if (block.voice) speakerOf.set(block.id, { label: VOICE_LABEL[block.voice], named: false })
   })
   return { sections, actions, speakerOf }
@@ -198,6 +202,7 @@ export function TranscriptColumns({
   live = false,
   liveStatus = null,
   emptyText = 'No speech was transcribed in this session.',
+  interim = '',
   onCopy
 }: {
   blocks: TranscriptBlock[]
@@ -229,6 +234,8 @@ export function TranscriptColumns({
   liveStatus?: LiveOutlineStatus | null
   /** Shown while there is no paragraph. */
   emptyText?: string
+  /** Live words: what is being said right now, provisional (grey) until its paragraph arrives. */
+  interim?: string
   /** "Copy transcript", shown at the end of the Transcript column's header. */
   onCopy?: () => void
 }): ReactElement {
@@ -306,7 +313,7 @@ export function TranscriptColumns({
         type="button"
         className={speaker.named ? 'txc-speaker' : 'txc-speaker txc-speaker-voice'}
         style={speaker.named ? ({ '--hue': hueOf(speaker.label) } as React.CSSProperties) : undefined}
-        title="Click to rename this speaker"
+        title={speaker.byVoice ? 'Recognised by voice — click to rename this speaker' : 'Click to rename this speaker'}
         onClick={() => startEditing(block.id)}
       >
         <i />
@@ -442,7 +449,7 @@ export function TranscriptColumns({
             </button>
           </div>
         )}
-        {loading ? null : blocks.length === 0 ? (
+        {loading ? null : blocks.length === 0 && !interim ? (
           <div className="meeting-transcript-empty">{emptyText}</div>
         ) : (
           sections.map((section) => (
@@ -500,6 +507,16 @@ export function TranscriptColumns({
               })}
             </div>
           ))
+        )}
+        {interim && (
+          <div className="txc-cols txc-sec txc-interim-row" aria-live="polite">
+            <div className="txc-time">
+              <span className="txc-elapsed">now</span>
+            </div>
+            <p className="txc-text txc-interim" title="Provisional — replaced by the transcript in a moment">
+              {interim}
+            </p>
+          </div>
         )}
       </div>
 
