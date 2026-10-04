@@ -197,7 +197,8 @@ export function TranscriptColumns({
   onRenameSpeaker,
   live = false,
   liveStatus = null,
-  emptyText = 'No speech was transcribed in this session.'
+  emptyText = 'No speech was transcribed in this session.',
+  onCopy
 }: {
   blocks: TranscriptBlock[]
   /** The session's paragraphs are not here yet (just opened) — show nothing rather than "no speech". */
@@ -228,6 +229,8 @@ export function TranscriptColumns({
   liveStatus?: LiveOutlineStatus | null
   /** Shown while there is no paragraph. */
   emptyText?: string
+  /** "Copy transcript", shown at the end of the Transcript column's header. */
+  onCopy?: () => void
 }): ReactElement {
   const { sections, actions, speakerOf } = useMemo(
     () => buildSections(blocks, outline, speakerNames, durationMs, live),
@@ -377,6 +380,11 @@ export function TranscriptColumns({
           <span className="txc-col-topic">Topic</span>
           <span className="txc-col-text">
             <span>Transcript</span>
+            {onCopy && (
+              <button type="button" className="txc-copy-btn" onClick={onCopy} disabled={blocks.length === 0}>
+                Copy transcript
+              </button>
+            )}
             {/* Folded layouts have no action column to carry these controls. */}
             {hasOutline && byTopic && <span className="txc-head-folded">{actionsHeader}</span>}
             {hasOutline && !byTopic && (
