@@ -30,18 +30,21 @@ or the website.
 
 - **Notes**: English, written for users, not developers — what is new, improved or fixed, and what to do about it.
   Group them under `## New`, `## Improved`, `## Fixed`. Keep a copy in `dist/release-notes-vX.Y.Z.md`.
+- **Title**: `vX.Y.Z — <headline>` (for example `v0.6.6 — The meeting table fills in while you talk`); the Updates
+  page shows the headline.
 - **`screenshot.png`**: one screenshot of the app showing the version's main new feature, attached to the release
-  under exactly that name. Sample content only — never the owner's real recordings, session titles, email address,
+  under exactly that name — 1600 × 1000 (16:10), dark theme, under 500 KB. Sample content only — never the owner's real recordings, session titles, email address,
   keys or machine paths. Take it from the automated checks' throwaway windows (the `check:*` scripts write PNGs
   when `CHECK_SHOTS=<folder>` is set) or a similar stub-data window, never from the owner's running app.
 - The website's Updates page (https://wispra-web.vercel.app/updates) reads the releases — title, notes and
   `screenshot.png` — so **every published version gets its Updates entry this way, without waiting to be asked**
-  (standing rule of the owner, 2026-10-04). After publishing, open the Updates page and check the new entry shows.
+  (standing rule of the owner, 2026-10-04). The format the site reads is described in `docs/UPDATES.md` of
+  `sinhgiang/wispra-web`. After publishing, open the Updates page and check the new entry shows (within an hour).
 
 ## 5. Publish
 
 ```
-gh release create vX.Y.Z --draft --target <master commit> --title "Wispra X.Y.Z" --notes-file dist/release-notes-vX.Y.Z.md \
+gh release create vX.Y.Z --draft --target <master commit> --title "vX.Y.Z — <headline>" --notes-file dist/release-notes-vX.Y.Z.md \
   dist/Wispra-Setup-X.Y.Z.exe dist/Wispra-Setup-X.Y.Z.exe.blockmap dist/latest.yml screenshot.png
 gh release edit vX.Y.Z --draft=false --latest
 ```
