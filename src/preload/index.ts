@@ -13,6 +13,8 @@ import type {
   LexiconEntry,
   McpLinkStatus,
   LiveOutlineStatus,
+  PendingDictation,
+  DictationRetryResult,
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContentResult,
@@ -52,8 +54,16 @@ const api = {
   // --- dictation / overlay ---
   toggleDictation: (): void => ipcRenderer.send(IPC.TOGGLE_DICTATION),
   openSettings: (): void => ipcRenderer.send(IPC.OPEN_SETTINGS),
-  sendAudio: (audio: ArrayBuffer, durationSeconds: number, mimeType: string): void =>
-    ipcRenderer.send(IPC.AUDIO_CAPTURED, audio, durationSeconds, mimeType),
+  // The dictation as it is recorded: 16 kHz mono 16-bit PCM, about a second at a time
+  // (main writes it to a file), then the end of the recording.
+  dictationAudioChunk: (pcm: ArrayBuffer): void => ipcRenderer.send(IPC.DICTATION_AUDIO_CHUNK, pcm),
+  dictationAudioEnd: (info: { hasSpeech: boolean }): void => ipcRenderer.send(IPC.DICTATION_AUDIO_END, info),
+  // Dictations saved but not transcribed (History): list, try again, delete, changes.
+  getPendingDictations: (): Promise<PendingDictation[]> => ipcRenderer.invoke(IPC.DICTATION_GET_PENDING),
+  retryDictation: (id: string): Promise<DictationRetryResult> => ipcRenderer.invoke(IPC.DICTATION_RETRY, id),
+  deletePendingDictation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.DICTATION_DELETE, id),
+  onPendingDictationsChanged: (cb: (list: PendingDictation[]) => void): (() => void) =>
+    listen(IPC.DICTATION_PENDING_CHANGED, (_e, list: PendingDictation[]) => cb(list)),
   recordingFailed: (message: string): void => ipcRenderer.send(IPC.RECORDING_FAILED, message),
   onStateChanged: (cb: (payload: StatePayload) => void): void => {
     ipcRenderer.on(IPC.STATE_CHANGED, (_e, payload: StatePayload) => cb(payload))

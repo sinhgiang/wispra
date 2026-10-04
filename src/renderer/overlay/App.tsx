@@ -17,7 +17,8 @@ export function App(): React.JSX.Element {
 
   const handleStart = useCallback(() => {
     const recorder = recorderRef.current
-    recorder.start(setLevel).catch(() => {
+    // The audio goes to the main process as it is recorded; it is saved there before anything is sent.
+    recorder.start(setLevel, (pcm) => window.api.dictationAudioChunk(pcm)).catch(() => {
       recorder.abort()
       window.api.recordingFailed('Microphone access denied or unavailable')
     })
@@ -28,11 +29,9 @@ export function App(): React.JSX.Element {
     void recorder.stop().then((result) => {
       setLevel(0)
       if (!result) window.api.recordingFailed('Recording produced no audio')
-      // Silent recording: report it here instead of sending it — Whisper hallucinates text
-      // (its own prompt, "Kết thúc video", …) when handed silence, and it would also burn quota.
-      // Goes through the same error path as an empty transcription, so state returns to idle.
-      else if (!result.hasSpeech) window.api.recordingFailed('No speech detected')
-      else window.api.sendAudio(result.audio, result.durationSeconds, result.mimeType)
+      // A silent recording is not sent (Whisper invents text for silence): the main process
+      // drops its file and says "No speech detected".
+      else window.api.dictationAudioEnd({ hasSpeech: result.hasSpeech })
     })
   }, [])
 

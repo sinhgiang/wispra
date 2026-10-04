@@ -1,5 +1,6 @@
 import {
   CLOUD_UPLOAD_MAX_BYTES,
+  DIRECT_UPLOAD_MAX_BYTES,
   GROQ_API_BASE,
   GROQ_STT_MODEL,
   OPENAI_API_BASE,
@@ -391,52 +392,50 @@ export async function transcribe(
   proxyToken?: string,
   vocabulary?: string[]
 ): Promise<TranscribeResult> {
-  // Wispra cloud proxy provider
+  // Where the audio goes, and the most one request may carry there.
+  let send: (part: Uint8Array, seconds: number) => Promise<TranscribeResult>
+  let maxBytes: number
   if (provider === 'proxy') {
+    // Wispra Cloud
     if (!proxyToken) throw noRetry('Not signed in — open Account settings to log in')
     const token = proxyToken
-    const once = async (part: Uint8Array, seconds: number): Promise<TranscribeResult> => {
-      let lastError: Error = new Error('Transcription failed')
-      for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
-        try {
-          return await requestViaProxy(part, token, language, mimeType, seconds, vocabulary)
-        } catch (err) {
-          lastError = err instanceof Error ? err : new Error(String(err))
-          if (lastError.name === 'NoRetryError') throw lastError
-        }
+    send = (part, seconds) => requestViaProxy(part, token, language, mimeType, seconds, vocabulary)
+    maxBytes = CLOUD_UPLOAD_MAX_BYTES
+  } else {
+    const config = getConfig(provider, groqKey, openaiKey, localBaseUrl, localSttModel)
+    if (provider !== 'local' && !config.apiKey) {
+      const name = provider === 'openai' ? 'OpenAI' : 'Groq'
+      throw new Error(`No ${name} API key set — open Settings and add your key`)
+    }
+    send = (part) => requestTranscription(part, config, language, mimeType, vocabulary)
+    maxBytes = DIRECT_UPLOAD_MAX_BYTES
+  }
+
+  const once = async (part: Uint8Array, seconds: number): Promise<TranscribeResult> => {
+    let lastError: Error = new Error('Transcription failed')
+    for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
+      try {
+        return await send(part, seconds)
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err))
+        if (lastError.name === 'NoRetryError') throw lastError
       }
-      throw lastError
     }
-    if (audio.length <= CLOUD_UPLOAD_MAX_BYTES) return once(audio, durationSeconds)
-    // Too big for one request (Vercel's 4.5 MB): send it in parts, cut at pauses, and join the text.
-    const parts = splitWav(audio, CLOUD_UPLOAD_MAX_BYTES)
-    if (!parts) throw noRetry(tooLargeForCloud(audio.length))
-    const texts: string[] = []
-    let detectedLanguage: string | undefined
-    for (const part of parts) {
-      const result = await once(part.audio, part.seconds)
-      if (result.text) texts.push(result.text)
-      detectedLanguage ??= result.detectedLanguage
-    }
-    return { text: texts.join(' ').trim(), detectedLanguage }
+    throw lastError
   }
-
-  const config = getConfig(provider, groqKey, openaiKey, localBaseUrl, localSttModel)
-  if (provider !== 'local' && !config.apiKey) {
-    const name = provider === 'openai' ? 'OpenAI' : 'Groq'
-    throw new Error(`No ${name} API key set — open Settings and add your key`)
+  if (audio.length <= maxBytes) return once(audio, durationSeconds)
+  // Too big for one request (Vercel's 4.5 MB for Wispra Cloud, 25 MB at Groq / OpenAI): send it
+  // in parts, cut at pauses, and join the text. A dictation can be as long as the user likes.
+  const parts = splitWav(audio, maxBytes)
+  if (!parts) throw noRetry(provider === 'proxy' ? tooLargeForCloud(audio.length) : `This recording is too large to send in one request (${(audio.length / (1024 * 1024)).toFixed(1)} MB).`)
+  const texts: string[] = []
+  let detectedLanguage: string | undefined
+  for (const part of parts) {
+    const result = await once(part.audio, part.seconds)
+    if (result.text) texts.push(result.text)
+    detectedLanguage ??= result.detectedLanguage
   }
-
-  let lastError: Error = new Error('Transcription failed')
-  for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
-    try {
-      return await requestTranscription(audio, config, language, mimeType, vocabulary)
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
-      if (lastError.name === 'NoRetryError') throw lastError
-    }
-  }
-  throw lastError
+  return { text: texts.join(' ').trim(), detectedLanguage }
 }
 
 async function requestViaProxy(

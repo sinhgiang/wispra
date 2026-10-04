@@ -125,6 +125,12 @@ export const TRANSCRIBE_TIMEOUT_MS = 120_000
  * parts (see splitWav in wavSplit.ts).
  */
 export const CLOUD_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
+/**
+ * Largest file sent straight to a speech-to-text provider in one request. Groq accepts
+ * 25 MB on its free tier and OpenAI 25 MB; a longer dictation (over about 10 minutes of
+ * 16 kHz WAV) is sent in parts below this, like Wispra Cloud's.
+ */
+export const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 export const TRANSCRIBE_RETRIES = 1
 
 /** How long the error state is shown before returning to idle. */

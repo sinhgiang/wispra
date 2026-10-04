@@ -269,6 +269,24 @@ export interface ApiKeyTestResult {
 }
 
 /** Wispra cloud account info (returned when user is signed in). */
+/** A dictation whose audio is saved but not turned into text yet (see dictationAudio.ts). */
+export interface PendingDictation {
+  id: string
+  /** ISO timestamp of when it was recorded. */
+  createdAt: string
+  /** Length of the saved audio. */
+  seconds: number
+  /** Why it could not be transcribed. */
+  error: string
+}
+
+/** The answer to "Try again" on a saved dictation. */
+export interface DictationRetryResult {
+  ok: boolean
+  text?: string
+  error?: string
+}
+
 export interface AccountInfo {
   email: string
   plan: 'free' | 'pro'

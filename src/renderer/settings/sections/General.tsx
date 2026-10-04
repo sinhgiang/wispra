@@ -116,26 +116,14 @@ export function GeneralSection({ settings }: { settings: Settings }): React.JSX.
           <span className="toggle-label">Auto-stop on silence</span>
           <span className="toggle-desc">
             Stop recording automatically when you pause speaking for ~3 s (push-to-talk feel).
-            Combined with a low "auto-stop after" cap below, natural pauses can cut off and lose
-            a few seconds of speech at each restart — for long, uninterrupted sessions, turn this
-            off and use Toggle mode instead (start/stop fully under your control).
+            Natural pauses can then end a dictation early — for long, uninterrupted sessions, turn
+            this off and use Toggle mode instead: a recording then runs, with no time limit, until
+            you stop it.
           </span>
         </div>
         <div className="toggle-switch" />
       </label>
 
-      <div className="autostop-row">
-        <span className="autostop-label">Auto-stop recording after</span>
-        <select
-          className="autostop-select"
-          value={settings.autoStopMinutes}
-          onChange={(e) => void window.api.setSettings({ autoStopMinutes: Number(e.target.value) })}
-        >
-          {[1, 2, 5, 10, 15, 20, 30].map((m) => (
-            <option key={m} value={m}>{m} min</option>
-          ))}
-        </select>
-      </div>
     </section>
   )
 }
