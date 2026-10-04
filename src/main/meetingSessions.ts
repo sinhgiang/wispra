@@ -88,7 +88,16 @@ class MeetingSessions {
    * first, so segments[] always stays in correct recording order.
    */
   enqueueChunk(
-    chunk: { startMs: number; endMs: number; startedAt: string; voice?: 'me' | 'others' },
+    chunk: {
+      startMs: number
+      endMs: number
+      startedAt: string
+      voice?: 'me' | 'others'
+      /** The remembered voice the chunk matched (speaker recognition). */
+      voiceName?: string
+      /** Told the segment the chunk became, if it becomes one. */
+      onSegment?: (segment: MeetingSegment) => void
+    },
     transcribeFn: () => Promise<string | null>
   ): void {
     const session = this.current
@@ -136,8 +145,10 @@ class MeetingSessions {
         isNewParagraph
       }
       if (chunk.voice) segment.voice = chunk.voice
+      if (chunk.voiceName) segment.voiceName = chunk.voiceName
       session.segments.push(segment)
       this.persist(session)
+      chunk.onSegment?.(segment)
       for (const fn of this.listeners) fn(segment, session.id)
     })
   }

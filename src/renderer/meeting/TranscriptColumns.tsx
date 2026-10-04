@@ -12,6 +12,8 @@ export interface TranscriptBlock {
   segmentIds: string[]
   /** "Both"-mode recordings: who the audio levels say was talking (see MeetingSegment.voice). */
   voice?: 'me' | 'others'
+  /** Recognised by voice: the remembered voice this paragraph matched. */
+  voiceName?: string
 }
 
 /** How the action items column is arranged: next to the topic each belongs to, or as one list. */
@@ -63,7 +65,7 @@ function buildSections(
   speakerNames: Record<string, string>,
   durationMs: number,
   live: boolean
-): { sections: Section[]; actions: ActionItem[]; speakerOf: Map<string, { label: string; named: boolean }> } {
+): { sections: Section[]; actions: ActionItem[]; speakerOf: Map<string, { label: string; named: boolean; byVoice?: boolean }> } {
   const blockIndexOf = new Map<string, number>()
   blocks.forEach((b, i) => b.segmentIds.forEach((id) => blockIndexOf.set(id, i)))
   const endOf = (index: number): number => (index + 1 < blocks.length ? blocks[index + 1].startMs : Math.max(durationMs, blocks[index]?.startMs ?? 0))
@@ -133,7 +135,7 @@ function buildSections(
   actions.sort((a, b) => a.startMs - b.startMs)
 
   // Speaker label per paragraph: what the user typed, else the outline's name, else "You"/"Others".
-  const speakerOf = new Map<string, { label: string; named: boolean }>()
+  const speakerOf = new Map<string, { label: string; named: boolean; byVoice?: boolean }>()
   const aiName = new Map<number, string>()
   for (const speaker of outline?.speakers ?? []) {
     const from = blockIndexOf.get(speaker.startSegmentId)
@@ -147,8 +149,10 @@ function buildSections(
       if (typed) speakerOf.set(block.id, { label: typed, named: true })
       return
     }
+    // What is said in the recording first, then a remembered voice, then which side the sound came from.
     const name = aiName.get(i)
     if (name) speakerOf.set(block.id, { label: name, named: true })
+    else if (block.voiceName) speakerOf.set(block.id, { label: block.voiceName, named: true, byVoice: true })
     else if (block.voice) speakerOf.set(block.id, { label: VOICE_LABEL[block.voice], named: false })
   })
   return { sections, actions, speakerOf }
@@ -306,7 +310,7 @@ export function TranscriptColumns({
         type="button"
         className={speaker.named ? 'txc-speaker' : 'txc-speaker txc-speaker-voice'}
         style={speaker.named ? ({ '--hue': hueOf(speaker.label) } as React.CSSProperties) : undefined}
-        title="Click to rename this speaker"
+        title={speaker.byVoice ? 'Recognised by voice — click to rename this speaker' : 'Click to rename this speaker'}
         onClick={() => startEditing(block.id)}
       >
         <i />

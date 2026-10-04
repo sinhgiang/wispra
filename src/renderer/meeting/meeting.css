@@ -2581,3 +2581,13 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Start screen: one line saying speakers are recognised by voice, on this computer only. */
+.meeting-voice-notice {
+  max-width: 560px;
+  margin: 0 auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+  text-align: center;
+}

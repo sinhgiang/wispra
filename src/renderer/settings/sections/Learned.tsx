@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { AutoTerm, LexiconEntry, Settings, Suggestion } from '@shared/types'
 import { lexiconMode, type LexiconMode } from '@shared/lexiconMode'
 import { StyleCard } from './StyleCard'
+import { VoicesCard } from './VoicesCard'
 import { EvalCard } from './EvalCard'
 
 const MODE_LABEL: Record<LexiconMode, string> = {
@@ -443,6 +444,8 @@ export function LearnedSection({ settings }: { settings: Settings }): React.JSX.
       )}
 
       {learning && <StyleCard aiCleanup={settings.aiPostProcess} />}
+
+      <VoicesCard />
 
       <EvalCard />
     </section>

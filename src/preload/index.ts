@@ -13,6 +13,7 @@ import type {
   LexiconEntry,
   McpLinkStatus,
   LiveOutlineStatus,
+  VoiceRecognitionState,
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContentResult,
@@ -217,8 +218,15 @@ const api = {
   meetingCaptureFailed: (message: string): void => ipcRenderer.send(IPC.MEETING_CAPTURE_FAILED, message),
   meetingChunkCaptured: (
     audio: ArrayBuffer,
-    meta: { startMs: number; endMs: number; startedAt: string; mimeType: string; voice?: 'me' | 'others' }
+    meta: { startMs: number; endMs: number; startedAt: string; mimeType: string; voice?: 'me' | 'others'; pcm?: ArrayBuffer }
   ): void => ipcRenderer.send(IPC.MEETING_CHUNK_CAPTURED, audio, meta),
+  // Speaker recognition (Learned tab): state, on/off (downloads the model when turned on), forget.
+  getVoiceRecognition: (): Promise<VoiceRecognitionState> => ipcRenderer.invoke(IPC.VOICE_GET_STATE),
+  setVoiceRecognition: (on: boolean): Promise<VoiceRecognitionState> => ipcRenderer.invoke(IPC.VOICE_SET_ENABLED, on),
+  forgetVoice: (id: string): Promise<void> => ipcRenderer.invoke(IPC.VOICE_FORGET, id),
+  forgetAllVoices: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_FORGET_ALL),
+  onVoiceRecognitionChanged: (cb: (state: VoiceRecognitionState) => void): (() => void) =>
+    listen(IPC.VOICE_STATE_CHANGED, (_e, state: VoiceRecognitionState) => cb(state)),
   getMeetingState: (): Promise<MeetingState> => ipcRenderer.invoke(IPC.MEETING_GET_STATE),
   getMeetingSessions: (): Promise<MeetingSessionSummary[]> => ipcRenderer.invoke(IPC.MEETING_GET_SESSIONS),
   getMeetingSession: (id: string): Promise<MeetingSession | null> =>
