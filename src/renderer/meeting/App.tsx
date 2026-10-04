@@ -1623,18 +1623,21 @@ export function MeetingPanel(): React.JSX.Element {
                     : 'meeting-session-view'
               }
             >
-              <div className="meeting-session-header">
+              {/* One compact row: title and date on the left, the view tabs right after them —
+                  the transcript below gets the height. The Transcript tab's Copy button sits in
+                  its own column header (see TranscriptColumns); the other tabs keep theirs here. */}
+              <div className="meeting-session-header meeting-past-header">
                 <div className="meeting-session-heading">
                   <h2>{pastTitle}</h2>
-                  <div className="meeting-session-date">{formatSessionDate(pastCreatedAt)}</div>
+                  <div className="meeting-session-date">
+                    {formatSessionDate(pastCreatedAt)}
+                    {pastView !== 'mindmap' && (
+                      <span className="meeting-ended-note">
+                        {pastStatus === 'summarizing' ? ' · Recording ended — writing a title…' : ' · Recording ended'}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                {/* Sits beside the title rather than in the tab row below: with eight view
-                    tabs the row has no room for it at the default window width. */}
-                <button className="meeting-copy-btn" onClick={copyCurrentPastView} disabled={copyDisabled}>
-                  {copyLabel[pastView]}
-                </button>
-              </div>
-              <div className="meeting-view-toggle-row">
                 <div className="meeting-view-toggle">
                   {PAST_VIEW_TABS.map((tab) => (
                     <button
@@ -1649,12 +1652,12 @@ export function MeetingPanel(): React.JSX.Element {
                     </button>
                   ))}
                 </div>
+                {pastView !== 'transcript' && (
+                  <button className="meeting-copy-btn" onClick={copyCurrentPastView} disabled={copyDisabled}>
+                    {copyLabel[pastView]}
+                  </button>
+                )}
               </div>
-              {pastView !== 'mindmap' && (
-                <div className="meeting-ended-note">
-                  {pastStatus === 'summarizing' ? 'Recording ended — writing a title…' : 'Recording ended'}
-                </div>
-              )}
               {autoStopNotice && <div className="meeting-resume-error">{autoStopNotice}</div>}
               {pastView === 'transcript' && mapHighlight && (
                 <div className="meeting-from-map">
@@ -1723,6 +1726,7 @@ export function MeetingPanel(): React.JSX.Element {
                   onRetry={() => requestOutline(false)}
                   onRegenerate={() => requestOutline(true)}
                   onRenameSpeaker={renameSpeaker}
+                  onCopy={copyCurrentPastView}
                 />
               ) : pastView === 'summary' ? (
                 <div className="meeting-summary-view">
