@@ -901,8 +901,14 @@ export function MeetingPanel(): React.JSX.Element {
   // onMeetingSessionUpdated; both paths keep one reference.
   /** When this install first ran a version that limits automatic AI to new recordings (Settings.autoAiSince); null until read. */
   const [autoAiSince, setAutoAiSince] = useState<string | null>(null)
+  /** Speaker recognition is on: the Start screen says so in one line. */
+  const [voiceRecognitionOn, setVoiceRecognitionOn] = useState(false)
   useEffect(() => {
-    void window.api.getSettings().then((settings) => setAutoAiSince(settings?.autoAiSince ?? ''))
+    void window.api.getSettings().then((settings) => {
+      setAutoAiSince(settings?.autoAiSince ?? '')
+      setVoiceRecognitionOn(settings?.voiceRecognition === true)
+    })
+    return window.api.onVoiceRecognitionChanged((state) => setVoiceRecognitionOn(state.enabled))
   }, [])
   /** Whether a recording made at `createdAt` may get AI work started by itself. Unknown → no. */
   const autoAiFor = useCallback(
@@ -1999,6 +2005,12 @@ export function MeetingPanel(): React.JSX.Element {
                   ))}
                 </div>
               </div>
+              {voiceRecognitionOn && (
+                <div className="meeting-voice-notice">
+                  Wispra recognises speakers by their voice on this computer — nothing is sent anywhere. You can turn
+                  this off, or forget voices, in Settings → Learned.
+                </div>
+              )}
               <div className="meeting-lang-panel">
                 <div className="meeting-lang-title">Languages</div>
                 <div className="meeting-lang-hint">

@@ -87,8 +87,9 @@ export interface Settings {
   learningEnabled: boolean
   /**
    * Recognise Meeting speakers by voice: a voice named once (typed, or said in the recording)
-   * is labelled by itself in later meetings. Off by default — a voice is biometric data; the
-   * vectors stay on this computer, encrypted (see voiceprints.ts).
+   * is labelled by itself in later meetings. On by default (the owner's decision, 2026-10-04);
+   * the user can turn it off on the Learned tab. A voice is biometric data: the vectors stay
+   * on this computer, encrypted, and are never sent anywhere (see voiceprints.ts).
    */
   voiceRecognition: boolean
   /** Also learn recurring names/brands/terms from History and meetings by itself (Learned tab). Only meaningful while learningEnabled is on. */

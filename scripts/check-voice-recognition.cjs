@@ -7,12 +7,14 @@
  * 28 MB, checked against its SHA-256) — the only network use. No key or account.
  *
  *   A. voiceprints.ts with the real sherpa-onnx addon and model, inside Electron (so the
- *      operating system's encryption is the real one): off means nothing is computed; a voice
+ *      operating system's encryption is the real one): on by default (the owner's decision,
+ *      2026-10-04), and turned off nothing is computed; a voice
  *      named once in a meeting is labelled by itself in the next one, another voice is not;
  *      a name said in the recording (the outline's speakers) teaches too; a name recognised
  *      by voice never teaches; Forget and Forget all; nothing is readable on disk.
- *   B. The built Settings renderer with stub IPC: the Learned tab's switch, list, Forget and
- *      Forget all; a recognised paragraph shows the name in the Transcript.
+ *   B. The built Settings renderer with stub IPC: the Meeting Start screen's one-line notice;
+ *      the Learned tab's switch (on, can be turned off), list, Forget and Forget all; a
+ *      recognised paragraph shows the name in the Transcript.
  *
  * The app's own main process is not started; the window and its data folder are throwaway.
  */
@@ -75,7 +77,7 @@ foreach ($voice in @('David', 'Zira')) { for ($i = 0; $i -lt $texts.Count; $i++)
 async function partA() {
   const outfile = path.join(TMP, 'lib.cjs')
   require('esbuild').buildSync({
-    stdin: { contents: `export * from './src/main/voiceprints'\nexport { namesToLearn } from './src/main/voiceLearning'`, resolveDir: ROOT, loader: 'ts' },
+    stdin: { contents: `export * from './src/main/voiceprints'\nexport { namesToLearn } from './src/main/voiceLearning'\nexport { DEFAULT_SETTINGS } from './src/shared/constants'`, resolveDir: ROOT, loader: 'ts' },
     bundle: true,
     platform: 'node',
     format: 'cjs',
@@ -112,7 +114,8 @@ async function partA() {
     onChange: () => {}
   })
 
-  check('off (the default): no voice is computed or kept', voices.embed(speech.david[0]) === null && !fs.existsSync(dir))
+  check('on by default (the owner\'s decision)', lib.DEFAULT_SETTINGS.voiceRecognition === true)
+  check('turned off: no voice is computed or kept', voices.embed(speech.david[0]) === null && !fs.existsSync(dir))
   enabled = true
   badDownload = true
   check('a download that is not the expected model is refused', (await voices.prepare()) === false && voices.state().model === 'failed')
@@ -179,7 +182,8 @@ async function partA() {
 }
 
 async function partB() {
-  let state = { enabled: false, available: true, model: 'missing', voices: [] }
+  const VOICES = [{ id: 'v1', name: 'Sơn', samples: 3, createdAt: '2026-10-04T08:00:00.000Z', updatedAt: '2026-10-04T08:10:00.000Z' }, { id: 'v2', name: 'Linh', samples: 2, createdAt: '2026-10-04T08:00:00.000Z', updatedAt: '2026-10-04T08:20:00.000Z', lastMatchedAt: '2026-10-04T09:00:00.000Z' }]
+  let state = { enabled: true, available: true, model: 'ready', voices: VOICES }
   const calls = { set: [], forget: [], forgetAll: 0 }
   for (const channel of Object.values(IPC)) ipcMain.handle(channel, () => null)
   const handle = (channel, fn) => {
@@ -195,7 +199,8 @@ async function partB() {
     require('esbuild').buildSync({ stdin: { contents: `export { DEFAULT_SETTINGS } from './src/shared/constants'`, resolveDir: ROOT, loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: out, logLevel: 'silent' })
     return require(out).DEFAULT_SETTINGS
   })()
-  handle(IPC.GET_SETTINGS, () => ({ ...defaults }))
+  // As the main process does: the switch is the voiceRecognition setting.
+  handle(IPC.GET_SETTINGS, () => ({ ...defaults, voiceRecognition: state.enabled }))
   // The rest of the Learned tab, empty.
   handle(IPC.LEXICON_GET, () => [])
   handle(IPC.SUGGESTIONS_GET, () => [])
@@ -204,7 +209,7 @@ async function partB() {
   handle(IPC.VOICE_GET_STATE, () => state)
   handle(IPC.VOICE_SET_ENABLED, async (_e, on) => {
     calls.set.push(on)
-    state = { ...state, enabled: on, model: on ? 'ready' : state.model, voices: on ? [{ id: 'v1', name: 'Sơn', samples: 3, createdAt: '2026-10-04T08:00:00.000Z', updatedAt: '2026-10-04T08:10:00.000Z' }, { id: 'v2', name: 'Linh', samples: 2, createdAt: '2026-10-04T08:00:00.000Z', updatedAt: '2026-10-04T08:20:00.000Z', lastMatchedAt: '2026-10-04T09:00:00.000Z' }] : state.voices }
+    state = { ...state, enabled: on }
     return state
   })
   handle(IPC.VOICE_FORGET, (_e, id) => {
@@ -241,14 +246,21 @@ async function partB() {
   }
   const card = () => js(`(() => { const c = document.querySelector('.voices-card'); return c ? { text: c.innerText, checked: c.querySelector('input[type=checkbox]').checked, items: [...c.querySelectorAll('.voices-name')].map((n) => n.textContent) } : null })()`)
 
+  // The Meeting Start screen says in one line that voices are recognised here, and where to turn it off.
+  await openTab('Meeting')
+  const notice = await js(`(document.querySelector('.meeting-voice-notice') || {}).textContent || ''`)
+  check('Meeting Start screen: one line says speakers are recognised by voice on this computer, nothing is sent, and where to turn it off', /recognises speakers by their voice on this computer/.test(notice) && /nothing is sent anywhere/.test(notice) && /Settings → Learned/.test(notice), notice)
   await openTab('Learned')
   if (process.env.CHECK_DEBUG) console.log('ERR', errors.slice(0, 3), (await js('document.body.innerText')).slice(0, 200))
   let c = await card()
-  check('Learned tab: "Recognise speakers by voice" is there, off by default, and says the data stays on this computer', c && !c.checked && /Recognise speakers by voice/.test(c.text) && /only on this\s+computer/.test(c.text) && /biometric/.test(c.text), c)
+  check('Learned tab: "Recognise speakers by voice" is on, says the data stays on this computer and is not sent, and lists the voices', c && c.checked && /Recognise speakers by voice/.test(c.text) && /only on this\s+computer/.test(c.text) && /nothing is sent anywhere/.test(c.text) && c.items.join() === 'Sơn,Linh' && /last recognised/.test(c.text), c)
   await js(`document.querySelector('.voices-card input[type=checkbox]').click()`)
   await sleep(500)
   c = await card()
-  check('turning it on asks the main process once and lists the remembered voices', calls.set.join() === 'true' && c.checked && c.items.join() === 'Sơn,Linh' && /last recognised/.test(c.text), c)
+  check('it can be turned off (one request to the main process); the remembered voices are still listed to forget', calls.set.join() === 'false' && !c.checked && c.items.join() === 'Sơn,Linh', c)
+  await openTab('Meeting')
+  check('turned off: the Start screen no longer shows the notice', (await js(`!document.querySelector('.meeting-voice-notice')`)) === true)
+  await openTab('Learned')
   await js(`window.confirm = () => true; [...document.querySelectorAll('.voices-item')].find((i) => i.textContent.includes('Sơn')).querySelector('.voices-forget').click()`)
   await sleep(400)
   c = await card()

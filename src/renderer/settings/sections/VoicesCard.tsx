@@ -6,10 +6,11 @@ function formatDate(iso: string | undefined): string {
 }
 
 /**
- * "Recognise speakers by voice" (Learned tab). Off by default: when on, a Meeting speaker who
- * was named once — the user typed the name, or the person said it in the recording — is
- * labelled by voice in later meetings. The list shows every remembered voice (never its data)
- * with "Forget", and "Forget all voices" removes everything this feature keeps.
+ * "Recognise speakers by voice" (Learned tab). On by default (the owner's decision, 2026-10-04):
+ * a Meeting speaker who was named once — the user typed the name, or the person said it in the
+ * recording — is labelled by voice in later meetings. The user can turn it off here. The list
+ * shows every remembered voice (never its data) with "Forget", and "Forget all voices" removes
+ * everything this feature keeps.
  */
 export function VoicesCard(): React.JSX.Element {
   const [state, setState] = useState<VoiceRecognitionState | null>(null)
@@ -58,7 +59,8 @@ export function VoicesCard(): React.JSX.Element {
           <span className="toggle-desc">
             In Meeting, a speaker you name once — or who says their name in the recording — is labelled by voice in
             later meetings. Wispra keeps a numeric description of each voice (not the audio), encrypted, only on this
-            computer. A voice is personal biometric data: ask the people you record before you turn this on.
+            computer — nothing is sent anywhere. A voice is personal biometric data: let the people you record know,
+            or turn this off.
           </span>
         </div>
         <div className="toggle-switch" />

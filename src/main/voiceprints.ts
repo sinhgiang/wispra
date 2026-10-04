@@ -5,8 +5,9 @@ import type { VoiceRecognitionState } from '@shared/types'
 import { enrol, matchVoice, MIN_SPEECH_SECONDS, type StoredVoice } from './voiceprintLogic'
 
 // ── Recognising speakers by voice ────────────────────────────────────────────
-// Off unless the user turns it on (Settings → Learned → "Recognise speakers by voice"): a
-// voice is biometric data. Everything stays on this computer:
+// On by default (the owner's decision, 2026-10-04); the user can turn it off and see or forget
+// every remembered voice on Settings → Learned. A voice is biometric data, so everything stays
+// on this computer:
 //   • the speaker-embedding model (CAM++ zh+en from 3D-Speaker, Apache-2.0, run with the
 //     sherpa-onnx addon, Apache-2.0) is downloaded once, checked against its SHA-256;
 //   • remembered voices are vectors of numbers — never audio — in voices.bin, encrypted with

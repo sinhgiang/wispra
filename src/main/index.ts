@@ -150,6 +150,9 @@ async function main(): Promise<void> {
   // force-quit, or a dev-mode restart) — see recoverOrphaned() for why this must run
   // before wireIpc() below (no IPC could otherwise start a session).
   meetingSessions.recoverOrphaned()
+  // Speaker recognition is on unless the user turned it off: get its model ready in the background
+  // (downloaded once, about 28 MB), so the first meeting can already recognise voices.
+  if (store.get().voiceRecognition) void getVoiceprints().prepare()
   // Mind map jobs the last run of the app left unfinished show up as "not finished — Continue".
   getMindMapJobs().restore()
   // Today's count of Cloudflare Workers AI neurons, kept across restarts (see cloudflareBudget.ts).

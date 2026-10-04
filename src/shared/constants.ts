@@ -78,7 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   templates: [],
   continuousMode: false,
   learningEnabled: true,
-  voiceRecognition: false,
+  voiceRecognition: true,
   autoLearnVocabulary: true,
   cloudSyncEnabled: false,
   autoAiSince: '',

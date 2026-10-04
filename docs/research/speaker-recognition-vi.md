@@ -12,8 +12,10 @@ mở được trực tiếp (lỗi 403) thì lấy từ đoạn trích của cô
 - **Cách hoạt động trong Wispra:** khi chủ đặt tên một người nói (gõ tay), hoặc người đó tự giới thiệu trong lời
   (AI ghi nhận ở cột người nói), Wispra lưu vector giọng của các đoạn đó dưới tên người ấy. Buổi sau, đoạn nào có
   giọng giống đủ chắc thì tự ghi tên.
-- **Mặc định tắt.** Giọng là dữ liệu sinh trắc học (mục 5). Chủ bật ở Settings → Learned → "Recognise speakers by
-  voice"; ở đó cũng xem danh sách giọng đã nhớ, bỏ từng giọng hoặc bỏ hết.
+- **Mặc định bật** — quyết định của chủ ngày 04/10/2026 (trước đó bản đầu để mặc định tắt vì giọng là dữ liệu sinh
+  trắc học, mục 5). Người dùng tắt được ở Settings → Learned → "Recognise speakers by voice"; ở đó cũng xem danh
+  sách giọng đã nhớ, bỏ từng giọng hoặc bỏ hết. Màn hình bắt đầu ghi Meeting có một dòng báo Wispra nhận giọng trên
+  máy, không gửi đi đâu, và chỉ chỗ tắt. Lần chạy đầu, mô hình (khoảng 28 MB) được tải ngầm một lần.
 - **Không có gì rời máy:** mô hình được tải một lần (kiểm mã SHA-256), chỉ lưu các con số (không lưu âm thanh), được
   mã hoá bằng kho mã hoá của hệ điều hành (Windows DPAPI, macOS Keychain qua Electron `safeStorage`).
 - **Không cần trả phí, không cần dịch vụ mới** — nên không có việc chờ chủ về tiền.
@@ -102,11 +104,18 @@ Nguồn:
   https://www.tilleke.com/insights/new-decree-provides-guidance-for-vietnams-personal-data-protection-law/34/ ,
   https://english.luatvietnam.vn/dan-su/law-on-personal-data-protection-law-no-91-2025-qh15-405135-d1.html ,
   https://www.dlapiperdataprotection.com/?t=law&c=VN
-- **Wispra đã làm theo:** mặc định tắt, lời giải thích kèm nhắc "hỏi người được ghi trước khi bật"; chỉ lưu con số,
+- **Wispra đã làm theo:** mặc định bật theo quyết định của chủ (04/10/2026), có dòng báo ngay trên màn hình bắt đầu ghi
+  và lời nhắc "báo cho người được ghi, hoặc tắt đi" trong cài đặt; chỉ lưu con số,
   mã hoá bằng hệ điều hành, chỉ trên máy; xoá từng giọng, xoá hết, xoá buổi ghi thì xoá luôn dữ liệu giọng của buổi đó.
   (Đây không phải tư vấn pháp lý.)
 
-## 6. Chưa làm / có thể làm sau
+## 6. Quyết định của chủ
+
+- 04/10/2026: **nhận giọng mặc định bật.** Vẫn có chỗ trong cài đặt để tắt, xem và bỏ giọng đã nhớ, và một dòng thông
+  báo ngắn cho người dùng biết Wispra nhận giọng trên máy, không gửi đi đâu. Lưu ý pháp lý ở mục 5 (đồng ý rõ ràng với
+  dữ liệu sinh trắc học) vẫn đúng: người dùng nên báo cho người được ghi.
+
+## 7. Chưa làm / có thể làm sau
 
 - Thử trên buổi ghi thật bằng tiếng Việt và chỉnh ngưỡng.
 - Tách giọng theo kênh (micro / máy) và theo từng đoạn ngắn trong một đoạn 20 giây (tách người nói đầy đủ — sherpa-onnx
