@@ -1401,6 +1401,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The part no topic covers yet: still being spoken (recording), or not named yet. */
+.txc-topic-pending {
+  border-left-style: dashed;
+  border-left-color: var(--border-md);
+}
+
+.txc-pending-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-3);
+}
+
 .txc-time {
   min-width: 0;
   padding-top: 2px;

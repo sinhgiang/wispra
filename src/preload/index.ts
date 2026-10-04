@@ -12,6 +12,7 @@ import type {
   HotkeyResult,
   LexiconEntry,
   McpLinkStatus,
+  LiveOutlineStatus,
   MeetingAudioSource,
   MeetingChatMessage,
   MeetingContentResult,
@@ -38,6 +39,15 @@ import type {
 } from '@shared/types'
 
 /** The only API surface renderers can touch. */
+/** Adds an IPC listener and returns the function that removes it again (callers that live as long as the window can ignore it). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function listen(channel: string, listener: (event: IpcRendererEvent, ...args: any[]) => void): () => void {
+  ipcRenderer.on(channel, listener)
+  return () => {
+    ipcRenderer.removeListener(channel, listener)
+  }
+}
+
 const api = {
   // --- dictation / overlay ---
   toggleDictation: (): void => ipcRenderer.send(IPC.TOGGLE_DICTATION),
@@ -163,9 +173,8 @@ const api = {
   getAccountInfo: (): Promise<AccountInfo | null> => ipcRenderer.invoke(IPC.GET_ACCOUNT_INFO),
   // Wispra Cloud's monthly AI text allowance: the latest "used up" notice, or null.
   getAiQuota: (): Promise<AiQuotaNotice | null> => ipcRenderer.invoke(IPC.GET_AI_QUOTA),
-  onAiQuotaChanged: (cb: (notice: AiQuotaNotice | null) => void): void => {
-    ipcRenderer.on(IPC.AI_QUOTA_CHANGED, (_e, notice: AiQuotaNotice | null) => cb(notice))
-  },
+  onAiQuotaChanged: (cb: (notice: AiQuotaNotice | null) => void): (() => void) =>
+    listen(IPC.AI_QUOTA_CHANGED, (_e, notice: AiQuotaNotice | null) => cb(notice)),
   onAuthStateChanged: (cb: (state: { email: string } | null) => void): void => {
     ipcRenderer.on(IPC.AUTH_STATE, (_e, state: { email: string } | null) => cb(state))
   },
@@ -232,17 +241,15 @@ const api = {
   // for one platform. Resolves null if generation failed (offline, bad key, etc).
   generateMeetingContent: (id: string, platform: ContentPlatform): Promise<MeetingContentResult | null> =>
     ipcRenderer.invoke(IPC.MEETING_GENERATE_CONTENT, id, platform),
-  onMeetingContentStatus: (cb: (status: MeetingContentStatus) => void): void => {
-    ipcRenderer.on(IPC.MEETING_CONTENT_STATUS, (_e, status: MeetingContentStatus) => cb(status))
-  },
+  onMeetingContentStatus: (cb: (status: MeetingContentStatus) => void): (() => void) =>
+    listen(IPC.MEETING_CONTENT_STATUS, (_e, status: MeetingContentStatus) => cb(status)),
   // On-demand retry for a stopped session whose title/summary generation failed —
   // resolves true on success, false on failure. On success the actual title/summary
   // update arrives separately via onMeetingSessionUpdated.
   generateMeetingSummary: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.MEETING_GENERATE_SUMMARY, id),
   getMeetingSummaryStatus: (id: string): Promise<MeetingSummaryStatus | null> => ipcRenderer.invoke(IPC.MEETING_GET_SUMMARY_STATUS, id),
-  onMeetingSummaryStatus: (cb: (status: MeetingSummaryStatus) => void): void => {
-    ipcRenderer.on(IPC.MEETING_SUMMARY_STATUS, (_e, status: MeetingSummaryStatus) => cb(status))
-  },
+  onMeetingSummaryStatus: (cb: (status: MeetingSummaryStatus) => void): (() => void) =>
+    listen(IPC.MEETING_SUMMARY_STATUS, (_e, status: MeetingSummaryStatus) => cb(status)),
   // In-session AI chat: ask a question about this session's own transcript (works
   // while still recording or after Stop). Resolves the assistant's MeetingChatMessage,
   // or null on failure — the caller persists nothing and shows a transient error.
@@ -260,9 +267,12 @@ const api = {
   // arrives via onMeetingSessionUpdated.
   generateMeetingOutline: (id: string, options?: { regenerate?: boolean }): Promise<MeetingOutline | null> =>
     ipcRenderer.invoke(IPC.MEETING_GENERATE_OUTLINE, id, options),
-  onMeetingOutlineProgress: (cb: (progress: OutlineProgress) => void): void => {
-    ipcRenderer.on(IPC.MEETING_OUTLINE_PROGRESS, (_e, progress: OutlineProgress) => cb(progress))
-  },
+  onMeetingOutlineProgress: (cb: (progress: OutlineProgress) => void): (() => void) =>
+    listen(IPC.MEETING_OUTLINE_PROGRESS, (_e, progress: OutlineProgress) => cb(progress)),
+  // How naming the topics of the recording in progress is going (LiveOutlineStatus).
+  getMeetingLiveOutlineStatus: (): Promise<LiveOutlineStatus | null> => ipcRenderer.invoke(IPC.MEETING_GET_LIVE_OUTLINE_STATUS),
+  onMeetingLiveOutlineStatus: (cb: (status: LiveOutlineStatus) => void): (() => void) =>
+    listen(IPC.MEETING_LIVE_OUTLINE_STATUS, (_e, status: LiveOutlineStatus) => cb(status)),
   // Speaker names the user typed, by paragraph id ('' = no name for that paragraph).
   setMeetingSpeakerNames: (id: string, names: Record<string, string>): Promise<void> =>
     ipcRenderer.invoke(IPC.MEETING_SET_SPEAKER_NAMES, id, names),
@@ -272,39 +282,30 @@ const api = {
   // Mind map jobs run in the main process and outlive the tab: these report them.
   getMeetingMindMapJobs: (): Promise<MindMapJobStatus[]> => ipcRenderer.invoke(IPC.MEETING_GET_MIND_MAP_JOBS),
   ackMeetingMindMap: (id: string): Promise<void> => ipcRenderer.invoke(IPC.MEETING_ACK_MIND_MAP, id),
-  onMeetingMindMapProgress: (cb: (status: MindMapJobStatus) => void): void => {
-    ipcRenderer.on(IPC.MEETING_MIND_MAP_PROGRESS, (_e, status: MindMapJobStatus) => cb(status))
-  },
-  onMeetingStateChanged: (cb: (state: MeetingState) => void): void => {
-    ipcRenderer.on(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state))
-  },
-  onMeetingCaptureStart: (cb: () => void): void => {
-    ipcRenderer.on(IPC.MEETING_CAPTURE_START, () => cb())
-  },
-  onMeetingCapturePause: (cb: () => void): void => {
-    ipcRenderer.on(IPC.MEETING_CAPTURE_PAUSE, () => cb())
-  },
-  onMeetingCaptureResume: (cb: () => void): void => {
-    ipcRenderer.on(IPC.MEETING_CAPTURE_RESUME, () => cb())
-  },
-  onMeetingCaptureStop: (cb: () => void): void => {
-    ipcRenderer.on(IPC.MEETING_CAPTURE_STOP, () => cb())
-  },
+  onMeetingMindMapProgress: (cb: (status: MindMapJobStatus) => void): (() => void) =>
+    listen(IPC.MEETING_MIND_MAP_PROGRESS, (_e, status: MindMapJobStatus) => cb(status)),
+  onMeetingStateChanged: (cb: (state: MeetingState) => void): (() => void) =>
+    listen(IPC.MEETING_STATE_CHANGED, (_e, state: MeetingState) => cb(state)),
+  onMeetingCaptureStart: (cb: () => void): (() => void) =>
+    listen(IPC.MEETING_CAPTURE_START, () => cb()),
+  onMeetingCapturePause: (cb: () => void): (() => void) =>
+    listen(IPC.MEETING_CAPTURE_PAUSE, () => cb()),
+  onMeetingCaptureResume: (cb: () => void): (() => void) =>
+    listen(IPC.MEETING_CAPTURE_RESUME, () => cb()),
+  onMeetingCaptureStop: (cb: () => void): (() => void) =>
+    listen(IPC.MEETING_CAPTURE_STOP, () => cb()),
   // Arrives right before onMeetingCaptureStop when the silence safety net (not the
   // user) ended the recording — lets the renderer explain why it stopped.
-  onMeetingAutoStopped: (cb: () => void): void => {
-    ipcRenderer.on(IPC.MEETING_AUTO_STOPPED, () => cb())
-  },
-  onMeetingSegmentReady: (cb: (segment: MeetingSegment, sessionId: string) => void): void => {
-    ipcRenderer.on(IPC.MEETING_SEGMENT_READY, (_e, segment: MeetingSegment, sessionId: string) =>
+  onMeetingAutoStopped: (cb: () => void): (() => void) =>
+    listen(IPC.MEETING_AUTO_STOPPED, () => cb()),
+  onMeetingSegmentReady: (cb: (segment: MeetingSegment, sessionId: string) => void): (() => void) =>
+    listen(IPC.MEETING_SEGMENT_READY, (_e, segment: MeetingSegment, sessionId: string) =>
       cb(segment, sessionId)
-    )
-  },
+    ),
   // main -> settings renderer: a session's title/summary/status changed (e.g. the
   // AI-generated title finished after Stop)
-  onMeetingSessionUpdated: (cb: (session: MeetingSession) => void): void => {
-    ipcRenderer.on(IPC.MEETING_SESSION_UPDATED, (_e, session: MeetingSession) => cb(session))
-  },
+  onMeetingSessionUpdated: (cb: (session: MeetingSession) => void): (() => void) =>
+    listen(IPC.MEETING_SESSION_UPDATED, (_e, session: MeetingSession) => cb(session)),
   // main -> settings renderer: tray (or another entry point) asked to switch to the Meeting tab
   onOpenMeetingTab: (cb: () => void): void => {
     ipcRenderer.on(IPC.MEETING_OPEN_TAB, () => cb())

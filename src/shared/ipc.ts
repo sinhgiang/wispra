@@ -229,7 +229,13 @@ export const IPC = {
   MEETING_OUTLINE_PROGRESS: 'meeting:outline-progress',
   // renderer -> main: the user typed speaker names — (sessionId, { paragraphId: name }),
   // merged into the session's speakerNames ('' = no name for that paragraph)
-  MEETING_SET_SPEAKER_NAMES: 'meeting:set-speaker-names'
+  MEETING_SET_SPEAKER_NAMES: 'meeting:set-speaker-names',
+  // main -> settings renderer: the topics of a recording in progress are being written,
+  // or stopped for this recording (LiveOutlineStatus) — see liveOutline.ts
+  MEETING_LIVE_OUTLINE_STATUS: 'meeting:live-outline-status',
+  // renderer -> main: that status for the recording in progress (LiveOutlineStatus | null),
+  // for a Meeting tab opened while it records
+  MEETING_GET_LIVE_OUTLINE_STATUS: 'meeting:get-live-outline-status'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

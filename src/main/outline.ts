@@ -28,7 +28,7 @@ const SHAPE =
   '{"topics": [{"title": "...", "start": 1}], "actions": [{"text": "...", "owner": "...", "due": "...", "ref": 9}], "speakers": [{"name": "...", "start": 1, "end": 3}]}'
 
 const ACTION_RULES = `- "actions": tasks someone is to do after the recording — things that were assigned, promised or agreed to be done. "text" says the task in one short line that starts with a verb. "ref" is the ref of the paragraph where the task is stated. "owner" and "due" only when the transcript says who / by when; otherwise leave those keys out. List each task once, at the place it is first stated clearly. If there are no tasks, return an empty array: never turn ordinary discussion, opinions or decisions into tasks, and never invent one so that a topic has something next to it.
-- "speakers": only when the transcript itself makes clear who is speaking — someone says their own name ("I'm Sơn", "mình là Sơn") or is introduced right before they speak ("over to Linh", "mời Linh báo cáo"). Give the name as it is said, and the refs of the first and last paragraph that person clearly speaks. Never guess from context or style; when in doubt leave the paragraphs out. Return an empty array if nobody is named.
+- "speakers": only when the transcript itself makes clear who is speaking — someone says their own name ("I'm Sơn", "mình là Sơn") or is introduced right before they speak ("over to Linh", "mời Linh báo cáo"). Speakers of Vietnamese often call themselves by their own name instead of "I": a paragraph where the speaker tells the listeners what they themself do, did or will do under a name ("Buổi này Sơn nói về…", "Sơn đã test nó…", "Sơn hay làm việc trên terminal", "các bạn thấy Sơn…") is that person speaking. Count it only when the name is clearly the speaker's own — not someone else being talked about, quoted or addressed. Give the name as it is said, and the refs of the first and last paragraph that person clearly speaks. Never guess from voice, style or topic; when in doubt leave the paragraphs out. Return an empty array if nobody is named.
 - Use only refs that appear in the transcript.`
 
 const SINGLE_PROMPT = `You organise a meeting/voice-memo transcript so it can be re-read quickly: you divide it into topics, list the action items it contains, and note who is speaking where the transcript says so. ${TRANSCRIPT_FORMAT}
@@ -58,6 +58,19 @@ ${JSON_ONLY}
 - "actions": the numbers to keep. Leave out an action that repeats an earlier one (for example a task restated in a recap at the end). Keep everything else.
 - Use only what the lists say. NEVER invent topics or tasks that are not in them.`
 
+const LIVE_SHAPE =
+  '{"continues": false, "topics": [{"title": "...", "start": 1}], "actions": [{"text": "...", "owner": "...", "due": "...", "ref": 9}], "speakers": [{"name": "...", "start": 1, "end": 3}]}'
+
+const LIVE_PROMPT = `You organise a meeting/voice-memo transcript WHILE it is being recorded, so it can be followed and re-read quickly. You are given the latest stretch of the transcript — everything after the topics already named — and the title of the topic named just before it. You divide the stretch into topics, list the action items it contains, and note who is speaking where the transcript says so. ${TRANSCRIPT_FORMAT}
+
+${JSON_ONLY}
+${LIVE_SHAPE}
+
+- "topics": the sections of this stretch, in order. A topic begins at the paragraph whose ref is "start" and runs until the next topic begins; the first topic begins at the stretch's first paragraph. Begin a new topic only where the subject really changes — several minutes on one subject are one topic. The recording is still going on, so the last topic may be unfinished: give it anyway, as it stands. "title" says what that stretch is about in 2-7 specific words, with no numbering.
+- "continues": true when the first topic of this stretch is the same subject as the PREVIOUS TOPIC (the talk simply carried on); false when the stretch starts something new, or when there is no previous topic.
+${ACTION_RULES}
+${ANTI_FABRICATION_RULE}`
+
 /** "auto" mirrors the source, like every other meeting prompt; any other code fixes the language. */
 function languageRule(language: string, source: 'transcript' | 'lists'): string {
   const what = 'every topic title and action text (and the wording of "due")'
@@ -66,6 +79,24 @@ function languageRule(language: string, source: 'transcript' | 'lists'): string 
 }
 
 const transcriptOf = (lines: TranscriptLine[]): string => lines.map(formatLine).join('\n')
+
+/**
+ * One call of the outline of a recording in progress: the open part (the paragraphs
+ * after the topics already named) and the title of the last named topic. Returns the
+ * model's raw JSON for applyLiveAnswer, or null when the call failed (the router and
+ * `control` say why). The router is the recording's own, so a switch to a backup after a
+ * daily limit holds for the rest of the recording.
+ */
+export async function outlineOpenPart(
+  open: TranscriptLine[],
+  previousTitle: string | undefined,
+  router: ReturnType<typeof createRouter>,
+  language: string,
+  control: JsonCallControl
+): Promise<Record<string, unknown> | null> {
+  const previous = previousTitle ? `PREVIOUS TOPIC: ${previousTitle}` : 'PREVIOUS TOPIC: (none — this stretch is the start of the recording)'
+  return router.call(`${LIVE_PROMPT}\n${languageRule(language, 'transcript')}`, `${previous}\n\n${transcriptOf(open)}`, PART_MAX_TOKENS, 'live transcript outline', control)
+}
 
 /**
  * Builds the outline of a finished session's transcript in `language` ("auto" = same

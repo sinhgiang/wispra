@@ -17,9 +17,9 @@ import type {
   OutlineProgress
 } from '@shared/types'
 import { LANGUAGES } from '@shared/constants'
-import { MeetingRecorder, type MeetingChunk } from './recorder'
+import { captureHost, installCaptureHost } from './captureHost'
 import { MindMapView } from './MindMapView'
-import type { DailyLimitInfo, MeetingSummaryStatus, MindMapJobStatus } from '@shared/types'
+import type { DailyLimitInfo, LiveOutlineStatus, MeetingSummaryStatus, MindMapJobStatus } from '@shared/types'
 import { dailyLimitAdvice, dailyLimitText } from './dailyLimit'
 import { AiQuotaMessage } from './AiQuotaMessage'
 import { buildMindMapTree, formatElapsed, mindMapMarkdown, type MindMapTreeNode } from './mindMapData'
@@ -451,6 +451,12 @@ export function MeetingPanel(): React.JSX.Element {
   /** id of the session currently recording/paused/just-stopped, shown by default. null = idle "start a new session" screen. */
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [liveSegments, setLiveSegments] = useState<MeetingSegment[]>([])
+  /** Topics named so far in the recording in progress (see liveOutline.ts), with the part still open. */
+  const [liveOutline, setLiveOutline] = useState<MeetingOutline | undefined>(undefined)
+  /** Speaker names typed for the recording in progress, by paragraph id. */
+  const [liveSpeakerNames, setLiveSpeakerNames] = useState<Record<string, string>>({})
+  /** Whether a finished part is being named right now, or naming stopped (daily limit, failures). */
+  const [liveOutlineStatus, setLiveOutlineStatus] = useState<LiveOutlineStatus | null>(null)
   /** id of a past (already-stopped) session the user clicked in the sidebar, read-only. null = showing the current session instead. */
   const [viewingPastId, setViewingPastId] = useState<string | null>(null)
   const [pastSegments, setPastSegments] = useState<MeetingSegment[]>([])
@@ -556,12 +562,9 @@ export function MeetingPanel(): React.JSX.Element {
   const [langConfig, setLangConfig] = useState<MeetingLanguageConfig>(loadLangConfig)
   /** Audio-source choice for the next recording (mic / system / both), picked on the same idle screen. Persisted the same way as langConfig. */
   const [audioSource, setAudioSourceState] = useState<MeetingAudioSource>(loadAudioSource)
-  // Mirrors audioSource for the onMeetingCaptureStart handler below, which is registered
-  // once at mount (see initializedRef) and would otherwise only ever see its initial
-  // value through a stale closure — same reason currentSessionIdRef exists.
-  const audioSourceRef = useRef<MeetingAudioSource>(audioSource)
+  // The window's recorder (captureHost.ts) records from whatever was picked last.
   const setAudioSource = useCallback((value: MeetingAudioSource) => {
-    audioSourceRef.current = value
+    captureHost.setAudioSource(value)
     setAudioSourceState(value)
   }, [])
   /** True while a live switchAudioSource() call is in flight — disables the in-session source switcher so a second click can't race the first. */
@@ -613,9 +616,7 @@ export function MeetingPanel(): React.JSX.Element {
     }
   }, [audioSource])
 
-  const recorderRef = useRef<MeetingRecorder>(new MeetingRecorder())
   const startedAtRef = useRef(0)
-  const initializedRef = useRef(false)
   const transcriptRef = useRef<HTMLDivElement>(null)
   // Same purpose as transcriptRef, for the read-only past-session transcript — used
   // only to scroll a chat-highlighted paragraph into view (see the chatHighlightId
@@ -644,26 +645,24 @@ export function MeetingPanel(): React.JSX.Element {
     setSessions(await window.api.getMeetingSessions())
   }, [])
 
-  const handleChunk = useCallback((chunk: MeetingChunk) => {
-    void chunk.blob.arrayBuffer().then((buffer) => {
-      window.api.meetingChunkCaptured(buffer, {
-        startMs: chunk.startMs,
-        endMs: chunk.endMs,
-        startedAt: chunk.startedAt,
-        mimeType: chunk.mimeType,
-        voice: chunk.voice
-      })
-    })
-  }, [])
-
+  // The IPC listeners of this panel. They are removed when the panel unmounts (another
+  // tab is shown): the recording itself goes on in the window's recorder (captureHost.ts)
+  // whatever this panel shows, and a panel that left its listeners behind made every
+  // later Start run once per earlier visit to the tab.
   useEffect(() => {
-    if (initializedRef.current) return
-    initializedRef.current = true
-
-    window.api.onMeetingStateChanged(setMeetingState)
-    window.api.onMeetingCaptureStart(() => {
+    installCaptureHost()
+    captureHost.setAudioSource(audioSource)
+    const off: Array<() => void> = []
+    off.push(captureHost.onLevel(setLevel))
+    off.push(captureHost.onResumeError(setResumeError))
+    off.push(window.api.onMeetingStateChanged(setMeetingState))
+    off.push(window.api.onMeetingCaptureStart(() => {
       startedAtRef.current = Date.now()
       setLiveSegments([])
+      setLiveOutline(undefined)
+      setLiveSpeakerNames({})
+      setLiveOutlineStatus(null)
+      setActionHighlight(null)
       setLiveChat([])
       setChatInput('')
       setChatError(null)
@@ -672,46 +671,20 @@ export function MeetingPanel(): React.JSX.Element {
       setResumeError(null)
       autoStoppedSessionIdRef.current = null
       setAutoStopNotice(null)
-      recorderRef.current.start(setLevel, handleChunk, audioSourceRef.current).catch((err: unknown) => {
-        recorderRef.current.stop()
-        const sourceLabel =
-          audioSourceRef.current === 'system'
-            ? 'system audio'
-            : audioSourceRef.current === 'both'
-              ? 'microphone/system audio'
-              : 'microphone'
-        const detail = err instanceof Error ? err.message : 'access denied or unavailable'
-        window.api.meetingCaptureFailed(`Could not start capture (${sourceLabel}): ${detail}`)
-      })
       void window.api.getMeetingSessions().then((list) => {
         setSessions(list)
         const active = list.find((s) => s.status === 'recording')
         if (active) setCurrentSession(active.id)
       })
-    })
-    window.api.onMeetingCapturePause(() => {
-      recorderRef.current.pause()
-      setLevel(0)
-    })
-    window.api.onMeetingCaptureResume(() => {
-      setResumeError(null)
-      recorderRef.current.resume(setLevel, handleChunk).catch(() => {
-        // Don't end the whole session over a resume hiccup (e.g. another app briefly
-        // holding the mic) — fall back to paused, which the recorder is already
-        // internally consistent with, and let the user retry Resume.
-        setResumeError('Could not resume — the microphone may be in use by another app. Try Resume again.')
-        window.api.meetingPause()
-      })
-    })
+    }))
+    off.push(window.api.onMeetingCaptureResume(() => setResumeError(null)))
     // Arrives right before onMeetingCaptureStop when the silence safety net (not the
     // user) ended the recording — just records which session that was; the actual
     // notice is shown once we know (below) that the stop wasn't a discard.
-    window.api.onMeetingAutoStopped(() => {
+    off.push(window.api.onMeetingAutoStopped(() => {
       autoStoppedSessionIdRef.current = currentSessionIdRef.current
-    })
-    window.api.onMeetingCaptureStop(() => {
-      recorderRef.current.stop()
-      setLevel(0)
+    }))
+    off.push(window.api.onMeetingCaptureStop(() => {
       setResumeError(null)
       setAudioSourceSwitchError(null)
       const wasDiscarding = discardingRef.current
@@ -744,11 +717,11 @@ export function MeetingPanel(): React.JSX.Element {
         }
       }
       void refreshSessions()
-    })
-    window.api.onMeetingSegmentReady((segment) => {
+    }))
+    off.push(window.api.onMeetingSegmentReady((segment) => {
       setLiveSegments((prev) => [...prev, segment])
-    })
-    window.api.onMeetingSessionUpdated((session) => {
+    }))
+    off.push(window.api.onMeetingSessionUpdated((session) => {
       // Keep the sidebar list's title/status in sync (e.g. the AI title lands a few
       // seconds after Stop, once the LLM call finishes).
       setSessions((prev) =>
@@ -787,24 +760,29 @@ export function MeetingPanel(): React.JSX.Element {
       // in between sending a question and this broadcast arriving.
       if (currentSessionIdRef.current === session.id) {
         setLiveChat(session.chat ?? [])
+        setLiveOutline((prev) => (prev?.generatedAt === session.outline?.generatedAt ? prev : session.outline))
+        setLiveSpeakerNames(session.speakerNames ?? {})
       }
-    })
-    window.api.onMeetingOutlineProgress((progress) => {
+    }))
+    off.push(window.api.onMeetingLiveOutlineStatus((status) => {
+      if (currentSessionIdRef.current === status.sessionId) setLiveOutlineStatus(status)
+    }))
+    off.push(window.api.onMeetingOutlineProgress((progress) => {
       if (viewingPastIdRef.current === progress.sessionId) setOutlineProgress(progress)
-    })
-    window.api.onMeetingMindMapProgress((progress) => {
+    }))
+    off.push(window.api.onMeetingMindMapProgress((progress) => {
       setMindMapJobs((prev) => ({ ...prev, [progress.sessionId]: progress }))
-    })
-    window.api.onMeetingSummaryStatus((status) => {
+    }))
+    off.push(window.api.onMeetingSummaryStatus((status) => {
       if (viewingPastIdRef.current === status.sessionId) setSummaryStatus(status)
-    })
-    window.api.onMeetingContentStatus((status) => {
+    }))
+    off.push(window.api.onMeetingContentStatus((status) => {
       const key = `${status.sessionId}/${status.platform}`
       if (status.rateLimited) contentRateLimitedRef.current.add(key)
       if (status.dailyLimit) contentDailyRef.current.set(key, status.dailyLimit)
       if (viewingPastIdRef.current !== status.sessionId) return
       setContentWaiting((prev) => ({ ...prev, [status.platform]: status.waitingUntil }))
-    })
+    }))
     // Jobs that were already running (or stopped, or finished unseen) before this page mounted.
     void window.api.getMeetingMindMapJobs().then((jobs) => {
       setMindMapJobs((prev) => ({ ...Object.fromEntries((jobs ?? []).map((job) => [job.sessionId, job])), ...prev }))
@@ -815,7 +793,7 @@ export function MeetingPanel(): React.JSX.Element {
       setAiQuota(notice)
       if (notice) void window.api.getAccountInfo().then((info) => setSubscribeUrl(info?.subscribeUrl ?? null))
     }
-    window.api.onAiQuotaChanged(applyAiQuota)
+    off.push(window.api.onAiQuotaChanged(applyAiQuota))
     void window.api.getAiQuota().then(applyAiQuota)
 
     // Hydrate on mount: a fresh mount (first open, or re-opening this tab after
@@ -838,19 +816,29 @@ export function MeetingPanel(): React.JSX.Element {
           if (full) {
             setLiveSegments(full.segments)
             setLiveChat(full.chat ?? [])
+            setLiveOutline(full.outline)
+            setLiveSpeakerNames(full.speakerNames ?? {})
+            void window.api.getMeetingLiveOutlineStatus().then((status) => {
+              if (status?.sessionId === active.id) setLiveOutlineStatus(status)
+            })
             startedAtRef.current = Date.parse(full.createdAt)
           }
         }
       }
     })()
-  }, [handleChunk, refreshSessions])
+    return () => {
+      for (const unsubscribe of off) unsubscribe()
+    }
+    // Registered once per mount; the handlers read changing values through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSessions])
 
   // Live elapsed timer while recording — reads the recorder's pause-aware active
   // timeline so it freezes exactly while paused and never jumps on resume.
   useEffect(() => {
     if (meetingState !== 'recording') return
     const tick = (): void => {
-      const active = recorderRef.current.getActiveMs()
+      const active = captureHost.getActiveMs()
       setElapsedMs(active > 0 ? active : Date.now() - startedAtRef.current)
     }
     tick()
@@ -947,7 +935,7 @@ export function MeetingPanel(): React.JSX.Element {
   useEffect(() => {
     if (viewingPastId === null || pastView !== 'transcript') return
     if (pastLoadedId !== viewingPastId) return
-    if (pastOutline || outlineGenerating || outlineFailed || pastSegments.length === 0) return
+    if ((pastOutline && !pastOutline.openFromSegmentId) || outlineGenerating || outlineFailed || pastSegments.length === 0) return
     if (!autoAiFor(pastCreatedAt)) return
     requestOutline(false)
   }, [pastView, viewingPastId, pastLoadedId, pastOutline, outlineGenerating, outlineFailed, pastSegments, pastCreatedAt, autoAiFor, requestOutline])
@@ -1256,8 +1244,8 @@ export function MeetingPanel(): React.JSX.Element {
     if (newSource === audioSource || switchingAudioSource || !isRecording) return
     setSwitchingAudioSource(true)
     setAudioSourceSwitchError(null)
-    recorderRef.current
-      .switchAudioSource(newSource, setLevel, handleChunk)
+    captureHost
+      .switchAudioSource(newSource)
       .then(() => {
         setAudioSource(newSource)
       })
@@ -1288,7 +1276,7 @@ export function MeetingPanel(): React.JSX.Element {
   const isPastChat = viewingPastId !== null
   const activeChatSessionId = isPastChat ? viewingPastId : currentSessionId
   const setActiveChatMessages = isPastChat ? setPastChat : setLiveChat
-  const liveHighlightedBlockIds = resolveHighlightBlockIds(liveBlocks, liveChat.find((m) => m.id === chatHighlightId))
+  const liveHighlightedBlockIds = resolveHighlightBlockIds(liveBlocks, actionHighlight ?? liveChat.find((m) => m.id === chatHighlightId))
   const pastHighlightedBlockIds = resolveHighlightBlockIds(
     pastBlocks,
     actionHighlight ?? mapHighlight ?? pastChat.find((m) => m.id === chatHighlightId)
@@ -1371,6 +1359,14 @@ export function MeetingPanel(): React.JSX.Element {
     const patch = Object.fromEntries(ids.map((id) => [id, name]))
     setPastSpeakerNames((prev) => ({ ...prev, ...patch }))
     void window.api.setMeetingSpeakerNames(viewingPastId, patch)
+  }
+
+  // Same, in the table of the recording in progress.
+  const renameLiveSpeaker = (ids: string[], name: string): void => {
+    if (currentSessionId === null || ids.length === 0) return
+    const patch = Object.fromEntries(ids.map((id) => [id, name]))
+    setLiveSpeakerNames((prev) => ({ ...prev, ...patch }))
+    void window.api.setMeetingSpeakerNames(currentSessionId, patch)
   }
 
   // "All" (selectedSpaceId === null) shows every session, including unfiled ones and
@@ -1876,7 +1872,7 @@ export function MeetingPanel(): React.JSX.Element {
               />
             </div>
           ) : currentSessionId !== null ? (
-            <div className="meeting-session-view">
+            <div className="meeting-session-view meeting-session-view--wide">
               <div className="meeting-session-header">
                 <div className="meeting-timer">{formatElapsed(elapsedMs)}</div>
                 <div className="meeting-source-switcher" role="group" aria-label="Audio source">
@@ -1927,30 +1923,36 @@ export function MeetingPanel(): React.JSX.Element {
                   Stop
                 </button>
               </div>
-              <div className="meeting-transcript" ref={transcriptRef}>
-                {liveBlocks.length === 0 ? (
-                  <div className="meeting-transcript-empty">
-                    {isPaused ? 'Paused — press Resume to keep going.' : 'Listening… transcribed text will appear here as you speak.'}
-                  </div>
-                ) : (
-                  liveBlocks.map((b) => (
-                    <div
-                      key={b.id}
-                      data-block-id={b.id}
-                      className={
-                        liveHighlightedBlockIds.has(b.id) ? 'meeting-paragraph meeting-paragraph-highlighted' : 'meeting-paragraph'
-                      }
-                    >
-                      <span className="meeting-paragraph-time">
-                        <span className="meeting-paragraph-elapsed">{formatElapsed(b.startMs)}</span>
-                        <span className="meeting-paragraph-clock">{formatClock(b.startedAt)}</span>
-                      </span>
-                      <p>{b.text}</p>
-                    </div>
-                  ))
-                )}
-              </div>
+              {/* The four columns from the first second: the transcript runs into the middle
+                  column, and each part gets its topic and action items once it is finished. */}
+              <TranscriptColumns
+                key={currentSessionId}
+                live
+                liveStatus={liveOutlineStatus}
+                loading={false}
+                blocks={liveBlocks}
+                outline={liveOutline}
+                speakerNames={liveSpeakerNames}
+                durationMs={elapsedMs}
+                highlighted={liveHighlightedBlockIds}
+                activeActionKey={actionHighlight?.key ?? null}
+                actionsView={actionsView}
+                generating={false}
+                progress={null}
+                failed={false}
+                canCreate={false}
+                onCreate={() => undefined}
+                scrollRef={transcriptRef}
+                onActionsViewChange={setActionsView}
+                onAction={toggleActionHighlight}
+                onRetry={() => undefined}
+                onRegenerate={() => undefined}
+                onRenameSpeaker={renameLiveSpeaker}
+                emptyText={isPaused ? 'Paused — press Resume to keep going.' : 'Listening… transcribed text will appear here as you speak.'}
+              />
               <MeetingChatPanel
+                // Only the question box until something is asked: the table needs the room while recording.
+                compact={liveChat.length === 0 && !chatSending}
                 messages={liveChat}
                 input={chatInput}
                 onInputChange={setChatInput}

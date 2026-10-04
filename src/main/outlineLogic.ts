@@ -1,4 +1,4 @@
-import type { MeetingLanguageConfig, MeetingOutline } from '@shared/types'
+import type { MeetingLanguageConfig, MeetingOutline, MeetingSegment } from '@shared/types'
 import { cleanText, formatClock, type TranscriptLine } from './mindMapLogic'
 
 /**
@@ -199,4 +199,104 @@ export function assembleOutline(outline: RefOutline, lines: TranscriptLine[], la
     language,
     generatedAt
   }
+}
+
+// ── While recording (see liveOutline.ts) ─────────────────────────────────────
+// The outline of a recording in progress grows from the top: the topics already named
+// cover the transcript up to `openFromSegmentId`; the paragraphs from there on (the
+// "open part") are sent to the AI as the recording goes on, and only the topics that are
+// followed by another one are kept — the last topic may still be going on.
+
+/** The paragraphs the outline does not cover yet: all of them without an outline, none when it is finished. */
+export function openLines(lines: TranscriptLine[], outline: MeetingOutline | undefined): TranscriptLine[] {
+  if (!outline) return lines
+  if (!outline.openFromSegmentId) return []
+  const from = lines.findIndex((l) => l.firstSegmentId === outline.openFromSegmentId)
+  return from < 0 ? [] : lines.slice(from)
+}
+
+/**
+ * Whether the open part is worth an AI call now: long enough to hold a finished topic,
+ * and grown by a step since the AI last read it (`readChars`, 0 if it never did) — so
+ * each new segment does not cost a call.
+ */
+export function liveCallDue(openChars: number, readChars: number, limits: { min: number; step: number }): boolean {
+  return openChars >= limits.min && openChars - readChars >= limits.step
+}
+
+/**
+ * Applies the AI's outline of the open part: its topics except the last become named
+ * topics, with the action items and speaker names said inside them; the last topic stays
+ * open. `force` (the open part is very long) names a single long topic as it stands, up
+ * to its last paragraph. With `continues`, the first finished topic is the previous
+ * named topic carrying on: that topic is extended instead of starting a new one.
+ * Returns null for an answer without usable topics, 'unchanged' when no topic is finished yet.
+ */
+export function applyLiveAnswer(
+  raw: unknown,
+  open: TranscriptLine[],
+  previous: MeetingOutline | undefined,
+  language: string,
+  generatedAt: string,
+  force: boolean
+): MeetingOutline | 'unchanged' | null {
+  const parsed = parseOutline(raw, open)
+  if (!parsed) return null
+  let finished = parsed.topics.slice(0, -1)
+  let openRef = parsed.topics[parsed.topics.length - 1].from
+  if (finished.length === 0) {
+    if (!force || open.length < 2) return 'unchanged'
+    openRef = open[open.length - 1].ref
+    finished = [{ title: parsed.topics[0].title, from: open[0].ref, to: openRef - 1 }]
+  }
+  const done = open.filter((l) => l.ref < openRef)
+  const closed: RefOutline = {
+    topics: finished,
+    actions: parsed.actions.filter((a) => a.at < openRef),
+    speakers: parsed.speakers.filter((s) => s.from < openRef).map((s) => ({ ...s, to: Math.min(s.to, openRef - 1) }))
+  }
+  const named = assembleOutline(closed, done, language, generatedAt)
+  const topics = [...(previous?.topics ?? [])]
+  const continues = asRecord(raw).continues === true && topics.length > 0
+  if (continues) {
+    const [first, ...rest] = named.topics
+    topics[topics.length - 1] = { ...topics[topics.length - 1], endSegmentId: first.endSegmentId }
+    topics.push(...rest)
+  } else {
+    topics.push(...named.topics)
+  }
+  const openLine = open.find((l) => l.ref === openRef)!
+  const outline: MeetingOutline = {
+    topics,
+    actions: [...(previous?.actions ?? []), ...named.actions],
+    speakers: [...(previous?.speakers ?? []), ...named.speakers],
+    language,
+    generatedAt,
+    openFromSegmentId: openLine.firstSegmentId
+  }
+  if (previous?.backupModel) outline.backupModel = previous.backupModel
+  return outline
+}
+
+/**
+ * What is left to outline after Stop: the segments from the open part on, with the
+ * topics named while recording (`named`) — or every segment when nothing was named.
+ */
+export function remainingSegments(segments: MeetingSegment[], outline: MeetingOutline | undefined): { segments: MeetingSegment[]; named?: MeetingOutline } {
+  const from = outline?.openFromSegmentId ? segments.findIndex((s) => s.id === outline.openFromSegmentId) : -1
+  return from > 0 ? { segments: segments.slice(from), named: outline } : { segments }
+}
+
+/** The finished outline: the topics named while recording, then the outline of the rest (`tail`). */
+export function joinOutlines(named: MeetingOutline | undefined, tail: MeetingOutline): MeetingOutline {
+  const outline: MeetingOutline = {
+    topics: [...(named?.topics ?? []), ...tail.topics],
+    actions: [...(named?.actions ?? []), ...tail.actions],
+    speakers: [...(named?.speakers ?? []), ...tail.speakers],
+    language: tail.language,
+    generatedAt: tail.generatedAt
+  }
+  const backupModel = tail.backupModel ?? named?.backupModel
+  if (backupModel) outline.backupModel = backupModel
+  return outline
 }
