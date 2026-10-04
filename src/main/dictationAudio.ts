@@ -85,14 +85,17 @@ export function createDictationAudio(dir: string, onChange?: () => void): Dictat
   const listFile = join(dir, 'pending.json')
   const fileOf = (id: string): string => join(dir, `${id}.wav`)
 
-  const readList = (): PendingDictation[] => {
+  /** The list as written — including entries whose file is already gone. */
+  const readSaved = (): PendingDictation[] => {
     try {
       const list = JSON.parse(readFileSync(listFile, 'utf8')) as PendingDictation[]
-      return Array.isArray(list) ? list.filter((p) => existsSync(fileOf(p.id))) : []
+      return Array.isArray(list) ? list : []
     } catch {
       return []
     }
   }
+  /** The recordings that can still be transcribed: listed and still on disk. */
+  const readList = (): PendingDictation[] => readSaved().filter((p) => existsSync(fileOf(p.id)))
   const writeList = (list: PendingDictation[]): void => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(`${listFile}.tmp`, JSON.stringify(list, null, 2))
@@ -157,8 +160,9 @@ export function createDictationAudio(dir: string, onChange?: () => void): Dictat
       } catch {
         /* already gone */
       }
-      const list = readList()
-      if (list.some((p) => p.id === id)) writeList(list.filter((p) => p.id !== id))
+      // Read as written: the file is gone by now, and its entry must still leave the list.
+      const list = readSaved()
+      if (list.some((p) => p.id === id)) writeList(list.filter((p) => p.id !== id && existsSync(fileOf(p.id))))
     },
 
     pending: readList,

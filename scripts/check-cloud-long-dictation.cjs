@@ -183,10 +183,18 @@ async function partB(lib) {
   for (const channel of Object.values(IPC)) ipcMain.handle(channel, () => null)
   ipcMain.removeHandler(IPC.GET_SETTINGS)
   ipcMain.handle(IPC.GET_SETTINGS, () => ({ modes: [], vocabulary: [], templates: [], appContextRules: [], inputMode: 'toggle' }))
+  // The overlay streams 16 kHz mono 16-bit PCM about once a second, then says the recording ended
+  // (the main process writes it to a WAV file — dictationAudio.ts; here it is put together the same way).
+  const pcm = []
   let delivered = null
   let failed = null
-  ipcMain.on(IPC.AUDIO_CAPTURED, (_e, audio, durationSeconds, mimeType) => {
-    delivered = { audio: new Uint8Array(audio), durationSeconds, mimeType }
+  ipcMain.on(IPC.DICTATION_AUDIO_CHUNK, (_e, buffer) => pcm.push(Buffer.from(buffer)))
+  ipcMain.on(IPC.DICTATION_AUDIO_END, (_e, info) => {
+    const data = Buffer.concat(pcm)
+    const header = Buffer.from(makeWav(0).subarray(0, 44))
+    header.writeUInt32LE(36 + data.length, 4)
+    header.writeUInt32LE(data.length, 40)
+    delivered = { audio: new Uint8Array(Buffer.concat([header, data])), durationSeconds: Math.round(data.length / 32000), mimeType: 'audio/wav', hasSpeech: info && info.hasSpeech, chunks: pcm.length }
   })
   ipcMain.on(IPC.RECORDING_FAILED, (_e, message) => {
     failed = message
@@ -207,7 +215,7 @@ async function partB(lib) {
   await sleep(RECORD_SECONDS * 1000)
   win.webContents.send(IPC.RECORDING_STOP)
   for (let i = 0; i < 300 && !delivered && !failed; i++) await sleep(100)
-  check(`the overlay delivers a ${RECORD_SECONDS}-second recording as audio, not "No speech detected"`, !!delivered && !failed && delivered.durationSeconds >= RECORD_SECONDS - 2 && delivered.mimeType === 'audio/wav', { failed, durationSeconds: delivered && delivered.durationSeconds, mb: delivered && +(delivered.audio.length / MB).toFixed(2) })
+  check(`the overlay streams a ${RECORD_SECONDS}-second recording about once a second and reports speech, not "No speech detected"`, !!delivered && !failed && delivered.hasSpeech === true && delivered.durationSeconds >= RECORD_SECONDS - 2 && delivered.chunks >= RECORD_SECONDS - 3, { failed, durationSeconds: delivered && delivered.durationSeconds, chunks: delivered && delivered.chunks, mb: delivered && +(delivered.audio.length / MB).toFixed(2) })
   if (delivered) {
     check('that recording is larger than Vercel accepts in one request', RECORD_SECONDS < 150 || delivered.audio.length > VERCEL_LIMIT, { mb: +(delivered.audio.length / MB).toFixed(2) })
     globalThis.fetch = stubFetch

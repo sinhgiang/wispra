@@ -52,6 +52,7 @@ export interface Settings {
   language: string
   launchAtLogin: boolean
   /** Auto-stop recording after this many minutes. */
+  /** No longer used: a dictation has no time limit (kept so older settings files still load). */
   autoStopMinutes: number
   autoUpdate: boolean
   aiPostProcess: boolean

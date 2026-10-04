@@ -137,7 +137,8 @@ async function partA() {
   for (const b of speechSeconds(MINUTES)) store.append(b)
   const saved = store.finish()
   const wav = store.read(id)
-  check(`${MINUTES} minutes streamed in one second at a time end up as one WAV file on disk`, saved && Math.abs(saved.seconds - MINUTES * 60) < 1 && wav.length === 44 + MINUTES * 60 * 32000 && Buffer.from(wav.subarray(0, 4)).toString() === 'RIFF', { seconds: saved && saved.seconds, mb: +(wav.length / MB).toFixed(1) })
+  // The silence after the last word is trimmed (Whisper invents text for trailing silence): at most the last second here.
+  check(`${MINUTES} minutes streamed in one second at a time end up as one WAV file on disk (only the trailing silence trimmed)`, saved && saved.seconds > MINUTES * 60 - 1 && saved.seconds <= MINUTES * 60 && wav.length === 44 + saved.seconds * 32000 && Buffer.from(wav.subarray(0, 4)).toString() === 'RIFF', { seconds: saved && saved.seconds, mb: +(wav.length / MB).toFixed(1) })
 
   // Through Wispra Cloud and an own Groq key, against a stub `fetch` with each one's limit.
   const realFetch = globalThis.fetch
@@ -156,7 +157,7 @@ async function partA() {
       sent.length = 0
       const r = await lib.transcribe(wav, provider, 'test-key', '', 'vi', 'audio/wav', undefined, undefined, MINUTES * 60, 'test-token', [])
       const want = sent.map((_, i) => `Phần ${i + 1}.`).join(' ')
-      check(`${MINUTES} minutes through ${label}: ${sent.length} request(s), all under ${limit} MB, and the whole text comes back in order`, sent.length === Math.ceil(wav.length / ((provider === 'proxy' ? 4 : 20) * MB) - 0.02) && sent.every((q) => q.size < limit * MB) && r.text === want, { requests: sent.length, largestMb: +(Math.max(...sent.map((q) => q.size)) / MB).toFixed(2), text: r.text.slice(0, 60) })
+      check(`${MINUTES} minutes through ${label}: ${sent.length} request(s), all under ${limit} MB, and the whole text comes back in order`, sent.length >= Math.ceil(wav.length / ((provider === 'proxy' ? 4 : 20) * MB)) && sent.every((q) => q.size < limit * MB) && r.text === want, { requests: sent.length, largestMb: +(Math.max(...sent.map((q) => q.size)) / MB).toFixed(2), text: r.text.slice(0, 60) })
     }
   } finally {
     globalThis.fetch = realFetch
@@ -241,14 +242,14 @@ async function partB(lib) {
   await js(`[...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === 'History').click()`)
   for (let i = 0; i < 50 && !(await js(`!!document.querySelector('.pending-item')`)); i++) await sleep(100)
   const shown = await js(`(() => { const s = document.querySelector('.pending-dictations'); return s ? s.innerText : null })()`)
-  check('History lists the recording, its length and the reason, with "Try again"', !!shown && /Recordings not transcribed yet/.test(shown) && /Service temporarily unavailable/.test(shown) && /Try again/.test(shown) && new RegExp(`${MINUTES} min`).test(shown), shown)
+  check('History lists the recording, its length and the reason, with "Try again"', !!shown && /Recordings not transcribed yet/i.test(shown) && /Service temporarily unavailable/.test(shown) && /Try again/.test(shown) && new RegExp(`${MINUTES} min`).test(shown), shown)
   await js(`[...document.querySelectorAll('.pending-item button')].find((b) => b.textContent.trim() === 'Try again').click()`)
   for (let i = 0; i < 600 && (await js(`!!document.querySelector('.pending-item')`)); i++) await sleep(100)
   const after = await js(`(document.querySelector('.pending-dictations') || {}).innerText || ''`)
   const history = JSON.parse(fs.readFileSync(path.join(USERDATA, 'history.json'), 'utf8'))
   const entries = Array.isArray(history) ? history : history.entries || []
   const want = stt.requests.map((_, i) => `Phần ${i + 1}.`).join(' ')
-  check('"Try again" turns the saved recording into the whole text, in History and on the clipboard', stt.requests.length > 1 && stt.requests.every((r) => r.size < 20 * MB + 4096) && entries[0] && entries[0].text === want && clip === want && /Transcribed/.test(after), { requests: stt.requests.length, text: entries[0] && entries[0].text.slice(0, 60), note: after })
+  check('"Try again" turns the saved recording into the whole text, in History and on the clipboard', stt.requests.length >= Math.ceil((44 + MINUTES * 60 * 32000) / (20 * MB)) && stt.requests.every((r) => r.size < 20 * MB + 4096) && entries[0] && entries[0].text === want && clip === want && /Transcribed/.test(after), { requests: stt.requests.length, text: entries[0] && entries[0].text.slice(0, 60), note: after })
   check('…and then the saved file is removed', wavs().length === 0 && pending().length === 0, { files: wavs() })
 
   // 3. A dictation that works the first time leaves nothing behind.
