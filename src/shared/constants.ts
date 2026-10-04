@@ -118,6 +118,13 @@ export const GROQ_STT_MODEL = 'whisper-large-v3'
 export const OPENAI_API_BASE = 'https://api.openai.com/v1'
 export const OPENAI_STT_MODEL = 'whisper-1'
 export const TRANSCRIBE_TIMEOUT_MS = 120_000
+/**
+ * Largest request body sent to Wispra Cloud. Its server runs on Vercel, which refuses
+ * anything over 4.5 MB (HTTP 413 FUNCTION_PAYLOAD_TOO_LARGE) before Wispra's code runs;
+ * this stays clear of that with room for the form fields. A longer dictation is sent in
+ * parts (see splitWav in wavSplit.ts).
+ */
+export const CLOUD_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
 export const TRANSCRIBE_RETRIES = 1
 
 /** How long the error state is shown before returning to idle. */

@@ -1,4 +1,5 @@
 import {
+  CLOUD_UPLOAD_MAX_BYTES,
   GROQ_API_BASE,
   GROQ_STT_MODEL,
   OPENAI_API_BASE,
@@ -9,6 +10,8 @@ import {
   WISPRA_API_BASE
 } from '@shared/constants'
 import type { ApiKeyTestResult, SttProvider } from '@shared/types'
+import { providerMessage } from './rateLimit'
+import { splitWav } from './wavSplit'
 
 interface ProviderConfig {
   base: string
@@ -402,16 +405,31 @@ export async function transcribe(
   // Wispra cloud proxy provider
   if (provider === 'proxy') {
     if (!proxyToken) throw noRetry('Not signed in — open Account settings to log in')
-    let lastError: Error = new Error('Transcription failed')
-    for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
-      try {
-        return await requestViaProxy(audio, proxyToken, language, mimeType, durationSeconds, vocabulary)
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err))
-        if (lastError.name === 'NoRetryError') throw lastError
+    const token = proxyToken
+    const once = async (part: Uint8Array, seconds: number): Promise<TranscribeResult> => {
+      let lastError: Error = new Error('Transcription failed')
+      for (let attempt = 0; attempt <= TRANSCRIBE_RETRIES; attempt++) {
+        try {
+          return await requestViaProxy(part, token, language, mimeType, seconds, vocabulary)
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err))
+          if (lastError.name === 'NoRetryError') throw lastError
+        }
       }
+      throw lastError
     }
-    throw lastError
+    if (audio.length <= CLOUD_UPLOAD_MAX_BYTES) return once(audio, durationSeconds)
+    // Too big for one request (Vercel's 4.5 MB): send it in parts, cut at pauses, and join the text.
+    const parts = splitWav(audio, CLOUD_UPLOAD_MAX_BYTES)
+    if (!parts) throw noRetry(tooLargeForCloud(audio.length))
+    const texts: string[] = []
+    let detectedLanguage: string | undefined
+    for (const part of parts) {
+      const result = await once(part.audio, part.seconds)
+      if (result.text) texts.push(result.text)
+      detectedLanguage ??= result.detectedLanguage
+    }
+    return { text: texts.join(' ').trim(), detectedLanguage }
   }
 
   const config = getConfig(provider, groqKey, openaiKey, localBaseUrl, localSttModel)
@@ -474,7 +492,8 @@ async function requestViaProxy(
     const detail = await safeErrorDetail(response)
     if (response.status === 401) throw noRetry('Session expired — sign in again in Account settings')
     if (response.status === 402) throw noRetry(detail || 'Monthly free limit reached — upgrade to Pro in Account settings')
-    throw new Error(detail || `Transcription failed (HTTP ${response.status})`)
+    if (response.status === 413) throw noRetry(tooLargeForCloud(audio.length))
+    throw new Error(detail ? `Wispra Cloud: ${detail}` : `Transcription failed (HTTP ${response.status})`)
   }
 
   const data = (await response.json()) as VerboseResponse
@@ -596,16 +615,30 @@ export async function testApiKey(
   }
 }
 
+/** What the user is told when a recording cannot go to Wispra Cloud in one request. */
+function tooLargeForCloud(bytes: number): string {
+  const mb = (bytes / (1024 * 1024)).toFixed(1)
+  return `This recording is too large for Wispra Cloud (${mb} MB; it accepts up to 4.5 MB per request). Dictate in shorter parts, or choose "Use my own Groq API key" on the Account tab.`
+}
+
 function noRetry(message: string): Error {
   const err = new Error(message)
   err.name = 'NoRetryError'
   return err
 }
 
+/**
+ * The reason in an error answer, whatever its shape: {"error": {"message": "…"}} (Groq,
+ * OpenAI), {"error": "…"} (Wispra Cloud, which may wrap Groq's own JSON in that string),
+ * or plain text (Vercel's own errors, e.g. "Request Entity Too Large"). Null when empty.
+ */
 async function safeErrorDetail(response: Response): Promise<string | null> {
   try {
-    const body = (await response.json()) as { error?: { message?: string } }
-    return body.error?.message ?? null
+    const body = await response.text()
+    const message = providerMessage(body).trim()
+    if (!message) return null
+    // Plain-text pages: the first line is the reason ("Request Entity Too Large").
+    return message.split('\n')[0].trim().slice(0, 300) || null
   } catch {
     return null
   }

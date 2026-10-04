@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AccountInfo, McpLinkStatus, Settings, SyncStatus } from '@shared/types'
 
-const FREE_LIMIT_SECONDS = 30 * 60
-
 // Deep link straight to Claude.ai's "Add custom connector" dialog, so the user only
 // has to paste — confirmed working URL (not guessed) as of Claude.ai's current UI.
 const CLAUDE_ADD_CONNECTOR_URL = 'https://claude.ai/customize/connectors?modal=add-custom-connector'
@@ -370,51 +368,58 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
         <div
           className="plan-card"
           style={{
-            borderColor: accountInfo.plan === 'pro' ? 'var(--accent)' : 'var(--border)',
-            background: accountInfo.plan === 'pro' ? 'var(--accent-subtle)' : 'var(--surface)',
+            borderColor: accountInfo.plan === 'pro' || accountInfo.unlimited ? 'var(--accent)' : 'var(--border)',
+            background: accountInfo.plan === 'pro' || accountInfo.unlimited ? 'var(--accent-subtle)' : 'var(--surface)',
           }}
         >
           <div className="plan-header">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <span style={{ fontSize: '12px', color: 'var(--text-2)' }}>{accountInfo.email}</span>
               <span className="plan-name">
-                {accountInfo.plan === 'pro' ? 'Wispra Pro' : 'Wispra Free'}
+                {accountInfo.unlimited ? 'Wispra Cloud · Unlimited' : accountInfo.plan === 'pro' ? 'Wispra Pro' : 'Wispra Free'}
               </span>
             </div>
             <span
               className="plan-badge"
-              style={accountInfo.plan === 'pro' ? { background: 'var(--accent)', color: 'white' } : {}}
+              style={accountInfo.plan === 'pro' || accountInfo.unlimited ? { background: 'var(--accent)', color: 'white' } : {}}
             >
-              {accountInfo.plan === 'pro' ? 'Pro' : 'Free'}
+              {accountInfo.unlimited ? 'Unlimited' : accountInfo.plan === 'pro' ? 'Pro' : 'Free'}
             </span>
           </div>
 
-          {/* Usage bar (free plan only) */}
-          {accountInfo.plan === 'free' && (
+          {/* Transcription minutes: a bar against the monthly limit when there is one (the
+              server's number), otherwise just what was used — never a maximum that does not apply. */}
+          {typeof accountInfo.limitSeconds === 'number' && accountInfo.limitSeconds > 0 ? (
             <div className="usage-bar-wrap">
               <div className="usage-bar-track">
                 <div
                   className="usage-bar-fill"
                   style={{
-                    width: `${Math.min(100, (accountInfo.usageSeconds / FREE_LIMIT_SECONDS) * 100)}%`,
-                    background: accountInfo.usageSeconds >= FREE_LIMIT_SECONDS ? 'var(--danger)' : 'var(--accent)',
+                    width: `${Math.min(100, (accountInfo.usageSeconds / accountInfo.limitSeconds) * 100)}%`,
+                    background: accountInfo.usageSeconds >= accountInfo.limitSeconds ? 'var(--danger)' : 'var(--accent)',
                   }}
                 />
               </div>
               <span className="usage-bar-label">
-                {formatMinutes(accountInfo.usageSeconds)} / 30 min used this month
+                {formatMinutes(accountInfo.usageSeconds)} / {Math.round(accountInfo.limitSeconds / 60)} min used this month
               </span>
             </div>
+          ) : (
+            <>
+              <p className="plan-desc" style={{ marginTop: '8px' }}>
+                {accountInfo.unlimited
+                  ? 'No monthly limits on transcription or AI text, powered by Wispra Cloud.'
+                  : 'Unlimited transcription, powered by Wispra cloud.'}
+              </p>
+              <span className="usage-bar-label usage-plain">{formatMinutes(accountInfo.usageSeconds)} min transcribed this month</span>
+            </>
           )}
 
-          {accountInfo.plan === 'pro' && (
-            <p className="plan-desc" style={{ marginTop: '8px' }}>
-              Unlimited transcription, powered by Wispra cloud.
-            </p>
+          {/* AI text used this month — with a bar when the account has a limit, as a plain
+              number when it has none (unlimited). Older servers do not send these fields. */}
+          {typeof accountInfo.aiTokensUsed === 'number' && accountInfo.aiTokensLimit === undefined && (
+            <span className="usage-bar-label usage-plain">AI text: {accountInfo.aiTokensUsed.toLocaleString()} tokens used this month</span>
           )}
-
-          {/* AI text allowance (cleanup, summaries, content tabs, chat, mind map) — only
-              when the server reports it; older servers do not send these fields. */}
           {typeof accountInfo.aiTokensUsed === 'number' && typeof accountInfo.aiTokensLimit === 'number' && accountInfo.aiTokensLimit > 0 && (
             <div className="usage-bar-wrap">
               <div className="usage-bar-track">
@@ -436,7 +441,7 @@ export function AccountSection({ settings }: { settings: Settings }): React.JSX.
           )}
 
           <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-            {accountInfo.plan === 'free' && accountInfo.subscribeUrl && (
+            {accountInfo.plan === 'free' && !accountInfo.unlimited && accountInfo.subscribeUrl && (
               <a
                 href={accountInfo.subscribeUrl}
                 target="_blank"

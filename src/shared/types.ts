@@ -274,8 +274,10 @@ export interface AccountInfo {
   plan: 'free' | 'pro'
   /** Seconds used this month. */
   usageSeconds: number
-  /** Monthly limit in seconds, or null if unlimited (Pro). */
+  /** Monthly limit in seconds, or null when there is none (Pro, or an unlimited account). */
   limitSeconds: number | null
+  /** The account is exempt from Wispra Cloud's monthly limits, whatever its plan. */
+  unlimited?: boolean
   /** Polar.sh checkout URL for upgrading. */
   subscribeUrl: string | null
   /** Google profile photo URL. */
@@ -285,6 +287,7 @@ export interface AccountInfo {
    * map) as the server reports it. Absent when the server does not send it yet.
    */
   aiTokensUsed?: number
+  /** Absent when the account has no AI text limit (or the server does not send one). */
   aiTokensLimit?: number
   /** ISO timestamp of the next reset. */
   aiTokensResetAt?: string

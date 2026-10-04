@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from 'fs'
+import { CLOUD_UPLOAD_MAX_BYTES } from '@shared/constants'
 import type { FileTranscribeResult, Settings } from '@shared/types'
 import { transcribe } from './transcribe'
 
@@ -6,7 +7,7 @@ import { transcribe } from './transcribe'
  * Wispra Cloud's transcription endpoint runs on Vercel, which refuses request bodies over
  * 4.5 MB. A bigger file is stopped here with a clear message instead of a bare HTTP 413.
  */
-export const CLOUD_FILE_MAX_BYTES = 4 * 1024 * 1024
+export const CLOUD_FILE_MAX_BYTES = CLOUD_UPLOAD_MAX_BYTES
 
 /** The audio type for a file name, from its extension. */
 export function detectMime(filePath: string): string {

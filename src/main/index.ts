@@ -70,6 +70,7 @@ import { createMindMapJobs, type MindMapJobs } from './mindMapJobs'
 import { useCloudflareBudgetFile } from './cloudflareBudget'
 import { transcribeFileAt } from './transcribeFile'
 import { aiQuota } from './aiQuota'
+import { accountInfoFrom, hasAiAllowanceLeft } from './accountInfo'
 import { detectTopic } from './topics'
 import { injectText, captureTargetContext, undoLastInjection } from './inject'
 import { matchVoiceCommand } from './commands'
@@ -1227,31 +1228,9 @@ function wireIpc(): void {
       if (!response.ok) {
         return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
       }
-      const data = (await response.json()) as {
-        plan: string
-        usageSeconds: number
-        limitSeconds: number | null
-        subscribeUrl: string | null
-        // Sent only by servers that meter AI text; older ones leave these out.
-        aiTokensUsed?: unknown
-        aiTokensLimit?: unknown
-        aiTokensResetAt?: unknown
-      }
-      const info: AccountInfo = {
-        email: state.email,
-        avatarUrl: state.avatarUrl,
-        plan: data.plan === 'pro' ? 'pro' : 'free',
-        usageSeconds: data.usageSeconds ?? 0,
-        limitSeconds: data.limitSeconds,
-        subscribeUrl: data.subscribeUrl ?? null,
-      }
-      if (typeof data.aiTokensUsed === 'number' && typeof data.aiTokensLimit === 'number' && data.aiTokensLimit > 0) {
-        info.aiTokensUsed = data.aiTokensUsed
-        info.aiTokensLimit = data.aiTokensLimit
-        if (typeof data.aiTokensResetAt === 'string') info.aiTokensResetAt = data.aiTokensResetAt
-        // The server now reports allowance left (upgrade, or a new month): drop a stale notice.
-        if (data.aiTokensUsed < data.aiTokensLimit) aiQuota.clear()
-      }
+      const info = accountInfoFrom(await response.json(), state)
+      // The server now reports allowance left (upgrade, a new month, or no limit): drop a stale notice.
+      if (info.aiTokensUsed !== undefined && hasAiAllowanceLeft(info)) aiQuota.clear()
       return info
     } catch {
       return { email: state.email, avatarUrl: state.avatarUrl, plan: 'free', usageSeconds: 0, limitSeconds: FREE_LIMIT_SECONDS, subscribeUrl: null }
