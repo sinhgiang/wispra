@@ -6,7 +6,9 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        input: { index: resolve(__dirname, 'src/main/index.ts') },
+        // A native addon (speaker recognition, see voiceprints.ts): loaded from node_modules at run time, never bundled.
+        external: ['sherpa-onnx-node']
       }
     },
     resolve: {

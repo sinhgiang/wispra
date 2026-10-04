@@ -161,6 +161,13 @@ export const IPC = {
   MEETING_GET_STATE: 'meeting:get-state',
   // renderer -> main: one silence/hard-cap-bounded audio chunk is ready (carries the audio bytes)
   MEETING_CHUNK_CAPTURED: 'meeting:chunk-captured',
+  // renderer -> main: speaker recognition (VoiceRecognitionState); turn it on/off (downloads the
+  // model when turned on); forget one voice (id) or all; main -> renderer: it changed
+  VOICE_GET_STATE: 'voice:get-state',
+  VOICE_SET_ENABLED: 'voice:set-enabled',
+  VOICE_FORGET: 'voice:forget',
+  VOICE_FORGET_ALL: 'voice:forget-all',
+  VOICE_STATE_CHANGED: 'voice:state-changed',
   // renderer -> main: mic could not be opened
   MEETING_CAPTURE_FAILED: 'meeting:capture-failed',
   // main -> meeting renderer: a chunk finished transcribing and is ready to render
